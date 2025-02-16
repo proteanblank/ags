@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -114,6 +114,14 @@ Idle animation speed, modifiable hotspot names, fixed video frame
 Some adjustments to gui text alignment.
 3.6.1:
 In RTL mode all text is reversed, not only wrappable (labels etc).
+3.6.1.10:
+Disabled automatic SetRestartPoint.
+3.6.1.14:
+Extended game object names, resolving hard length limits.
+3.6.2:
+Object Interactions specify script module where functions are located.
+OPT_SAVESCREENSHOTLAYER, CHF_TURNWHENFACE. Button's WrapText and padding.
+Few minor behavior changes.
 
 */
 
@@ -153,7 +161,11 @@ enum GameDataVersion
     kGameVersion_360_16         = 3060016,
     kGameVersion_360_21         = 3060021,
     kGameVersion_361            = 3060100,
-    kGameVersion_Current        = kGameVersion_361
+    kGameVersion_361_10         = 3060110,
+    kGameVersion_361_14         = 3060114,
+    kGameVersion_362            = 3060200,
+    kGameVersion_362_03         = 3060203,
+    kGameVersion_Current        = kGameVersion_362_03
 };
 
 // Data format version of the loaded game

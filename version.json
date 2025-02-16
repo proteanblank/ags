@@ -1,9 +1,22 @@
 {
-    "version": "3.6.1.7",
-    "versionFriendly": "3.6.1",
-    "versionSp": "Beta8",
-    "versionYear": "2023",
-    "versionMonth": "September",
-    "versionIsBeta": "true",
-    "appID": "6fcbc804-4887-4786-bcf6-b0786e1e983d"
+    "version": "3.6.2.7",
+    "versionFriendly": "3.6.2",
+    "versionSp": "RC1",
+    "versionYear": "2025",
+    "versionMonth": "February",
+    "versionIsBeta": "false",
+    "appID": "7a604530-45b6-4e95-a729-22d212601256",
+    "licenseLink": "https://opensource.org/license/artistic-2-0/",
+  
+    "dependencies": {
+        "sdlsound": {
+            "revision": "474dbf755a1b67ebe7a55467b4f65e033f268aff",
+            "urlHash": "7f6b977a7ebae4cdecd4ac9b9404760a9e9a6b77"
+        },
+        "sdl": {
+            "revision": "2.30.11",
+            "release_type": "release",
+            "urlHash": "db4ae1d7a477854d44a468f19661794b59721267"
+        }
+    }
 }

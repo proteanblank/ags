@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <vector>
@@ -27,6 +27,7 @@
 #include "ac/gamestate.h"
 #include "ac/global_audio.h"
 #include "ac/global_walkablearea.h"
+#include "ac/gui.h"
 #include "ac/mouse.h"
 #include "ac/parser.h"
 #include "ac/path_helper.h"
@@ -36,16 +37,17 @@
 #include "ac/sys_events.h"
 #include "ac/view.h"
 #include "ac/dynobj/dynobj_manager.h"
+#include "ac/dynobj/cc_dynamicarray.h"
 #include "ac/dynobj/scriptstring.h"
 #include "ac/dynobj/scriptsystem.h"
 #include "debug/debug_log.h"
 #include "debug/debugger.h"
+#include "debug/debugmanager.h"
 #include "device/mousew32.h"
 #include "font/fonts.h"
 #include "gfx/bitmap.h"
 #include "gfx/gfx_util.h"
 #include "gfx/graphicsdriver.h"
-#include "gui/guimain.h"
 #include "main/main.h"
 #include "main/engine.h"
 #include "main/game_run.h"
@@ -70,14 +72,14 @@ using namespace AGS::Engine;
 
 
 #if defined(BUILTIN_PLUGINS)
-#include "../Plugins/AGSflashlight/agsflashlight.h"
-#include "../Plugins/agsblend/agsblend.h"
-#include "../Plugins/ags_snowrain/ags_snowrain.h"
-#include "../Plugins/ags_parallax/ags_parallax.h"
-#include "../Plugins/agspalrender/agspalrender.h"
+#include "../Plugins/agsflashlight/agsflashlight/agsflashlight.h"
+#include "../Plugins/agsblend/agsblend/agsblend.h"
+#include "../Plugins/ags_snowrain/ags_snowrain/ags_snowrain.h"
+#include "../Plugins/ags_parallax/ags_parallax/ags_parallax.h"
+#include "../Plugins/agspalrender/agspalrender/agspalrender.h"
 #include "../Plugins/AGSSpriteFont/AGSSpriteFont/AGSSpriteFont.h"
 #if AGS_PLATFORM_OS_IOS
-#include "../Plugins/agstouch/agstouch.h"
+#include "../Plugins/agstouch/agstouch/agstouch.h"
 #endif // AGS_PLATFORM_OS_IOS
 #endif // BUILTIN_PLUGINS
 
@@ -86,19 +88,18 @@ extern IGraphicsDriver *gfxDriver;
 extern ScriptSystem scsystem;
 extern int mousex, mousey;
 extern GameSetupStruct game;
+extern SpriteCache spriteset;
 extern std::vector<ViewStruct> views;
 extern RGB palette[256];
 extern int displayed_room;
 extern RoomStruct thisroom;
 extern RoomStatus *croom;
-extern ScriptString myScriptStringImpl;
-extern RuntimeScriptValue GlobalReturnValue;
 
 
 // **************** PLUGIN IMPLEMENTATION ****************
 
 
-const int PLUGIN_API_VERSION = 26;
+const int PLUGIN_API_VERSION = 30;
 struct EnginePlugin
 {
     EnginePlugin() {
@@ -108,19 +109,22 @@ struct EnginePlugin
     EnginePlugin(const EnginePlugin&) = delete;
     EnginePlugin(EnginePlugin&&) = default;
 
-    AGS::Common::String  filename;
-    AGS::Engine::Library library;
+    String      filename;
+    Library     library;
     bool        available = false;
     std::vector<uint8_t> savedata;
     int         wantHook = 0;
     int         invalidatedRegion = 0;
     void      (*engineStartup) (IAGSEngine *) = nullptr;
     void      (*engineShutdown) () = nullptr;
-    int       (*onEvent) (int, int) = nullptr;
+    intptr_t  (*onEvent) (int evt, intptr_t param) = nullptr;
     void      (*initGfxHook) (const char *driverName, void *data) = nullptr;
     int       (*debugHook) (const char * whichscript, int lineNumber, int reserved) = nullptr;
-    IAGSEngine  eiface; // CHECKME: why do we have a separate object per plugin?
+    IAGSEngine  eiface;
     bool        builtin = false;
+
+    // Logging support
+    String      logbuf; // formatting buffer, to reduce extra allocations
 };
 
 std::vector<EnginePlugin> plugins;
@@ -208,7 +212,7 @@ int IAGSEngine::GetSavedData (char *buffer, int32 bufsize) {
         quit("!IAGSEngine::GetSavedData: buffer too small");
 
     if (savedatasize > 0)
-        memcpy(buffer, &plugins[this->pluginId].savedata.front(), savedatasize);
+        memcpy(buffer, plugins[this->pluginId].savedata.data(), savedatasize);
 
     return savedatasize;
 }
@@ -222,13 +226,14 @@ void IAGSEngine::DrawText (int32 x, int32 y, int32 font, int32 color, char *text
     draw_and_invalidate_text(ds, x, y, font, text_color, text);
 }
 
-void IAGSEngine::GetScreenDimensions (int32 *width, int32 *height, int32 *coldepth) {
-    if (width != nullptr)
-        width[0] = play.GetMainViewport().GetWidth();
-    if (height != nullptr)
-        height[0] = play.GetMainViewport().GetHeight();
-    if (coldepth != nullptr)
-        coldepth[0] = scsystem.coldepth;
+void IAGSEngine::GetScreenDimensions (int32 *width, int32 *height, int32 *coldepth)
+{
+    if (width)
+        *width = play.GetMainViewport().GetWidth();
+    if (height)
+        *height = play.GetMainViewport().GetHeight();
+    if (coldepth)
+        *coldepth = scsystem.coldepth;
 }
 
 unsigned char ** IAGSEngine::GetRawBitmapSurface (BITMAP *bmp)
@@ -280,40 +285,14 @@ void IAGSEngine::GetBitmapDimensions (BITMAP *bmp, int32 *width, int32 *height, 
         coldepth[0] = bitmap_color_depth(bmp);
 }
 
-// On save/restore, the Engine will provide the plugin with a handle. Because we only ever save to one file at a time,
-// we can reuse the same handle.
-
-static long pl_file_handle = -1;
-static Stream *pl_file_stream = nullptr;
-
-void pl_set_file_handle(long data, Stream *stream) {
-    pl_file_handle = data;
-    pl_file_stream = stream;
-}
-
-void pl_clear_file_handle() {
-    pl_file_handle = -1;
-    pl_file_stream = nullptr;
-}
-
 int IAGSEngine::FRead (void *buffer, int32 len, int32 handle) {
-    if (handle != pl_file_handle) {
-        quitprintf("IAGSEngine::FRead: invalid file handle: %d", handle);
-    }
-    if (!pl_file_stream) {
-        quit("IAGSEngine::FRead: file stream not set");
-    }
-    return pl_file_stream->Read(buffer, len);
+    Stream *stream = get_file_stream(handle, "IAGSEngine::FRead");
+    return stream->Read(buffer, len);
 }
 
 int IAGSEngine::FWrite (void *buffer, int32 len, int32 handle) {
-    if (handle != pl_file_handle) {
-        quitprintf("IAGSEngine::FWrite: invalid file handle: %d", handle);
-    }
-    if (!pl_file_stream) {
-        quit("IAGSEngine::FWrite: file stream not set");
-    }
-    return pl_file_stream->Write(buffer, len);
+    Stream *stream = get_file_stream(handle, "IAGSEngine::FWrite");
+    return stream->Write(buffer, len);
 }
 
 void IAGSEngine::DrawTextWrapped (int32 xx, int32 yy, int32 wid, int32 font, int32 color, const char*text)
@@ -321,7 +300,8 @@ void IAGSEngine::DrawTextWrapped (int32 xx, int32 yy, int32 wid, int32 font, int
     // TODO: use generic function from the engine instead of having copy&pasted code here
     const int linespacing = get_font_linespacing(font);
 
-    if (break_up_text_into_lines(text, Lines, wid, font) == 0)
+    const char *draw_text = skip_voiceover_token(text);
+    if (break_up_text_into_lines(draw_text, Lines, wid, font) == 0)
         return;
 
     Bitmap *ds = gfxDriver->GetStageBackBuffer(true);
@@ -543,7 +523,7 @@ void IAGSEngine::GetTextExtent (int32 font, const char *text, int32 *width, int3
         height[0] = get_font_height_outlined(font);
 }
 void IAGSEngine::PrintDebugConsole (const char *text) {
-    debug_script_log("[PLUGIN] %s", text);
+    Log(AGSLOG_LEVEL_DEBUG, "%s", text);
 }
 int IAGSEngine::IsChannelPlaying (int32 channel) {
     return ::IsChannelPlaying (channel);
@@ -581,7 +561,7 @@ void IAGSEngine::PlaySoundChannel (int32 channel, int32 soundType, int32 volume,
         return;
     }
 
-    std::unique_ptr<SOUNDCLIP> newcha(load_sound_clip(asset_name, ext, (loop != 0)));
+    std::unique_ptr<SoundClip> newcha(load_sound_clip(asset_name, ext, (loop != 0)));
     if (!newcha)
     {
         debug_script_warn("IAGSEngine::PlaySoundChannel: failed to load %s", filename);
@@ -657,16 +637,16 @@ int IAGSEngine::CanRunScriptFunctionNow() {
     return 1;
 }
 
-int IAGSEngine::CallGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, long arg1, long arg2, long arg3) {
+int IAGSEngine::CallGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, intptr_t arg1, intptr_t arg2, intptr_t arg3) {
     if (inside_script)
         return -300;
 
-    ccInstance *toRun = GetScriptInstanceByType(globalScript ? kScInstGame : kScInstRoom);
+    ccInstance *toRun = GetScriptInstanceByType(globalScript ? kScTypeGame : kScTypeRoom);
 
-    RuntimeScriptValue params[]{
-        RuntimeScriptValue().SetPluginArgument(arg1),
-        RuntimeScriptValue().SetPluginArgument(arg2),
-        RuntimeScriptValue().SetPluginArgument(arg3),
+    RuntimeScriptValue params[] {
+        RuntimeScriptValue().SetPluginArgOrPtr(arg1),
+        RuntimeScriptValue().SetPluginArgOrPtr(arg2),
+        RuntimeScriptValue().SetPluginArgOrPtr(arg3)
     };
     int toret = RunScriptFunction(toRun, name, numArgs, params);
     return toret;
@@ -684,7 +664,7 @@ void IAGSEngine::SetSpriteAlphaBlended(int32 slot, int32 isAlphaBlended) {
         game.SpriteInfos[slot].Flags |= SPF_ALPHACHANNEL;
 }
 
-void IAGSEngine::QueueGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, long arg1, long arg2) {
+void IAGSEngine::QueueGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, intptr_t arg1, intptr_t arg2) {
     if (!inside_script) {
         this->CallGameScriptFunction(name, globalScript, numArgs, arg1, arg2, 0);
         return;
@@ -692,14 +672,19 @@ void IAGSEngine::QueueGameScriptFunction(const char *name, int32 globalScript, i
 
     if (numArgs < 0 || numArgs > 2)
         quit("IAGSEngine::QueueGameScriptFunction: invalid number of arguments");
-    RuntimeScriptValue params[] { RuntimeScriptValue().SetPluginArgument(arg1),
-        RuntimeScriptValue().SetPluginArgument(arg2) };
-    curscript->run_another(name, globalScript ? kScInstGame : kScInstRoom, numArgs, params);
+    RuntimeScriptValue params[] {
+        RuntimeScriptValue().SetPluginArgOrPtr(arg1),
+        RuntimeScriptValue().SetPluginArgOrPtr(arg2)
+    };
+    get_executingscript()->RunAnother(globalScript ? kScTypeGame : kScTypeRoom, name, numArgs, params);
 }
 
 int IAGSEngine::RegisterManagedObject(void *object, IAGSScriptManagedObject *callback) {
-    GlobalReturnValue.SetPluginObject(object, (IScriptObject*)callback);
-    return ccRegisterManagedObject(object, (IScriptObject*)callback, kScValPluginObject);
+    // TODO: the managers may be either a separate static object, or the managed object itself.
+    // we may try to optimize following by having a cache of CCPluginObjects per callback
+    // address. Need to research if that's reliable, and will actually be more performant.
+    auto *pl_obj = new CCPluginObject((IScriptObject*)callback);
+    return ccRegisterManagedObject(object, pl_obj, kScValPluginObject);
 }
 
 void IAGSEngine::AddManagedObjectReader(const char *typeName, IAGSManagedObjectReader *reader) {
@@ -715,8 +700,8 @@ void IAGSEngine::AddManagedObjectReader(const char *typeName, IAGSManagedObjectR
 }
 
 void IAGSEngine::RegisterUnserializedObject(int key, void *object, IAGSScriptManagedObject *callback) {
-    GlobalReturnValue.SetPluginObject((void*)object, (IScriptObject*)callback);
-    ccRegisterUnserializedObject(key, object, (IScriptObject*)callback, kScValPluginObject);
+    auto *pl_obj = new CCPluginObject((IScriptObject*)callback);
+    ccRegisterUnserializedObject(key, object, pl_obj, kScValPluginObject);
 }
 
 int IAGSEngine::GetManagedObjectKeyByAddress(void *address) {
@@ -727,14 +712,12 @@ void* IAGSEngine::GetManagedObjectAddressByKey(int key) {
     void *object;
     IScriptObject *manager;
     ScriptValueType obj_type = ccGetObjectAddressAndManagerFromHandle(key, object, manager);
-    GlobalReturnValue.SetScriptObject(obj_type, object, manager);
     return object;
 }
 
 const char* IAGSEngine::CreateScriptString(const char *fromText) {
     const char *string = CreateNewScriptString(fromText);
-    // Should be still standard dynamic object, because not managed by plugin
-    GlobalReturnValue.SetScriptObject((void*)string, &myScriptStringImpl);
+    // Should be standard dynamic object, because not managed by plugin
     return string;
 }
 
@@ -752,11 +735,11 @@ void IAGSEngine::SetMousePosition(int32 x, int32 y) {
 }
 
 void IAGSEngine::SimulateMouseClick(int32 button) {
-    SimulateMouseClick(button);
+    ::SimulateMouseClick(button);
 }
 
 int IAGSEngine::GetMovementPathWaypointCount(int32 pathId) {
-    return mls[pathId % TURNING_AROUND].numstage;
+    return mls[pathId % TURNING_AROUND].GetNumStages();
 }
 
 int IAGSEngine::GetMovementPathLastWaypoint(int32 pathId) {
@@ -764,13 +747,13 @@ int IAGSEngine::GetMovementPathLastWaypoint(int32 pathId) {
 }
 
 void IAGSEngine::GetMovementPathWaypointLocation(int32 pathId, int32 waypoint, int32 *x, int32 *y) {
-    *x = (mls[pathId % TURNING_AROUND].pos[waypoint] >> 16) & 0x0000ffff;
-    *y = (mls[pathId % TURNING_AROUND].pos[waypoint] & 0x0000ffff);
+    *x = mls[pathId % TURNING_AROUND].pos[waypoint].X;
+    *y = mls[pathId % TURNING_AROUND].pos[waypoint].Y;
 }
 
 void IAGSEngine::GetMovementPathWaypointSpeed(int32 pathId, int32 waypoint, int32 *xSpeed, int32 *ySpeed) {
-    *xSpeed = mls[pathId % TURNING_AROUND].xpermove[waypoint];
-    *ySpeed = mls[pathId % TURNING_AROUND].ypermove[waypoint];
+    *xSpeed = mls[pathId % TURNING_AROUND].permove[waypoint].X;
+    *ySpeed = mls[pathId % TURNING_AROUND].permove[waypoint].Y;
 }
 
 int IAGSEngine::IsRunningUnderDebugger()
@@ -778,9 +761,9 @@ int IAGSEngine::IsRunningUnderDebugger()
     return (editor_debugging_initialized != 0) ? 1 : 0;
 }
 
-void IAGSEngine::GetPathToFileInCompiledFolder(const char*fileName, char *buffer)
+void IAGSEngine::GetPathToFileInCompiledFolder(const char *fileName, char *buffer)
 {
-    // TODO: this is very unsafe, deprecate and make a better API function if still necessary
+    // TODO: this is very unsafe, deprecate in the future
     strcpy(buffer, PathFromInstallDir(fileName).GetCStr());
 }
 
@@ -792,26 +775,8 @@ void IAGSEngine::BreakIntoDebugger()
 IAGSFontRenderer* IAGSEngine::ReplaceFontRenderer(int fontNumber, IAGSFontRenderer *newRenderer)
 {
     auto *old_render = font_replace_renderer(fontNumber, newRenderer);
-    GUI::MarkForFontUpdate(fontNumber);
+    GUIE::MarkForFontUpdate(fontNumber);
     return old_render;
-}
-
-IAGSFontRenderer* IAGSEngine::ReplaceFontRenderer2(int fontNumber, IAGSFontRenderer2 *newRenderer)
-{
-    auto *old_render = font_replace_renderer(fontNumber, newRenderer);
-    GUI::MarkForFontUpdate(fontNumber);
-    return old_render;
-}
-
-void IAGSEngine::NotifyFontUpdated(int fontNumber)
-{
-    font_recalc_metrics(fontNumber);
-    GUI::MarkForFontUpdate(fontNumber);
-}
-
-const char *IAGSEngine::ResolveFilePath(const char *script_path)
-{
-    return File_ResolvePath(script_path);
 }
 
 void IAGSEngine::GetRenderStageDesc(AGSRenderStageDesc* desc)
@@ -826,10 +791,88 @@ void IAGSEngine::GetGameInfo(AGSGameInfo* ginfo)
 {
     if (ginfo->Version >= 26)
     {
-        snprintf(ginfo->GameName, sizeof(ginfo->GameName), "%s", game.gamename);
+        snprintf(ginfo->GameName, sizeof(ginfo->GameName), "%s", game.gamename.GetCStr());
         snprintf(ginfo->Guid, sizeof(ginfo->Guid), "%s", game.guid);
         ginfo->UniqueId = game.uniqueid;
     }
+}
+
+IAGSFontRenderer* IAGSEngine::ReplaceFontRenderer2(int fontNumber, IAGSFontRenderer2 *newRenderer)
+{
+    auto *old_render = font_replace_renderer(fontNumber, newRenderer);
+    GUIE::MarkForFontUpdate(fontNumber);
+    return old_render;
+}
+
+void IAGSEngine::NotifyFontUpdated(int fontNumber)
+{
+    font_recalc_metrics(fontNumber);
+    GUIE::MarkForFontUpdate(fontNumber);
+}
+
+size_t IAGSEngine::ResolveFilePath(const char *script_path, char *buf, size_t buf_len)
+{
+    ResolvedPath rp = ResolveScriptPathAndFindFile(script_path, true, true);
+    String path = Path::MakeAbsolutePath(rp.FullPath); // make it pretty
+    if (!buf || buf_len == 0)
+        return path.GetLength() + 1;
+    size_t copy_len = std::min(buf_len - 1, path.GetLength());
+    memcpy(buf, path.GetCStr(), copy_len);
+    buf[copy_len] = 0;
+    return copy_len + 1;
+}
+
+::IAGSStream *IAGSEngine::OpenFileStream(const char *script_path, int file_mode, int work_mode)
+{
+    std::unique_ptr<Stream> s(ResolveScriptPathAndOpen(script_path,
+        static_cast<FileOpenMode>(file_mode), static_cast<StreamMode>(work_mode)));
+    // FIXME: this is ugly...
+    return reinterpret_cast<::IAGSStream*>(s->ReleaseStreamBase().release());
+}
+
+::IAGSStream *IAGSEngine::GetFileStreamByHandle(int32 fhandle)
+{
+    return reinterpret_cast<::IAGSStream*>(
+        get_file_stream_iface(fhandle, "IAGSEngine::GetFileStreamByHandle"));
+}
+
+void IAGSEngine::Log(int level, const char *fmt, ...)
+{
+    EnginePlugin &plugin = plugins[pluginId];
+    va_list argptr;
+    va_start(argptr, fmt);
+    plugin.logbuf.Format("%s : ", plugin.filename.GetCStr());
+    plugin.logbuf.AppendFmtv(fmt, argptr);
+    DbgMgr.Print(kDbgGroup_Plugin, static_cast<MessageType>(level), plugin.logbuf);
+    va_end(argptr);
+}
+
+void *IAGSEngine::CreateDynamicArray(size_t elem_count, size_t elem_size, bool is_managed_type)
+{
+    if (elem_count > INT32_MAX || elem_size > INT32_MAX || (static_cast<uint64_t>(elem_count) * elem_size) > UINT32_MAX)
+    {
+        debug_script_warn("IAGSEngine::CreateDynamicArray: requested array size exceeds the supported limit");
+        return nullptr;
+    }
+    if (is_managed_type && elem_size != sizeof(int32_t))
+    {
+        debug_script_warn("IAGSEngine::CreateDynamicArray: managed handles must have elem_size = 4, requested %zu instead", elem_size);
+        return nullptr;
+    }
+
+    auto obj_ref = CCDynamicArray::Create(static_cast<uint32_t>(elem_count), static_cast<uint32_t>(elem_size), is_managed_type);
+    // Should be standard dynamic object, because not managed by plugin
+    return obj_ref.Obj;
+}
+
+size_t IAGSEngine::GetDynamicArrayLength(const void *arr)
+{
+    return arr ? CCDynamicArray::GetHeader(arr).ElemCount : 0u;
+}
+
+size_t IAGSEngine::GetDynamicArraySize(const void *arr)
+{
+    return arr ? CCDynamicArray::GetHeader(arr).TotalSize : 0u;
 }
 
 // *********** General plugin implementation **********
@@ -855,10 +898,16 @@ void pl_startup_plugins() {
     }
 }
 
-int pl_run_plugin_hooks (int event, int data) {
-    for (auto &plugin : plugins) {
-        if (plugin.wantHook & event) {
-            int retval = plugin.onEvent(event, data);
+intptr_t pl_run_plugin_hooks(int event, intptr_t data)
+{
+    for (auto &plugin : plugins)
+    {
+        if (plugin.wantHook & event)
+        {
+            intptr_t retval = plugin.onEvent(event, data);
+            // FIXME: this is an inconvenient design: breaking out
+            // should be done only for events that are claimable,
+            // such as key press, but not any random event!
             if (retval)
                 return retval;
         }
@@ -872,6 +921,45 @@ int pl_run_plugin_debug_hooks (const char *scriptfile, int linenum) {
             int retval = plugin.debugHook(scriptfile, linenum, 0);
             if (retval)
                 return retval;
+        }
+    }
+    return 0;
+}
+
+bool pl_query_next_plugin_for_event(int event, int &pl_index, String &pl_name)
+{
+    for (int i = pl_index; i < plugins.size(); ++i)
+    {
+        if (plugins[i].wantHook & event)
+        {
+            pl_index = i;
+            pl_name = plugins[i].filename;
+            return true;
+        }
+    }
+    return false;
+}
+
+intptr_t pl_run_plugin_hook_by_index(int pl_index, int event, intptr_t data)
+{
+    if (pl_index < 0 || pl_index >= plugins.size())
+        return 0;
+
+    auto &plugin = plugins[pl_index];
+    if (plugin.wantHook & event)
+    {
+        return plugin.onEvent(event, data);
+    }
+    return 0;
+}
+
+intptr_t pl_run_plugin_hook_by_name(Common::String &pl_name, int event, intptr_t data)
+{
+    for (auto &plugin : plugins)
+    {
+        if ((plugin.wantHook & event) && plugin.filename.CompareNoCase(pl_name) == 0)
+        {
+            return plugin.onEvent(event, data);
         }
     }
     return 0;
@@ -917,7 +1005,8 @@ bool pl_use_builtin_plugin(EnginePlugin* apl)
         apl->builtin = true;
         return true;
     }
-    else if (apl->filename.CompareNoCase("ags_snowrain") == 0)
+    else if (apl->filename.CompareNoCase("ags_snowrain") == 0 ||
+             apl->filename.CompareNoCase("ags_SnowRain20") == 0)
     {
         apl->engineStartup = ags_snowrain::AGS_EngineStartup;
         apl->engineShutdown = ags_snowrain::AGS_EngineShutdown;
@@ -990,7 +1079,27 @@ bool pl_use_builtin_plugin(EnginePlugin* apl)
     return false;
 }
 
-Engine::GameInitError pl_register_plugins(const std::vector<PluginInfo> &infos)
+HError pl_load_plugin(EnginePlugin *apl, const std::vector<String> lookup_dirs)
+{
+    if (!apl->library.Load(apl->filename, lookup_dirs))
+        return new Error("Failed to load a dynamic library.");
+    
+    if (apl->library.GetFunctionAddress("AGS_PluginV2") == nullptr)
+        return new Error("Not a valid AGS plugin, or is an old incompatible version: no 'AGS_PluginV2' function exported.");
+
+    auto *startup_function = apl->library.GetFunctionAddress("AGS_EngineStartup");
+    if (startup_function == nullptr)
+        return new Error("Not a valid AGS plugin: no engine startup entry point 'AGS_EngineStartup' exported.", apl->filename.GetCStr());
+
+    apl->engineStartup = (void(*)(IAGSEngine*))startup_function;
+    apl->engineShutdown = (void(*)())apl->library.GetFunctionAddress("AGS_EngineShutdown");
+    apl->onEvent = (intptr_t(*)(int,intptr_t))apl->library.GetFunctionAddress("AGS_EngineOnEvent");
+    apl->debugHook = (int(*)(const char*,int,int))apl->library.GetFunctionAddress("AGS_EngineDebugHook");
+    apl->initGfxHook = (void(*)(const char*, void*))apl->library.GetFunctionAddress("AGS_EngineInitGfx");
+    return HError::None();
+}
+
+GameInitError pl_register_plugins(const std::vector<PluginInfo> &infos, bool enable_load)
 {
     std::vector<String> lookup_dirs;
     lookup_dirs.push_back(appDirectory);
@@ -1019,47 +1128,41 @@ Engine::GameInitError pl_register_plugins(const std::vector<PluginInfo> &infos)
         apl->filename = name;
         apl->savedata = info.Data;
 
-        // Compatibility with the old SnowRain module
-        if (apl->filename.CompareNoCase("ags_SnowRain20") == 0) {
-            apl->filename = "ags_snowrain";
-        }
-
-        if (apl->library.Load(apl->filename, lookup_dirs))
+        if (enable_load)
         {
-          AGS::Common::Debug::Printf(kDbgMsg_Info, "Plugin '%s' loaded from '%s', resolving imports...",
-              apl->filename.GetCStr(), apl->library.GetPath().GetCStr());
-
-          if (apl->library.GetFunctionAddress("AGS_PluginV2") == nullptr) {
-              quitprintf("Plugin '%s' is an old incompatible version.", apl->filename.GetCStr());
-          }
-          apl->engineStartup = (void(*)(IAGSEngine*))apl->library.GetFunctionAddress("AGS_EngineStartup");
-          apl->engineShutdown = (void(*)())apl->library.GetFunctionAddress("AGS_EngineShutdown");
-
-          if (apl->engineStartup == nullptr) {
-              quitprintf("Plugin '%s' is not a valid AGS plugin (no engine startup entry point)", apl->filename.GetCStr());
-          }
-          apl->onEvent = (int(*)(int,int))apl->library.GetFunctionAddress("AGS_EngineOnEvent");
-          apl->debugHook = (int(*)(const char*,int,int))apl->library.GetFunctionAddress("AGS_EngineDebugHook");
-          apl->initGfxHook = (void(*)(const char*, void*))apl->library.GetFunctionAddress("AGS_EngineInitGfx");
+            HError err = pl_load_plugin(apl, lookup_dirs);
+            if (err)
+            {
+                Debug::Printf(kDbgMsg_Info, "Plugin '%s' loaded from '%s', resolving imports...",
+                    apl->filename.GetCStr(), apl->library.GetPath().GetCStr());
+            }
+            else
+            {
+                String expect_filename = apl->library.GetFilenameForLib(apl->filename);
+                Debug::Printf(kDbgMsg_Error, "Plugin '%s' could not be loaded (expected '%s'):\n\t%s",
+                    apl->filename.GetCStr(), expect_filename.GetCStr(), err->FullMessage().GetCStr());
+            }
         }
         else
         {
-          String expect_filename = apl->library.GetFilenameForLib(apl->filename);
-          AGS::Common::Debug::Printf(kDbgMsg_Info, "Plugin '%s' could not be loaded (expected '%s'), trying built-in plugins...",
-              apl->filename.GetCStr(), expect_filename.GetCStr());
-          if (pl_use_builtin_plugin(apl))
-          {
-            AGS::Common::Debug::Printf(kDbgMsg_Info, "Build-in plugin '%s' found and being used.", apl->filename.GetCStr());
-          }
-          else
-          {
-            // Plugin loading has failed at this point, try using built-in plugin function stubs
-            if (RegisterPluginStubs(apl->filename.GetCStr()))
-              AGS::Common::Debug::Printf(kDbgMsg_Info, "Placeholder functions for the plugin '%s' found.", apl->filename.GetCStr());
+            Debug::Printf(kDbgMsg_Warn, "Plugin '%s' not loaded: plugins loading is disabled.", apl->filename.GetCStr());
+        }
+        
+        // If plugin loading has failed, or loading is disabled, then try using built-in plugins or stubs
+        if (!apl->engineStartup)
+        {
+            if (pl_use_builtin_plugin(apl))
+            {
+                Debug::Printf(kDbgMsg_Info, "Built-in plugin '%s' found and being used.", apl->filename.GetCStr());
+            }
             else
-              AGS::Common::Debug::Printf(kDbgMsg_Info, "No placeholder functions for the plugin '%s' found. The game might fail to load!", apl->filename.GetCStr());
-            continue;
-          }
+            {
+                if (RegisterPluginStubs(apl->filename.GetCStr()))
+                    Debug::Printf(kDbgMsg_Info, "Placeholder functions for the plugin '%s' found.", apl->filename.GetCStr());
+                else
+                    Debug::Printf(kDbgMsg_Warn, "No placeholder functions for the plugin '%s' found. The game might fail to load!", apl->filename.GetCStr());
+                continue; // skip further plugin activation
+            }
         }
 
         apl->eiface.pluginId = plugins.size() - 1;

@@ -27,6 +27,7 @@ Locations of two latter files differ between running platforms:
     * Software - software renderer.
   * software_driver = \[string\] - *optional* id of the SDL2 driver to use for the final output in software mode, leave empty for default. IDs are provided by SDL2, not all of these will work on any system:
     * direct3d, opengl, opengles, opengles2, metal, software.
+  * display = \[number\] - *1-based* index of system display to start the game on; 0 means "use defaults".
   * fullscreen = \[string\] - a fullscreen mode definition, which may be one of the following:
     * WxH - explicit window size (e.g. `1280x720`);
     * xS - integer game scaling factor (e.g. `x4`);
@@ -43,13 +44,11 @@ Locations of two latter files differ between running platforms:
     * max_round - deduce maximal integer multiplier that fits in current desktop/device size;
     * stretch - stretch to current desktop/device size;
     * proportional - similar to stretch, but keep game's aspect ratio.
-  * filter = \[string\] - id of the scaling filter to use. Supported filter names are:
-    * none - run in native game size;
+  * filter = \[string\] - id of the scaling filter to use when required. Supported filter names are:
     * stdscale - nearest-neighbour scaling;
     * linear - anti-aliased scaling; not usable with software renderer.
-  * refresh = \[integer\] - refresh rate for the display mode.
+  * refresh = \[integer\] - refresh rate for the fullscreen display mode. WARNING: ignored by the engine as of v3.6.0.
   * render_at_screenres = \[0; 1\] - whether the sprites are transformed and rendered in native game's or current display resolution;
-  * supersampling = \[integer\] - supersampling multiplier, default is 1, used with render_at_screenres = 0 (currently supported only by OpenGL renderer);
   * vsync = \[0; 1\] - enable or disable vertical sync.
   * rotation = \[string | integer\] - screen rotation. Possible values are:
     * unlocked (0) - device can be freely rotated if possible.
@@ -102,9 +101,9 @@ Locations of two latter files differ between running platforms:
   * \[outputname\] = +GROUPLIST[:LEVEL];
     Groups may be defined either by name or by a LIST of one-letter IDs, preceded by '+', e.g. +ABCD:LEVEL. Verbosity may be defined either by name or a numeric ID.
     - OUTPUTs are:
-      * stdout, file, console (where \"console\" is internal engine's console);
+      * stdout, file, debugger (external debugging program);
     - GROUPs are:
-      * all, main (m), game (g), manobj (o), sdl (l), script(s), sprcache (c);
+      * all, main (m), game (g), manobj (o), plugin (p), script (s), sdl (l), sprcache (c);
     - LEVELs are:
       * all, alert (1), fatal (2), error (3), warn (4), info (5), debug (6);
     - Examples:
@@ -112,23 +111,38 @@ Locations of two latter files differ between running platforms:
       * stdout=+mg:debug
   * file-path = \[string\] - custom path to the log file.
   * sdl = LEVEL - setup SDL's own logging level, defined either by name or numeric ID:
-    * verbose (1), debug (2), info (3), warn (4), error (5), critical (6).
-* **\[override\]** - special options, overriding game behavior.
+    * all (0), verbose (1), debug (2), info (3), warn (4), error (5), critical (6).
+* **\[access\]** - accessibility options. These may override programmed game behavior for the purpose of making playing the game easier.
+  * speechskip = \[string\] - assigns the speech skip style to a fixed value:
+    * default - do not override, use game's scripted option;
+	* input - skip speech by player's input only;
+	* time - skip speech by time-out only;
+	* any - skip speech either by player's input or time-out.
+  * textskip = \[string\] - assigns the text message skip style to a fixed value; values are the same as for "speechskip" option.
+* **\[override\]** - special options, overriding game behavior. These are purposed rather for emergency "hacks", in case something was not done "right" in a game, or when you like to enable certain compatibility mode.
+  * noplugins = \[0; 1\] - disable plugin loading. Engine will fallback to built-in plugins or stubs, if they are available.
   * multitasking = \[0; 1\] - lock the game in the "single-tasking" or "multitasking" mode. In the nutshell, "multitasking" here means that the game will continue running when player switched away from game window; otherwise it will freeze until player switches back.
   * os = \[string\] - trick the game to think that it runs on a particular operating system. This may come handy if the game is scripted to play differently depending on OS. Possible choices are:
     * dos - MS DOS;
     * win - Windows;
     * linux - Linux;
     * mac - MacOS.
+  * max_save = \[integer\] - topmost save slot that may be used in a standard save/restore dialog in game. This affects only built-in dialogs and listboxes filled by FillSaveGameList() script command. This does not and cannot affect any other custom scripted save systems.
   * restore_game_key = \[integer\] - key for calling built-in restore game dialog. Key value corresponds to the [AGS script keycode](https://github.com/adventuregamestudio/ags-manual/wiki/Keycodes).
   * save_game_key = \[integer\] - key for calling built-in save game dialog.
   * upscale = \[0; 1\] - run game in the "upscale mode". The earlier versions of AGS provided support for "upscaling" low-res games to hi-res. The script API has means for detecting if the game is running upscaled, and game developer could use this opportunity to setup game accordingly (e.g. assign hi-res fonts, etc). This options works **only** for games created before AGS 3.1.0 with low-res native resolution, such as 320x200 or 320x240, and it may somewhat improve
   game looks.
 * **\[disabled\]** - special instructions for the setup program hinting to disable particular options or lock some in the certain state. Ignored by the engine.
+  * gfxdrivers = \[0; 1\] - tells to lock "Graphics driver" selection in a default state;
+  * \<gfxdriver id\> = \[0; 1\] - tells to remove particular graphics driver from the selection list;
+  * filters = \[0; 1\] - tells to lock "Graphics filter" selection in a default state;
+  * \<filter id\> = \[0; 1\] - tells to remove particular graphics filter from the selection list;
+  * fullscreen = \[0; 1\] - tells to disable fullscreen desktop checkbox and fullscreen mode selection list;
+  * antialias = \[0; 1\] - tells to lock "Smooth scaled sprites" in a default state;
   * render_at_screenres = \[0; 1\] - tells to lock "Render sprites in screen resolution" in a default state;
   * speechvox = \[0; 1\] - tells to lock "Use digital speech pack" in a default state;
-  * filters = \[0; 1\] - tells to lock "Graphics filter" selection in a default state;
-  * \<filter id\> - tells to remove particular graphics filter from the selection list;
+  * translation = \[0; 1\] - tells to lock "Game language" in a default state;
+  * access_skipstyle = \[0; 1\] - tells to lock speech and text skip settings on "Accessibility" tab;
   
 
 ## Command line
@@ -144,6 +158,7 @@ Following OPTIONS are supported when running from command line:
 * --clear-cache-on-room-change - clears sprite cache on every room change.
 * --conf \<FILEPATH\> - specify explicit config file to read on startup.
 * --console-attach - write output to the parent process's console (Windows only).
+* --display \<number\> - *1-based* index of system display to start the game on; 0 means "use defaults".
 * --fps - display fps counter.
 * --fullscreen - run in fullscreen mode.
 * --gfxdriver \<name\> - use specified graphics driver:
@@ -152,7 +167,6 @@ Following OPTIONS are supported when running from command line:
   * software - software renderer.
 * --gfxfilter \<name\> [ \<game_scaling\> ] - use specified graphics filter and scaling factor.
   * filter names:
-    * none - run in native game size;
     * stdscale - nearest-neighbour scaling;
     * linear - anti-aliased scaling; not usable with software renderer.
   * game scaling:
@@ -166,7 +180,8 @@ Following OPTIONS are supported when running from command line:
     * --log-file=all:warn
     * --log-stdout=+mg:debug
 * --log-file-path=PATH - define custom path for the log file.
-* --no-message-box - disable alerts as modal message boxes (Windows only).
+* --no-message-box - disable alerts as modal message boxes (on platforms that support them in the first place).
+* --no-plugins - disable plugin loading.
 * --no-translation - use default game language on start.
 * --noiface - don't draw game GUI (for test purposes).
 * --noscript - don't run room scripts (for test purposes); *WARNING:* unreliable.
@@ -186,7 +201,7 @@ Following OPTIONS are supported when running from command line:
   * --tell-engine - print engine name and version.
   * --tell-filepath - print all filepaths engine uses for the game.
   * --tell-graphicdriver - print list of supported graphic drivers.
-* --test - run game in the test mode, unlocking test key combinations and console.
+* --test - run game in the test mode, unlocking test key combinations.
 * --translation - select the given translation on start.
 * --user-data-dir \<DIR\> - set the save game directory. Corresponds to "user_data_dir" config option.
 * --windowed - run in windowed mode.

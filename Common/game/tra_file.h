@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -57,7 +57,7 @@ typedef TypedCodeError<TraFileErrorType, GetTraFileErrorText> TraFileError;
 struct Translation
 {
     // Game identifiers, for matching the translation file with the game
-    int GameUid;
+    int GameUid = 0;
     String GameName;
     // Translation dictionary in source/dest pairs
     StringMap Dict;
@@ -70,11 +70,11 @@ struct Translation
 
 
 // Parses translation data and tests whether it matches the given game
-HError TestTraGameID(int game_uid, const String &game_name, Stream *in);
+HError TestTraGameID(int game_uid, const String &game_name, std::unique_ptr<Stream> &&in);
 // Reads full translation data from the provided stream
-HError ReadTraData(Translation &tra, Stream *in);
+HError ReadTraData(Translation &tra, std::unique_ptr<Stream> &&in);
 // Writes all translation data to the stream
-void WriteTraData(const Translation &tra, Stream *out);
+void WriteTraData(const Translation &tra, std::unique_ptr<Stream> &&out);
 
 } // namespace Common
 } // namespace AGS

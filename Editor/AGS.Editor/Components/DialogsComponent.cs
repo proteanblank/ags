@@ -129,7 +129,7 @@ namespace AGS.Editor.Components
             if (name_only)
                 ChangeItemLabel(GetNodeID(item), GetNodeLabel(item));
             else
-                RePopulateTreeView(); // currently this is the only way to update tree item ids
+                RePopulateTreeView(GetNodeID(item)); // currently this is the only way to update tree item ids
 
             foreach (ContentDocument doc in _documents.Values)
             {
@@ -229,7 +229,27 @@ namespace AGS.Editor.Components
             }
         }
 
-		private DialogEditor ShowPaneForDialog(int dialogNumber)
+        public override IList<string> GetManagedScriptElements()
+        {
+            return new string[] { "Dialog" };
+        }
+
+        public override bool ShowItemPaneByName(string name)
+        {
+            IList<Dialog> dialogs = GetFlatList();
+            foreach (Dialog d in dialogs)
+            {
+                if (d.Name == name)
+                {
+                    _guiController.ProjectTree.SelectNode(this, GetNodeID(d));
+                    ShowPaneForDialog(d);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private DialogEditor ShowPaneForDialog(int dialogNumber)
 		{
             Dialog chosenItem = _agsEditor.CurrentGame.RootDialogFolder.FindDialogByID(dialogNumber, true);
             return ShowPaneForDialog(chosenItem);
@@ -277,6 +297,11 @@ namespace AGS.Editor.Components
                 RemoveExecutionPointFromAllScripts();
             }
 
+            if (evArgs.Handled)
+            {
+                return; // operation has been completed by another handler
+            }
+
             Dialog dialog = GetDialog(evArgs.FileName);
             if (dialog != null)
             {
@@ -301,7 +326,12 @@ namespace AGS.Editor.Components
                     dialogEditor.Paint += paintEvent;
                     dialogEditor.Invalidate();
                 }
-            }         
+                evArgs.Result = ZoomToFileResult.Success;
+            }
+            else
+            {
+                evArgs.Result = ZoomToFileResult.ScriptNotFound;
+            }
 		}
 
         private string GetNodeID(Dialog item)
@@ -324,7 +354,7 @@ namespace AGS.Editor.Components
         private Dictionary<string, object> ConstructPropertyObjectList(Dialog item)
         {
             Dictionary<string, object> list = new Dictionary<string, object>();
-            list.Add(item.Name + " (Dialog " + item.ID + ")", item);
+            list.Add(item.PropertyGridTitle, item);
             return list;
         }
 

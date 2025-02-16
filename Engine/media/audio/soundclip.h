@@ -2,25 +2,25 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
-// SOUNDCLIP - an interface for an audio clip configuration and control.
+// SoundClip - an interface for an audio clip configuration and control.
 //
-// SOUNDCLIP's state and parameter updates sync with the audio core in
+// SoundClip's state and parameter updates sync with the audio core in
 // batches, only when the engine updates the game, never while the user script
 // is being executed. The sync is performed by calling update().
 // This is to ensure that the clip reference, state and properties don't change
 // in the middle of the script's command sequence.
 //
-// SOUNDCLIP features two position units for pos telling and seek:
+// SoundClip features two position units for pos telling and seek:
 // one is milliseconds, and another a sound type specific position, which is:
 //  * MIDI - the beat number
 //  * MOD / XM / S3M - the pattern number
@@ -38,11 +38,11 @@
 #define __AGS_EE_MEDIA__SOUNDCLIP_H__
 #include "media/audio/audiodefines.h"
 
-class SOUNDCLIP final
+class SoundClip final
 {
 public:
-    SOUNDCLIP(int slot);
-    ~SOUNDCLIP();
+    SoundClip(int slot, int snd_type, bool loop);
+    ~SoundClip();
 
     // TODO: move these to private
     int sourceClipID;
@@ -61,7 +61,7 @@ public:
     void seek(int pos);
     // Seeks to the position in milliseconds
     void seek_ms(int pos_ms);
-    // Synchronize this SOUNDCLIP with the audio subsystem:
+    // Synchronize this SoundClip with the audio subsystem:
     // - start scheduled playback;
     // - apply all accumulated sound parameters;
     // - read and save current position;

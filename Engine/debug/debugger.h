@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -29,8 +29,6 @@ extern int break_on_next_script_step;
 int check_for_messages_from_debugger();
 bool send_state_to_debugger(const char *msg);
 bool send_exception_to_debugger(const char *qmsg);
-// Returns current script's location and callstack
-AGS::Common::String get_cur_script(int numberOfLinesOfCallStack);
 bool get_script_position(ScriptPosition &script_pos);
 
 void check_debug_keys();
@@ -54,7 +52,6 @@ enum FPSDisplayMode
     kFPS_Forced = 2   // forced shown by the engine arg
 };
 
-extern float fps;
 extern FPSDisplayMode display_fps;
 extern int debug_flags;
 

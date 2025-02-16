@@ -8,7 +8,7 @@ using System.Windows.Forms;
 
 namespace AGS.Editor
 {
-    public class EdgesEditorFilter : IRoomEditorFilter
+    public class EdgesEditorFilter : BaseRoomEditorFilter, IRoomEditorFilter
     {
         private enum SelectedEdge
         {
@@ -127,6 +127,11 @@ namespace AGS.Editor
             }
             return false;
 		}
+
+        public bool KeyReleased(Keys key)
+        {
+            return false;
+        }
 
         public void Paint(Graphics graphics, RoomEditorState state)
         {

@@ -6,12 +6,15 @@ namespace AGS.CScript.Compiler
 {
     /// <summary>
     /// Optimised class to allow Substrings to be done without creating new
-    /// copies of the string data in memory
+    /// copies of the string data in memory.
+    /// TODO: implement Length, to be able to work with any range inside parent string.
+    /// TODO: implement EndsWith.
     /// </summary>
     public class FastString
     {
         private string _data;
         private int _offset;
+        private const StringComparison _useComparison = StringComparison.Ordinal;
 
         public FastString(string source)
         {
@@ -50,17 +53,18 @@ namespace AGS.CScript.Compiler
 			{
 				return false;
 			}
-            return (_data[_offset] == text[0]) && (_data.Substring(_offset).StartsWith(text));
+            // FIXME: compare Char by Char instead? calling String.Substring here defeats the purpose of FastString!
+            return (_data[_offset] == text[0]) && (_data.Substring(_offset).StartsWith(text, _useComparison));
         }
 
         public int IndexOf(string text, int offset)
         {
-            return _data.IndexOf(text, _offset + offset) - _offset;
+            return _data.IndexOf(text, _offset + offset, _useComparison) - _offset;
         }
 
         public int IndexOf(string text)
         {
-            return _data.IndexOf(text, _offset) - _offset;
+            return _data.IndexOf(text, _offset, _useComparison) - _offset;
         }
 
         public int IndexOf(char text)

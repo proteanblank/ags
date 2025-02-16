@@ -24,6 +24,12 @@ namespace AGS.Types
         public const int MAX_SOUND_CHANNELS = 16;
         public const int MAX_USER_SOUND_CHANNELS = MAX_SOUND_CHANNELS - 1; // 1 reserved for Speech
 
+        // TODO: these events are unfortunately a hack. They are not even fired by the
+        // Game class itself, and instead require for some external manager to call
+        // Game.Notify** methods.
+        // We need some sort of a global interface, preferably in AGS.Types, that would
+        // contain all the game changing events and Notify methods, e.g. IGameListener,
+        // provided by the Editor API.
         public delegate void GUIAddedOrRemovedHandler(GUI theGUI);
         public delegate void GUIControlAddedOrRemovedHandler(GUI owningGUI, GUIControl control);
         public delegate void ViewListUpdatedHandler();
@@ -93,6 +99,7 @@ namespace AGS.Types
             _textParser = new TextParser();
             _lipSync = new LipSync();
             _propertySchema = new CustomPropertySchema();
+            CustomProperties.Schema = _propertySchema;
             _globalVariables = new GlobalVariables();
             _globalMessages = new string[NUMBER_OF_GLOBAL_MESSAGES];
 			_deletedViewIDs = new SortedDictionary<int, object>();
@@ -384,7 +391,9 @@ namespace AGS.Types
             set { _savedXmlEncodingCP = value; }
         }
 
-		/// <summary>		/// Full path to the directory where the game is located		/// </summary>
+		/// <summary>
+		/// Full path to the directory where the game is located
+		/// </summary>
 		public string DirectoryPath
 		{
 			get { return _directoryPath; }
@@ -627,6 +636,10 @@ namespace AGS.Types
                 palette[i] = new PaletteEntry(i, _palette[i].Colour);
                 palette[i].ColourType = _palette[i].ColourType;
             }
+
+            if (parentOfPaletteNode.SelectSingleNode("Palette") == null)
+                return palette;
+
             foreach (XmlNode palNode in SerializeUtils.GetChildNodes(parentOfPaletteNode, "Palette"))
             {
                 PaletteEntry paletteEntry = palette[Convert.ToInt32(palNode.Attributes["Index"].InnerText)];
@@ -814,29 +827,32 @@ namespace AGS.Types
                 _settings.InventoryHotspotMarker = marker;
             }
 
-            foreach (XmlNode msgNode in SerializeUtils.GetChildNodes(node, "GlobalMessages"))
+            foreach (XmlNode msgNode in SerializeUtils.GetChildNodesOrEmpty(node, "GlobalMessages"))
             {
                 _globalMessages[Convert.ToInt32(msgNode.Attributes["ID"].InnerText) - GLOBAL_MESSAGE_ID_START] = msgNode.InnerText;
             }
 
             _plugins.Clear();
-            foreach (XmlNode pluginNode in SerializeUtils.GetChildNodes(node, "Plugins"))
+            foreach (XmlNode pluginNode in SerializeUtils.GetChildNodesOrEmpty(node, "Plugins"))
             {
                 _plugins.Add(new Plugin(pluginNode));
             }
 
-            _rooms = new UnloadedRoomFolders(node.SelectSingleNode("Rooms").FirstChild, node);
+            _rooms = new UnloadedRoomFolders(SerializeUtils.GetFirstChildOrNull(node, "Rooms"), node);
             
-            _guis = new GUIFolders(node.SelectSingleNode("GUIs").FirstChild, node);            
+            _guis = new GUIFolders(SerializeUtils.GetFirstChildOrNull(node, "GUIs"), node);
 
-            _inventoryItems = new InventoryItemFolders(node.SelectSingleNode("InventoryItems").FirstChild, node);            
+            _inventoryItems = new InventoryItemFolders(SerializeUtils.GetFirstChildOrNull(node, "InventoryItems"), node);
 
-            _textParser = new TextParser(node.SelectSingleNode("TextParser"));
+            if (node.SelectSingleNode("TextParser") != null)
+                _textParser = new TextParser(node.SelectSingleNode("TextParser"));
+            else
+                _textParser = new TextParser();
 
-            _characters = new CharacterFolders(node.SelectSingleNode("Characters").FirstChild, node);            
+            _characters = new CharacterFolders(SerializeUtils.GetFirstChildOrNull(node, "Characters"), node);            
 
             _playerCharacter = null;
-            string playerCharText = SerializeUtils.GetElementString(node, "PlayerCharacter");
+            string playerCharText = SerializeUtils.GetElementStringOrDefault(node, "PlayerCharacter", "-1");
             if (playerCharText.Length > 0)
             {
                 int playerCharID = Convert.ToInt32(playerCharText);
@@ -850,40 +866,45 @@ namespace AGS.Types
                 }
             }
 
-            _dialogs = new DialogFolders(node.SelectSingleNode("Dialogs").FirstChild, node);                                    
+            _dialogs = new DialogFolders(SerializeUtils.GetFirstChildOrNull(node, "Dialogs"), node);                                    
 
             _cursors.Clear();
-            foreach (XmlNode cursNode in SerializeUtils.GetChildNodes(node, "Cursors"))
+            foreach (XmlNode cursNode in SerializeUtils.GetChildNodesOrEmpty(node, "Cursors"))
             {
                 _cursors.Add(new MouseCursor(cursNode));
             }
 
             _fonts.Clear();
-            foreach (XmlNode fontNode in SerializeUtils.GetChildNodes(node, "Fonts"))
+            foreach (XmlNode fontNode in SerializeUtils.GetChildNodesOrEmpty(node, "Fonts"))
             {
                 _fonts.Add(new Font(fontNode));
             }
 
             _palette = ReadPaletteFromXML(node);
 
-            _sprites = new SpriteFolder(node.SelectSingleNode("Sprites").FirstChild);
+            var spriteNode = SerializeUtils.GetFirstChildOrNull(node, "Sprites");
+            if (spriteNode != null)
+                _sprites = new SpriteFolder(spriteNode);
+            else
+                _sprites = new SpriteFolder("Main");
 
-            _views = new ViewFolders(node.SelectSingleNode("Views").FirstChild);
+            var viewNode = SerializeUtils.GetFirstChildOrNull(node, "Views");
+            if (viewNode != null)
+                _views = new ViewFolders(viewNode);
+            else
+                _views = new ViewFolders("Main");
 
             _deletedViewIDs.Clear();
-			if (node.SelectSingleNode("DeletedViews") != null)
-			{
-				foreach (XmlNode transNode in SerializeUtils.GetChildNodes(node, "DeletedViews"))
-				{
-					_deletedViewIDs.Add(Convert.ToInt32(transNode.InnerText), null);
-				}
-			}
+            foreach (XmlNode transNode in SerializeUtils.GetChildNodesOrEmpty(node, "DeletedViews"))
+            {
+                _deletedViewIDs.Add(Convert.ToInt32(transNode.InnerText), null);
+            }
 
-            _scripts = new ScriptFolders(node.SelectSingleNode("Scripts").FirstChild, node);
+            _scripts = new ScriptFolders(SerializeUtils.GetFirstChildOrNull(node, "Scripts"), node);
 
             if (node.SelectSingleNode("AudioClips") != null)
             {
-                _audioClips = new AudioClipFolders(node.SelectSingleNode("AudioClips").FirstChild);
+                _audioClips = new AudioClipFolders(SerializeUtils.GetFirstChild(node, "AudioClips"));
             }
             else
             {
@@ -894,21 +915,15 @@ namespace AGS.Types
             }
 
             _audioClipTypes.Clear();
-            if (node.SelectSingleNode("AudioClipTypes") != null)
+            foreach (XmlNode clipTypeNode in SerializeUtils.GetChildNodesOrEmpty(node, "AudioClipTypes"))
             {
-                foreach (XmlNode clipTypeNode in SerializeUtils.GetChildNodes(node, "AudioClipTypes"))
-                {
-                    _audioClipTypes.Add(new AudioClipType(clipTypeNode));
-                }
+                _audioClipTypes.Add(new AudioClipType(clipTypeNode));
             }
 
             _translations.Clear();
-            if (node.SelectSingleNode("Translations") != null)
+            foreach (XmlNode transNode in SerializeUtils.GetChildNodesOrEmpty(node, "Translations"))
             {
-                foreach (XmlNode transNode in SerializeUtils.GetChildNodes(node, "Translations"))
-                {
-                    _translations.Add(new Translation(transNode));
-                }
+                _translations.Add(new Translation(transNode));
             }
 
             if (node.SelectSingleNode("GlobalVariables") != null)
@@ -921,13 +936,10 @@ namespace AGS.Types
             }
 
 			_oldInteractionVariables.Clear();
-			if (node.SelectSingleNode("OldInteractionVariables") != null)
-			{
-				foreach (XmlNode varNode in SerializeUtils.GetChildNodes(node, "OldInteractionVariables"))
-				{
-					_oldInteractionVariables.Add(new OldInteractionVariable(SerializeUtils.GetAttributeString(varNode, "Name"), SerializeUtils.GetAttributeInt(varNode, "Value")));
-				}
-			}
+            foreach (XmlNode varNode in SerializeUtils.GetChildNodesOrEmpty(node, "OldInteractionVariables"))
+            {
+                _oldInteractionVariables.Add(new OldInteractionVariable(SerializeUtils.GetAttributeString(varNode, "Name"), SerializeUtils.GetAttributeInt(varNode, "Value")));
+            }
 
             if (_savedXmlVersionIndex == null)
             {

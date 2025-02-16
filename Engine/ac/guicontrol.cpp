@@ -2,29 +2,23 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <vector>
 #include "ac/common.h"
-#include "ac/guicontrol.h"
 #include "ac/global_gui.h"
+#include "ac/gui.h"
+#include "ac/guicontrol.h"
 #include "ac/mouse.h"
 #include "ac/string.h"
 #include "debug/debug_log.h"
-#include "gui/guibutton.h"
-#include "gui/guiinv.h"
-#include "gui/guilabel.h"
-#include "gui/guilistbox.h"
-#include "gui/guimain.h"
-#include "gui/guislider.h"
-#include "gui/guitextbox.h"
 #include "script/runtimescriptvalue.h"
 #include "ac/dynobj/cc_gui.h"
 #include "ac/dynobj/cc_guiobject.h"
@@ -58,9 +52,6 @@ void GUIControl_SetVisible(GUIObject *guio, int visible)
   if (on != guio->IsVisible())
   {
     guio->SetVisible(on);
-    // Make sure that the overpic is turned off when the GUI goes off
-    if (!on && (guis[guio->ParentId].MouseOverCtrl == guio->Id))
-        guio->OnMouseLeave();
   }
 }
 
@@ -71,12 +62,11 @@ int GUIControl_GetClickable(GUIObject *guio) {
 }
 
 void GUIControl_SetClickable(GUIObject *guio, int enabled) {
-  if (enabled)
-    guio->SetClickable(true);
-  else
-    guio->SetClickable(false);
-  // clickable property may change control behavior under mouse
-  guis[guio->ParentId].MarkControlsChanged();
+  const bool on = enabled != 0;
+  if (on != guio->IsClickable())
+  {
+    guio->SetClickable(on);
+  }
 }
 
 int GUIControl_GetEnabled(GUIObject *guio) {
@@ -153,7 +143,7 @@ int GUIControl_GetX(GUIObject *guio) {
 
 void GUIControl_SetX(GUIObject *guio, int xx) {
   guio->X = data_to_game_coord(xx);
-  guis[guio->ParentId].MarkControlsChanged(); // update control under cursor
+  guis[guio->ParentId].NotifyControlPosition(); // update control under cursor
 }
 
 int GUIControl_GetY(GUIObject *guio) {
@@ -162,7 +152,7 @@ int GUIControl_GetY(GUIObject *guio) {
 
 void GUIControl_SetY(GUIObject *guio, int yy) {
   guio->Y = data_to_game_coord(yy);
-  guis[guio->ParentId].MarkControlsChanged(); // update control under cursor
+  guis[guio->ParentId].NotifyControlPosition(); // update control under cursor
 }
 
 int GUIControl_GetZOrder(GUIObject *guio)
@@ -182,21 +172,19 @@ void GUIControl_SetPosition(GUIObject *guio, int xx, int yy) {
 
 
 int GUIControl_GetWidth(GUIObject *guio) {
-  return game_to_data_coord(guio->Width);
+  return game_to_data_coord(guio->GetWidth());
 }
 
 void GUIControl_SetWidth(GUIObject *guio, int newwid) {
-  guio->Width = data_to_game_coord(newwid);
-  guio->OnResized();
+  guio->SetWidth(data_to_game_coord(newwid));
 }
 
 int GUIControl_GetHeight(GUIObject *guio) {
-  return game_to_data_coord(guio->Height);
+  return game_to_data_coord(guio->GetHeight());
 }
 
 void GUIControl_SetHeight(GUIObject *guio, int newhit) {
-  guio->Height = data_to_game_coord(newhit);
-  guio->OnResized();
+  guio->SetHeight(data_to_game_coord(newhit));
 }
 
 void GUIControl_SetSize(GUIObject *guio, int newwid, int newhit) {
@@ -237,8 +225,6 @@ void GUIControl_SetTransparency(GUIObject *guio, int trans) {
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 
-
-extern ScriptString myScriptStringImpl;
 
 GUIObject *GUIControl_GetByName(const char *name)
 {
@@ -284,37 +270,37 @@ RuntimeScriptValue Sc_GUIControl_SetSize(void *self, const RuntimeScriptValue *p
 // GUIButton* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsButton(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUIButton, ccDynamicGUI, GUIControl_GetAsButton);
+    API_OBJCALL_OBJ(GUIObject, GUIButton, ccDynamicGUIObject, GUIControl_GetAsButton);
 }
 
 // GUIInvWindow* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsInvWindow(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUIInvWindow, ccDynamicGUI, GUIControl_GetAsInvWindow);
+    API_OBJCALL_OBJ(GUIObject, GUIInvWindow, ccDynamicGUIObject, GUIControl_GetAsInvWindow);
 }
 
 // GUILabel* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsLabel(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUILabel, ccDynamicGUI, GUIControl_GetAsLabel);
+    API_OBJCALL_OBJ(GUIObject, GUILabel, ccDynamicGUIObject, GUIControl_GetAsLabel);
 }
 
 // GUIListBox* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsListBox(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUIListBox, ccDynamicGUI, GUIControl_GetAsListBox);
+    API_OBJCALL_OBJ(GUIObject, GUIListBox, ccDynamicGUIObject, GUIControl_GetAsListBox);
 }
 
 // GUISlider* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsSlider(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUISlider, ccDynamicGUI, GUIControl_GetAsSlider);
+    API_OBJCALL_OBJ(GUIObject, GUISlider, ccDynamicGUIObject, GUIControl_GetAsSlider);
 }
 
 // GUITextBox* (GUIObject *guio)
 RuntimeScriptValue Sc_GUIControl_GetAsTextBox(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_OBJ(GUIObject, GUITextBox, ccDynamicGUI, GUIControl_GetAsTextBox);
+    API_OBJCALL_OBJ(GUIObject, GUITextBox, ccDynamicGUIObject, GUIControl_GetAsTextBox);
 }
 
 // int (GUIObject *guio)

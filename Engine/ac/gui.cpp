@@ -2,17 +2,18 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
 #include <cstdio>
+#include <numeric>
 #include <vector>
 #include "ac/gui.h"
 #include "ac/common.h"
@@ -72,6 +73,104 @@ int mouse_on_iface=-1;   // mouse cursor is over this interface
 int mouse_ifacebut_xoffs=-1,mouse_ifacebut_yoffs=-1;
 
 int eip_guinum, eip_guiobj;
+
+
+namespace AGS
+{
+namespace Engine
+{
+namespace GUIE
+{
+
+void MarkAllGUIForUpdate(bool redraw, bool reset_over_ctrl)
+{
+    for (auto &gui : guis)
+    {
+        if (redraw)
+        {
+            gui.MarkChanged();
+            for (int i = 0; i < gui.GetControlCount(); ++i)
+                gui.GetControl(i)->MarkChanged();
+        }
+        if (reset_over_ctrl)
+            gui.ResetOverControl();
+    }
+}
+
+void MarkForTranslationUpdate()
+{
+    for (auto &btn : guibuts)
+    {
+        if (btn.IsTranslated())
+            btn.MarkChanged();
+    }
+    for (auto &lbl : guilabels)
+    {
+        if (lbl.IsTranslated())
+            lbl.MarkChanged();
+    }
+    for (auto &list : guilist)
+    {
+        if (list.IsTranslated())
+            list.MarkChanged();
+    }
+}
+
+void MarkForFontUpdate(int font)
+{
+    const bool update_all = (font < 0);
+    for (auto &btn : guibuts)
+    {
+        if (update_all || btn.Font == font)
+            btn.OnResized();
+    }
+    for (auto &lbl : guilabels)
+    {
+        if (update_all || lbl.Font == font)
+            lbl.OnResized();
+    }
+    for (auto &list : guilist)
+    {
+        if (update_all || list.Font == font)
+            list.OnResized();
+    }
+    for (auto &tb : guitext)
+    {
+        if (update_all || tb.Font == font)
+            tb.OnResized();
+    }
+}
+
+void MarkSpecialLabelsForUpdate(GUILabelMacro macro)
+{
+    for (auto &lbl : guilabels)
+    {
+        if ((lbl.GetTextMacros() & macro) != 0)
+        {
+            lbl.MarkChanged();
+        }
+    }
+}
+
+void MarkInventoryForUpdate(int char_id, bool is_player)
+{
+    for (auto &btn : guibuts)
+    {
+        if (btn.GetPlaceholder() != kButtonPlace_None)
+            btn.MarkChanged();
+    }
+    for (auto &inv : guiinv)
+    {
+        if ((char_id < 0) || (inv.CharId == char_id) || (is_player && inv.CharId < 0))
+        {
+            inv.MarkChanged();
+        }
+    }
+}
+
+} // namespace GUI
+} // namespace Engine
+} // namespace AGS
 
 
 ScriptGUI* GUI_AsTextWindow(ScriptGUI *tehgui)
@@ -311,10 +410,10 @@ void GUI_ProcessClick(int x, int y, int mbut)
 {
     int guiid = gui_get_interactable(x, y);
     if (guiid >= 0)
-    {
+    { // simulate mouse click at the given coordinates
         guis[guiid].Poll(x, y);
-        gui_on_mouse_down(guiid, mbut);
-        gui_on_mouse_up(guiid, mbut);
+        gui_on_mouse_down(guiid, mbut, x, y);
+        gui_on_mouse_up(guiid, mbut, x, y);
     }
 }
 
@@ -340,7 +439,7 @@ void process_interface_click(int ifce, int btn, int mbut) {
         // click on GUI background
         RuntimeScriptValue params[]{ RuntimeScriptValue().SetScriptObject(&scrGui[ifce], &ccDynamicGUI),
             RuntimeScriptValue().SetInt32(mbut) };
-        QueueScriptFunction(kScInstGame, guis[ifce].OnClickHandler.GetCStr(), 2, params);
+        QueueScriptFunction(kScTypeGame, ScriptFunctionRef(guis[ifce].ScriptModule, guis[ifce].OnClickHandler), 2, params);
         return;
     }
 
@@ -364,24 +463,26 @@ void process_interface_click(int ifce, int btn, int mbut) {
         // otherwise, run interface_click
         if ((theObj->GetEventCount() > 0) &&
             (!theObj->EventHandlers[0].IsEmpty()) &&
-            (!gameinst->GetSymbolAddress(theObj->EventHandlers[0].GetCStr()).IsNull())) {
-                // control-specific event handler
-                if (theObj->GetEventArgs(0).FindChar(',') != String::NoIndex)
-                {
-                    RuntimeScriptValue params[]{ RuntimeScriptValue().SetScriptObject(theObj, &ccDynamicGUIObject),
-                        RuntimeScriptValue().SetInt32(mbut) };
-                    QueueScriptFunction(kScInstGame, theObj->EventHandlers[0].GetCStr(), 2, params);
-                }
-                else
-                {
-                    RuntimeScriptValue params[]{ RuntimeScriptValue().SetScriptObject(theObj, &ccDynamicGUIObject) };
-                    QueueScriptFunction(kScInstGame, theObj->EventHandlers[0].GetCStr(), 1, params);
-                }
+            DoesScriptFunctionExistInModules(theObj->EventHandlers[0]))
+        {
+            // control-specific event handler
+            const ScriptFunctionRef fn_ref(guis[ifce].ScriptModule, theObj->EventHandlers[0]);
+            if (theObj->GetEventArgs(0).FindChar(',') != String::NoIndex)
+            {
+                RuntimeScriptValue params[]{ RuntimeScriptValue().SetScriptObject(theObj, &ccDynamicGUIObject),
+                    RuntimeScriptValue().SetInt32(mbut) };
+                QueueScriptFunction(kScTypeGame, fn_ref, 2, params);
+            }
+            else
+            {
+                RuntimeScriptValue params[]{ RuntimeScriptValue().SetScriptObject(theObj, &ccDynamicGUIObject) };
+                QueueScriptFunction(kScTypeGame, fn_ref, 1, params);
+            }
         }
         else
         {
             RuntimeScriptValue params[]{ ifce , btn };
-            QueueScriptFunction(kScInstGame, "interface_click", 2, params);
+            QueueScriptFunction(kScTypeGame, "interface_click", 2, params);
         }
     }
 }
@@ -421,13 +522,13 @@ void replace_macro_tokens(const char *text, String &fixed_text) {
             else if (ags_stricmp(macroname,"scoretext")==0)
                 snprintf(tempo, sizeof(tempo), "%d of %d",play.score,MAXSCORE);
             else if (ags_stricmp(macroname,"gamename")==0)
-                snprintf(tempo, sizeof(tempo), "%s", play.game_name);
+                snprintf(tempo, sizeof(tempo), "%s", play.game_name.GetCStr());
             else if (ags_stricmp(macroname,"overhotspot")==0) {
                 // While game is in Wait mode, no overhotspot text
                 if (!IsInterfaceEnabled())
                     tempo[0] = 0;
                 else
-                    GetLocationName(game_to_data_coord(mousex), game_to_data_coord(mousey), tempo);
+                    GetLocationNameInBuf(game_to_data_coord(mousex), game_to_data_coord(mousey), tempo);
             }
             else { // not a macro, there's just a @ in the message
                 curptr = curptrWasAt + 1;
@@ -447,12 +548,44 @@ void replace_macro_tokens(const char *text, String &fixed_text) {
 bool sort_gui_less(const int g1, const int g2)
 {
     return (guis[g1].ZOrder < guis[g2].ZOrder) ||
-        (guis[g1].ZOrder == guis[g2].ZOrder) && (g1 < g2);
+        ((guis[g1].ZOrder == guis[g2].ZOrder) && (g1 < g2));
 }
 
 void update_gui_zorder()
 {
     std::sort(play.gui_draw_order.begin(), play.gui_draw_order.end(), sort_gui_less);
+}
+
+void prepare_gui_runtime(bool startup)
+{
+    // Trigger all guis and controls to recalculate their dynamic state;
+    // here we achieve this by sending "On Resize" event, although there could
+    // be a better way for this.
+    for (auto &gui : guis)
+    {
+        for (int i = 0; i < gui.GetControlCount(); ++i)
+        {
+            GUIObject *guio = gui.GetControl(i);
+            guio->IsActivated = false;
+            guio->OnResized();
+        }
+    }
+    // Reset particular states after loading game data
+    if (startup)
+    {
+        // labels are not clickable by default
+        // CHECKME: why are we doing this at all?
+        for (auto &label : guilabels)
+        {
+            label.SetClickable(false);
+        }
+    }
+    play.gui_draw_order.resize(guis.size());
+    std::iota(play.gui_draw_order.begin(), play.gui_draw_order.end(), 0);
+    update_gui_zorder();
+
+    GUI::Options.DisabledStyle = static_cast<GuiDisableStyle>(game.options[OPT_DISABLEOFF]);
+    GUIE::MarkAllGUIForUpdate(true, true);
 }
 
 void export_gui_controls(int ee)
@@ -478,20 +611,19 @@ void unexport_gui_controls(int ee)
     }
 }
 
-void update_gui_disabled_status() {
-    // update GUI display status (perhaps we've gone into
-    // an interface disabled state)
-    int all_buttons_was = all_buttons_disabled;
-    all_buttons_disabled = -1;
+void update_gui_disabled_status()
+{
+    // update GUI display status (perhaps we've gone into an interface disabled state)
+    const GuiDisableStyle disabled_state_was = GUI::Context.DisabledState;
+    GUI::Context.DisabledState = IsInterfaceEnabled() ?
+        kGuiDis_Undefined : GUI::Options.DisabledStyle;
 
-    if (!IsInterfaceEnabled()) {
-        all_buttons_disabled = GUI::Options.DisabledStyle;
-    }
-
-    if (all_buttons_was != all_buttons_disabled) {
+    if (disabled_state_was != GUI::Context.DisabledState)
+    {
         // Mark guis for redraw and reset control-under-mouse detection
-        GUI::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
-        if (GUI::Options.DisabledStyle != kGuiDis_Unchanged) {
+        GUIE::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
+        if (GUI::Options.DisabledStyle != kGuiDis_Unchanged)
+        {
             invalidate_screen();
         }
     }
@@ -510,7 +642,7 @@ static bool should_skip_adjust_for_gui(const GUIMain &gui)
 
 int adjust_x_for_guis(int x, int y, bool assume_blocking) {
     if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) &&
-        ((all_buttons_disabled >= 0) || assume_blocking))
+        ((GUI::Context.DisabledState != kGuiDis_Undefined) || assume_blocking))
         return x; // All GUI off (or will be when the message is displayed)
     // If it's covered by a GUI, move it right a bit
     for (const auto &gui : guis) {
@@ -532,7 +664,7 @@ int adjust_x_for_guis(int x, int y, bool assume_blocking) {
 
 int adjust_y_for_guis(int y, bool assume_blocking) {
     if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) &&
-        ((all_buttons_disabled >= 0) || assume_blocking))
+        ((GUI::Context.DisabledState >= 0) || assume_blocking))
         return y; // All GUI off (or will be when the message is displayed)
     // If it's covered by a GUI, move it down a bit
     for (const auto &gui : guis) {
@@ -554,23 +686,23 @@ int adjust_y_for_guis(int y, bool assume_blocking) {
 
 int gui_get_interactable(int x,int y)
 {
-    if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) && (all_buttons_disabled >= 0))
+    if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) && (GUI::Context.DisabledState >= 0))
         return -1;
     return GetGUIAt(x, y);
 }
 
-int gui_on_mouse_move()
+int gui_on_mouse_move(const int mx, const int my)
 {
     int mouse_over_gui = -1;
     // If all GUIs are off, skip the loop
-    if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) && (all_buttons_disabled >= 0)) ;
+    if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) && (GUI::Context.DisabledState >= 0)) ;
     else {
         // Scan for mouse-y-pos GUIs, and pop one up if appropriate
         // Also work out the mouse-over GUI while we're at it
         // CHECKME: not sure why, but we're testing forward draw order here -
         // from farthest to nearest (this was in original code?)
         for (int guin : play.gui_draw_order) {
-            if (guis[guin].IsInteractableAt(mousex, mousey)) mouse_over_gui=guin;
+            if (guis[guin].IsInteractableAt(mx, my)) mouse_over_gui=guin;
 
             if (guis[guin].PopupStyle!=kGUIPopupMouseY) continue;
             if (play.complete_overlay_on > 0) break;  // interfaces disabled
@@ -598,12 +730,12 @@ void gui_on_mouse_hold(const int wasongui, const int wasbutdown)
         if (guis[wasongui].GetControlType(i)!=kGUISlider) continue;
         // GUI Slider repeatedly activates while being dragged
         guio->IsActivated = false;
-        force_event(EV_IFACECLICK, wasongui, i, wasbutdown);
+        force_event(AGSEvent_GUI(wasongui, i, static_cast<eAGSMouseButton>(wasbutdown)));
         break;
     }
 }
 
-void gui_on_mouse_up(const int wasongui, const int wasbutdown)
+void gui_on_mouse_up(const int wasongui, const int wasbutdown, const int mx, const int my)
 {
     guis[wasongui].OnMouseButtonUp();
 
@@ -615,18 +747,18 @@ void gui_on_mouse_up(const int wasongui, const int wasbutdown)
 
         int cttype=guis[wasongui].GetControlType(i);
         if ((cttype == kGUIButton) || (cttype == kGUISlider) || (cttype == kGUIListBox)) {
-            force_event(EV_IFACECLICK, wasongui, i, wasbutdown);
+            force_event(AGSEvent_GUI(wasongui, i, static_cast<eAGSMouseButton>(wasbutdown)));
         }
         else if (cttype == kGUIInvWindow) {
-            mouse_ifacebut_xoffs=mousex-(guio->X)-guis[wasongui].X;
-            mouse_ifacebut_yoffs=mousey-(guio->Y)-guis[wasongui].Y;
+            mouse_ifacebut_xoffs=mx-(guio->X)-guis[wasongui].X;
+            mouse_ifacebut_yoffs=my-(guio->Y)-guis[wasongui].Y;
             int iit=offset_over_inv((GUIInvWindow*)guio);
             if (iit>=0) {
                 play.used_inv_on = iit;
                 if (game.options[OPT_HANDLEINVCLICKS]) {
                     // Let the script handle the click
                     // LEFTINV is 5, RIGHTINV is 6
-                    force_event(EV_TEXTSCRIPT, kTS_MouseClick, wasbutdown + 4);
+                    force_event(AGSEvent_Script(kTS_MouseClick, wasbutdown + 4, mx, my));
                 }
                 else if (wasbutdown == kMouseRight) // right-click is always Look
                     RunInventoryInteraction(iit, MODE_LOOK);
@@ -642,18 +774,18 @@ void gui_on_mouse_up(const int wasongui, const int wasbutdown)
         break;
     }
 
-    run_on_event(GE_GUI_MOUSEUP, RuntimeScriptValue().SetInt32(wasongui));
+    run_on_event(kScriptEvent_GUIMouseUp, wasongui, wasbutdown, mx - guis[wasongui].X, my - guis[wasongui].Y);
 }
 
-void gui_on_mouse_down(const int guin, const int mbut)
+void gui_on_mouse_down(const int guin, const int mbut, const int mx, const int my)
 {
     debug_script_log("Mouse click over GUI %d", guin);
-    guis[guin].OnMouseButtonDown(mousex, mousey);
+    guis[guin].OnMouseButtonDown(mx, my);
     // run GUI click handler if not on any control
     if ((guis[guin].MouseDownCtrl < 0) && (!guis[guin].OnClickHandler.IsEmpty()))
-        force_event(EV_IFACECLICK, guin, -1, mbut);
+        force_event(AGSEvent_GUI(guin, -1, static_cast<eAGSMouseButton>(mbut)));
 
-    run_on_event(GE_GUI_MOUSEDOWN, RuntimeScriptValue().SetInt32(guin));
+    run_on_event(kScriptEvent_GUIMouseDown, guin, mbut, mx - guis[guin].X, my - guis[guin].Y);
 }
 
 //=============================================================================
@@ -667,8 +799,6 @@ void gui_on_mouse_down(const int guin, const int mbut)
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 
-
-extern ScriptString myScriptStringImpl;
 
 ScriptGUI *GUI_GetByName(const char *name)
 {

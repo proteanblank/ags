@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/dynobj/dynobj_manager.h"
@@ -20,13 +20,6 @@
 #include "util/stream.h"
 
 using namespace AGS::Common;
-
-ICCStringClass *stringClassImpl = nullptr;
-
-// set the class that will be used for dynamic strings
-void ccSetStringClassImpl(ICCStringClass *theClass) {
-    stringClassImpl = theClass;
-}
 
 // register a memory handle for the object and allow script
 // pointers to point to it
@@ -132,4 +125,9 @@ int ccReleaseObjectReference(int32_t handle) {
     }
 
     return pool.SubRef(handle);
+}
+
+void ccTraverseManagedObjects(const String &type, PfnProcessManagedObject callback)
+{
+    pool.TraverseManagedObjects(type, callback);
 }

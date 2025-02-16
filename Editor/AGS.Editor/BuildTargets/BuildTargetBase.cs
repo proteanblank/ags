@@ -43,6 +43,11 @@ namespace AGS.Editor
             return sb.ToString();
         }
 
+        public virtual RuntimeSetup FixInvalidSettings(RuntimeSetup setup)
+        {
+            return setup;
+        }
+
         public virtual string[] GetRequiredLibraryNames()
         {
             return new List<string>(GetRequiredLibraryPaths().Keys).ToArray();
@@ -148,7 +153,39 @@ namespace AGS.Editor
                 }
                 catch (Exception) { }
             }
-            AGSEditor.Instance.WriteConfigFile(destPath, false);
+
+            RuntimeSetup setup = Factory.AGSEditor.CurrentGame.DefaultSetup;
+            setup = FixInvalidSettings(CloneRuntimeSetup(setup, Factory.AGSEditor.CurrentGame.Settings));
+
+            AGSEditor.Instance.WriteConfigFile(destPath, setup, false);
+        }
+
+        /// <summary>
+        /// clones a RuntimeSetup.
+        /// TO-DO: remove this if we decide to implement it in RuntimeSetup itself.
+        /// </summary>
+        protected static RuntimeSetup CloneRuntimeSetup(RuntimeSetup setup, Settings settings)
+        {
+            RuntimeSetup clone = new RuntimeSetup(settings);
+            Utilities.NaiveCopyProperties(setup, clone);
+            return clone;
+        }
+
+        /// <summary>
+        /// Deletes all the common game's data files:
+        ///  * primary: <name>.ags,
+        ///  * split resources: <name>.001, <name>.002, etc.
+        /// </summary>
+        protected void DeleteCommonGameFiles(string dir, string gamename)
+        {
+            string filename = Path.Combine(dir, gamename + ".ags");
+            Utilities.TryDeleteFile(filename);
+
+            // Delete split resources (if any)
+            foreach (string fileName in Utilities.GetDirectoryFileList(dir, gamename + ".0*"))
+            {
+                Utilities.TryDeleteFile(fileName);
+            }
         }
     }
 }

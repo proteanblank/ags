@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -52,26 +52,32 @@ struct SpriteBatchDesc
     PBitmap                  Surface;
     // Optional texture to render sprites to. Used by hardware-accelerated renderers.
     IDriverDependantBitmap*  RenderTarget = nullptr;
+    // Optional filter flags; this lets to filter certain batches out during some operations,
+    // such as fading effects or making screenshots.
+    uint32_t                 FilterFlags = 0u;
 
     SpriteBatchDesc() = default;
     SpriteBatchDesc(uint32_t parent, const Rect viewport, const SpriteTransform &transform,
-        Common::GraphicFlip flip = Common::kFlip_None, PBitmap surface = nullptr)
+        Common::GraphicFlip flip = Common::kFlip_None, PBitmap surface = nullptr,
+        uint32_t filter_flags = 0)
         : Parent(parent)
         , Viewport(viewport)
         , Transform(transform)
         , Flip(flip)
         , Surface(surface)
+        , FilterFlags(filter_flags)
     {
     }
     // TODO: this does not need a parent?
     SpriteBatchDesc(uint32_t parent, IDriverDependantBitmap *render_target,
         const Rect viewport, const SpriteTransform &transform,
-        Common::GraphicFlip flip = Common::kFlip_None)
+        Common::GraphicFlip flip = Common::kFlip_None, uint32_t filter_flags = 0)
         : Parent(parent)
         , Viewport(viewport)
         , Transform(transform)
         , Flip(flip)
         , RenderTarget(render_target)
+        , FilterFlags(filter_flags)
     {
     }
 };
@@ -116,24 +122,22 @@ public:
     bool        SetVsync(bool enabled) override;
     bool        GetVsync() const override;
 
+    void        BeginSpriteBatch(const Rect &viewport, const SpriteTransform &transform, uint32_t filter_flags = 0) override;
     void        BeginSpriteBatch(const Rect &viewport, const SpriteTransform &transform,
-                    Common::GraphicFlip flip = Common::kFlip_None, PBitmap surface = nullptr) override;
-    virtual void BeginSpriteBatch(IDriverDependantBitmap *render_target, const Rect &viewport, const SpriteTransform &transform,
-                    Common::GraphicFlip flip = Common::kFlip_None) override;
+                    Common::GraphicFlip flip, PBitmap surface = nullptr, uint32_t filter_flags = 0) override;
+    void        BeginSpriteBatch(IDriverDependantBitmap *render_target, const Rect &viewport, const SpriteTransform &transform,
+                    Common::GraphicFlip flip = Common::kFlip_None, uint32_t filter_flags = 0) override;
     void        EndSpriteBatch() override;
     void        ClearDrawLists() override;
 
-    void        SetCallbackForPolling(GFXDRV_CLIENTCALLBACK callback) override { _pollingCallback = callback; }
-    void        SetCallbackToDrawScreen(GFXDRV_CLIENTCALLBACK callback, GFXDRV_CLIENTCALLBACK post_callback) override
-                { _drawScreenCallback = callback; _drawPostScreenCallback = post_callback; }
     void        SetCallbackOnInit(GFXDRV_CLIENTCALLBACKINITGFX callback) override { _initGfxCallback = callback; }
     void        SetCallbackOnSpriteEvt(GFXDRV_CLIENTCALLBACKEVT callback) override { _spriteEvtCallback = callback; }
 
 protected:
     // Special internal values, applied to DrawListEntry
-    static const intptr_t DRAWENTRY_STAGECALLBACK = 0x0;
-    static const intptr_t DRAWENTRY_FADE = 0x1;
-    static const intptr_t DRAWENTRY_TINT = 0x2;
+    static const uintptr_t DRAWENTRY_STAGECALLBACK = 0x0;
+    static const uintptr_t DRAWENTRY_FADE = 0x1;
+    static const uintptr_t DRAWENTRY_TINT = 0x2;
 
     // Called after graphics driver was initialized for use for the first time
     virtual void OnInit();
@@ -176,16 +180,13 @@ protected:
     bool                _capsVsync = false; // is vsync available
 
     // Callbacks
-    GFXDRV_CLIENTCALLBACK _pollingCallback;
-    GFXDRV_CLIENTCALLBACK _drawScreenCallback;
-    GFXDRV_CLIENTCALLBACK _drawPostScreenCallback;
     GFXDRV_CLIENTCALLBACKEVT _spriteEvtCallback;
     GFXDRV_CLIENTCALLBACKINITGFX _initGfxCallback;
 
     // Sprite batch parameters
     SpriteBatchDescs _spriteBatchDesc;
     // The range of sprites in this sprite batch (counting nested sprites):
-    // the last of the previous batch, and the last of the current.
+    // the index of a first of the current batch, and the next index past the last one.
     std::vector<std::pair<size_t, size_t>> _spriteBatchRange;
     // The index of a currently filled sprite batch
     size_t _actSpriteBatch;
@@ -203,6 +204,10 @@ public:
     int GetWidth() const override { return _width; }
     int GetHeight() const override { return _height; }
     int GetColorDepth() const override { return _colDepth; }
+    bool MatchesFormat(AGS::Common::Bitmap *other) const
+    {
+        return _width == other->GetWidth() && _height == other->GetHeight() && _colDepth == other->GetColorDepth();
+    }
 
     int _width = 0, _height = 0;
     int _colDepth = 0;
@@ -218,8 +223,11 @@ protected:
 // Generic TextureTile base
 struct TextureTile
 {
+    // x, y, width, height define position of a valid image
     int x = 0, y = 0;
     int width = 0, height = 0;
+    // allocWidth and allocHeight tell the actual allocated texture size
+    int allocWidth = 0, allocHeight = 0;
 };
 
 // Special render hints for textures
@@ -281,11 +289,12 @@ public:
     bool GetStageMatrixes(RenderMatrixes &rm) override;
 
     // Creates new DDB and copy bitmap contents over
-    IDriverDependantBitmap *CreateDDBFromBitmap(Bitmap *bitmap, bool has_alpha, bool opaque = false) override;
+    IDriverDependantBitmap *CreateDDBFromBitmap(const Bitmap *bitmap, bool has_alpha, bool opaque = false) override;
 
-    Texture *CreateTexture(int width, int height, int color_depth, bool opaque = false, bool as_render_target = false) = 0;
-    // Create texture and initialize its pixels from the given bitmap; optionally assigns a ID
-    Texture *CreateTexture(Bitmap *bmp, bool has_alpha, bool opaque = false) override;
+    // Create texture data with the given parameters
+    Texture *CreateTexture(int width, int height, int color_depth, bool opaque = false, bool as_render_target = false) override = 0;
+    // Create texture and initialize its pixels from the given bitmap
+    Texture *CreateTexture(const Bitmap *bmp, bool has_alpha, bool opaque = false) override;
 
     // Sets stage screen parameters for the current batch.
     void SetStageScreen(const Size &sz, int x = 0, int y = 0) override;
@@ -307,7 +316,7 @@ protected:
     // returns a DDB if anything was drawn onto the current stage screen
     // (in which case it also fills optional x,y position),
     // or nullptr if this entry should be skipped.
-    IDriverDependantBitmap *DoSpriteEvtCallback(int evt, int data, int &x, int &y);
+    IDriverDependantBitmap *DoSpriteEvtCallback(int evt, intptr_t data, int &x, int &y);
 
     // Prepare and get fx item from the pool
     IDriverDependantBitmap *MakeFx(int r, int g, int b);
@@ -318,9 +327,9 @@ protected:
 
     // Prepares bitmap to be applied to the texture, copies pixels to the provided buffer
     void BitmapToVideoMem(const Bitmap *bitmap, const bool has_alpha, const TextureTile *tile,
-                            uint8_t *dst_ptr, const int dst_pitch, const bool usingLinearFiltering);
+        uint8_t *dst_ptr, const int dst_pitch, const bool usingLinearFiltering);
     // Same but optimized for opaque source bitmaps which ignore transparent "mask color"
-    void BitmapToVideoMemOpaque(const Bitmap *bitmap, const bool has_alpha, const TextureTile *tile,
+    void BitmapToVideoMemOpaque(const Bitmap *bitmap, const TextureTile *tile,
         uint8_t *dst_ptr, const int dst_pitch);
 
     // Stage matrixes are used to let plugins with hardware acceleration know model matrix;
@@ -360,6 +369,25 @@ private:
     };
     std::vector<ScreenFx> _fxPool;
     size_t _fxIndex; // next free pool item
+
+    // specialized method to convert bitmap to video memory depending on bit depth
+    template <typename T, bool HasAlpha> void
+    BitmapToVideoMemImpl(
+            const Bitmap *bitmap, const TextureTile *tile,
+            uint8_t *dst_ptr, const int dst_pitch
+    );
+
+    template <typename T> void
+    BitmapToVideoMemOpaqueImpl(
+            const Bitmap *bitmap, const TextureTile *tile,
+            uint8_t *dst_ptr, const int dst_pitch
+    );
+
+    template <typename T, bool HasAlpha> void
+    BitmapToVideoMemLinearImpl(
+            const Bitmap *bitmap, const TextureTile *tile,
+            uint8_t *dst_ptr, const int dst_pitch
+    );
 };
 
 } // namespace Engine

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/dynobj/cc_character.h"
@@ -29,14 +29,14 @@ const char *CCCharacter::GetType()
     return "Character";
 }
 
-size_t CCCharacter::CalcSerializeSize(void* /*address*/)
+size_t CCCharacter::CalcSerializeSize(const void* /*address*/)
 {
     return sizeof(int32_t);
 }
 
-void CCCharacter::Serialize(void *address, Stream *out)
+void CCCharacter::Serialize(const void *address, Stream *out)
 {
-    CharacterInfo *chaa = (CharacterInfo*)address;
+    const CharacterInfo *chaa = static_cast<const CharacterInfo*>(address);
     out->WriteInt32(chaa->index_id);
 }
 
@@ -46,9 +46,9 @@ void CCCharacter::Unserialize(int index, Stream *in, size_t /*data_sz*/)
     ccRegisterUnserializedObject(index, &game.chars[num], this);
 }
 
-uint8_t CCCharacter::ReadInt8(void *address, intptr_t offset)
+uint8_t CCCharacter::ReadInt8(const void *address, intptr_t offset)
 {
-    const CharacterInfo *ci = static_cast<CharacterInfo*>(address);
+    const CharacterInfo *ci = static_cast<const CharacterInfo*>(address);
     const int on_offset = 28 * sizeof(int32_t) /* first var group */
         + 301 * sizeof(int16_t) /* inventory */ + sizeof(int16_t) * 2 /* two shorts */ + 40 /* name */ + 20 /* scrname */;
     if (offset == on_offset)
@@ -68,9 +68,9 @@ void CCCharacter::WriteInt8(void *address, intptr_t offset, uint8_t val)
         cc_error("ScriptCharacter: unsupported 'char' variable offset %d", offset);
 }
 
-int16_t CCCharacter::ReadInt16(void *address, intptr_t offset)
+int16_t CCCharacter::ReadInt16(const void *address, intptr_t offset)
 {
-    const CharacterInfo *ci = static_cast<CharacterInfo*>(address);
+    const CharacterInfo *ci = static_cast<const CharacterInfo*>(address);
 
     // Handle inventory fields
     const int invoffset = 112;
@@ -82,8 +82,8 @@ int16_t CCCharacter::ReadInt16(void *address, intptr_t offset)
     switch (offset)
     {
     // +9 int32 = 36
-    case 36: return ci->following;
-    case 38: return ci->followinfo;
+    case 36: return ci->legacy_following;
+    case 38: return ci->legacy_followinfo;
     // 40 +1 int32 = 44
     case 44: return ci->idletime;
     case 46: return ci->idleleft;
@@ -140,8 +140,10 @@ void CCCharacter::WriteInt16(void *address, intptr_t offset, int16_t val)
     switch (offset)
     {
     // +9 int32 = 36
-    case 36: ci->following = val; break;
-    case 38: ci->followinfo = val; break;
+    case 36: // following
+    case 38: // followinfo
+        cc_error("ScriptCharacter: attempt to write readonly 'short' variable at offset %d", offset);
+        break;
     // 40 +1 int32 = 44
     case 44: ci->idletime = val; break;
     case 46: ci->idleleft = val; break;
@@ -177,9 +179,9 @@ void CCCharacter::WriteInt16(void *address, intptr_t offset, int16_t val)
     }
 }
 
-int32_t CCCharacter::ReadInt32(void *address, intptr_t offset)
+int32_t CCCharacter::ReadInt32(const void *address, intptr_t offset)
 {
-    const CharacterInfo *ci = static_cast<CharacterInfo*>(address);
+    const CharacterInfo *ci = static_cast<const CharacterInfo*>(address);
 
     switch (offset)
     {

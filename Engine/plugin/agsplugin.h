@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -20,7 +20,8 @@
 #ifndef _AGS_PLUGIN_H
 #define _AGS_PLUGIN_H
 
-#include "agsplugin_evts.h"
+#include <stddef.h> // for size_t
+#include <stdint.h>
 
 // If the plugin isn't using DDraw, don't require the headers
 #ifndef DIRECTDRAW_VERSION
@@ -292,6 +293,135 @@ struct AGSGameInfo {
   int UniqueId;
 };
 
+// File open modes
+// Opens existing file, fails otherwise
+#define AGSSTREAM_FILE_OPEN         1
+// Opens existing file, creates one if it did not exist
+#define AGSSTREAM_FILE_CREATE       2
+// Always creates a new file, completely overwrites any existing one
+#define AGSSTREAM_FILE_CREATEALWAYS 3
+
+// Stream work modes
+// Read-only
+#define AGSSTREAM_MODE_READ  0x01
+// Write-only
+#define AGSSTREAM_MODE_WRITE 0x02
+// Supports both read and write
+#define AGSSTREAM_MODE_READWRITE (AGSSTREAM_MODE_READ | AGSSTREAM_MODE_WRITE)
+// Supports seeking
+#define AGSSTREAM_MODE_SEEK  0x04
+
+// Stream seek origins
+// Seek from the beginning of a stream (towards positive offset)
+#define AGSSTREAM_SEEK_SET 0
+// Seek from the current position (towards positive or negative offset)
+#define AGSSTREAM_SEEK_CUR 1
+// Seek from the end of a stream (towards negative offset)
+#define AGSSTREAM_SEEK_END 2
+
+class IAGSStream {
+public:
+  // Tells which mode the stream is working in, which defines
+  // supported io operations, such as reading, writing, seeking, etc.
+  // Returns combination of AGSSTREAM_MODE_* flags.
+  // Invalid or non-functional streams return 0.
+  virtual int    GetMode() const = 0;
+  // Returns an optional stream's source description.
+  // This may be a file path, or a resource name, or anything of that kind,
+  // and is purely for diagnostic purposes.
+  virtual const char *GetPath() const = 0;
+  // Tells whether this stream's position is at its end;
+  // note that unlike standard C feof this does not wait for a read attempt
+  // past the stream end, and reports positive when position = length.
+  virtual bool   EOS() const = 0;
+  // Tells if there were errors during previous io operation(s);
+  // the call to GetError() *resets* the error record.
+  virtual bool   GetError() const = 0;
+  // Returns the total stream's length in bytes
+  virtual int64_t GetLength() const = 0;
+  // Returns stream's position
+  virtual int64_t GetPosition() const = 0;
+
+  // Reads number of bytes into the provided buffer
+  virtual size_t Read(void *buffer, size_t len) = 0;
+  // ReadByte conforms to standard C fgetc behavior:
+  // - on success returns an *unsigned char* packed in the int32
+  // - on failure (EOS or other error), returns -1
+  virtual int32_t ReadByte() = 0;
+  // Writes number of bytes from the provided buffer
+  virtual size_t Write(const void *buffer, size_t len) = 0;
+  // WriteByte conforms to standard C fputc behavior:
+  // - on success, returns the written unsigned char packed in the int32
+  // - on failure, returns -1
+  virtual int32_t WriteByte(uint8_t b) = 0;
+  // Seeks to offset from the origin defined by AGSSTREAM_SEEK_* constants:
+  //  * AGSSTREAM_SEEK_SET - seek from the beginning;
+  //  * AGSSTREAM_SEEK_CUR - seek from the current position;
+  //  * AGSSTREAM_SEEK_END - seek from the end (pass negative offset)
+  // Returns new position in stream, or -1 on error.
+  virtual int64_t Seek(int64_t offset, int origin) = 0;
+  // Flushes stream, forcing it to write any buffered data to the
+  // underlying device. Note that the effect may depend on implementation.
+  virtual bool   Flush() = 0;
+  // Flushes and closes the stream.
+  // Usually you do not have to call this, use Dispose() to close
+  // and delete stream object instead.
+  virtual void   Close() = 0;
+
+  // Closes the stream and deallocates the stream object.
+  // After calling this the IAGSStream pointer becomes INVALID.
+  virtual void   Dispose() = 0;
+
+protected:
+  IAGSStream() = default;
+  ~IAGSStream() = default;
+};
+
+
+// Plugin events
+//
+// Below are interface 3 and later
+#define AGSE_KEYPRESS        0x01
+#define AGSE_MOUSECLICK      0x02
+#define AGSE_POSTSCREENDRAW  0x04
+// Below are interface 4 and later
+#define AGSE_PRESCREENDRAW   0x08
+// Below are interface 5 and later
+#define AGSE_SAVEGAME        0x10
+#define AGSE_RESTOREGAME     0x20
+// Below are interface 6 and later
+#define AGSE_PREGUIDRAW      0x40
+#define AGSE_LEAVEROOM       0x80
+#define AGSE_ENTERROOM       0x100
+#define AGSE_TRANSITIONIN    0x200
+#define AGSE_TRANSITIONOUT   0x400
+// Below are interface 12 and later
+#define AGSE_FINALSCREENDRAW 0x800
+#define AGSE_TRANSLATETEXT   0x1000
+// Below are interface 13 and later
+#define AGSE_SCRIPTDEBUG     0x2000
+// AGSE_AUDIODECODE is no longer supported
+#define AGSE_AUDIODECODE     0x4000
+// Below are interface 18 and later
+#define AGSE_SPRITELOAD      0x8000
+// Below are interface 21 and later
+#define AGSE_PRERENDER       0x10000
+// Below are interface 24 and later
+#define AGSE_PRESAVEGAME     0x20000
+#define AGSE_POSTRESTOREGAME 0x40000
+// Below are interface 26 and later
+#define AGSE_POSTROOMDRAW    0x80000
+#define AGSE_TOOHIGH         0x100000
+
+// Logging levels
+#define AGSLOG_LEVEL_NONE   0
+#define AGSLOG_LEVEL_ALERT  1
+#define AGSLOG_LEVEL_FATAL  2
+#define AGSLOG_LEVEL_ERROR  3
+#define AGSLOG_LEVEL_WARN   4
+#define AGSLOG_LEVEL_INFO   5
+#define AGSLOG_LEVEL_DEBUG  6
+
 
 // The plugin-to-engine interface
 class IAGSEngine {
@@ -351,9 +481,9 @@ public:
 
   // *** BELOW ARE INTERFACE VERSION 5 AND ABOVE ONLY
   // similar to fwrite - buffer, size, filehandle
-  AGSIFUNC(int)  FWrite (void *, int32, int32);
+  AGSIFUNC(int)  FWrite (void *out_buf, int32 len, int32 fhandle);
   // similar to fread - buffer, size, filehandle
-  AGSIFUNC(int)  FRead (void *, int32, int32);
+  AGSIFUNC(int)  FRead (void *in_buf, int32 len, int32 fhandle);
   // print text, wrapping as usual
   AGSIFUNC(void) DrawTextWrapped (int32 x, int32 y, int32 width, int32 font, int32 color, const char *text);
   // set the current active 'screen'
@@ -466,7 +596,7 @@ public:
   // check whether a script function can be run now
   AGSIFUNC(int)    CanRunScriptFunctionNow();
   // call a user-defined script function
-  AGSIFUNC(int)    CallGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, long arg1 = 0, long arg2 = 0, long arg3 = 0);
+  AGSIFUNC(int)    CallGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, intptr_t arg1 = 0, intptr_t arg2 = 0, intptr_t arg3 = 0);
 
   // *** BELOW ARE INTERFACE VERSION 15 AND ABOVE ONLY
   // force any sprites on-screen using the slot to be updated
@@ -474,7 +604,7 @@ public:
   // change whether the specified sprite is a 32-bit alpha blended image
   AGSIFUNC(void)   SetSpriteAlphaBlended(int32 slot, int32 isAlphaBlended);
   // run the specified script function whenever script engine is available
-  AGSIFUNC(void)   QueueGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, long arg1 = 0, long arg2 = 0);
+  AGSIFUNC(void)   QueueGameScriptFunction(const char *name, int32 globalScript, int32 numArgs, intptr_t arg1 = 0, intptr_t arg2 = 0);
   // register a new dynamic managed script object
   AGSIFUNC(int)    RegisterManagedObject(void *object, IAGSScriptManagedObject *callback);
   // add an object reader for the specified object type
@@ -547,8 +677,50 @@ public:
   AGSIFUNC(void)  NotifyFontUpdated(int fontNumber);
 
   // *** BELOW ARE INTERFACE VERSION 27 AND ABOVE ONLY
-  // Resolves a script path to a system filepath, same way as script command File.Open does.
-  AGSIFUNC(const char*) ResolveFilePath(const char *script_path);
+  // Resolve a script path to a system filepath, same way as script command File.Open does.
+  // Caller should provide an output buffer and its length in bytes.
+  // Passing NULL instead of a buffer pointer will make function calculate and return
+  // length necessary to store a resulting path (in bytes).
+  AGSIFUNC(size_t) ResolveFilePath(const char *script_path, char *buf, size_t buf_len);
+
+  // *** BELOW ARE INTERFACE VERSION 28 AND ABOVE ONLY
+  // Opens a data stream, resolving a script path.
+  // File mode should contain one of the AGSSTREAM_FILE_* values,
+  // work mode should contain flag set of the AGSSTREAM_MODE_* values.
+  // Returns IAGSStream object, or null on failure. The returned stream object
+  // is owned by the caller, and must be deleted by calling its Dispose() method.
+  AGSIFUNC(IAGSStream*) OpenFileStream(const char *script_path, int file_mode, int work_mode);
+  // Returns IAGSStream object identified by the given stream handle.
+  // This lets to retrieve IAGSStream object from a handle received in a event callback.
+  // *IMPORTANT*: The returned stream's ownership is NOT passed to the caller;
+  // this stream should not be closed or disposed, doing so will lead to errors in the engine.
+  // Returns null if handle is invalid.
+  AGSIFUNC(IAGSStream*) GetFileStreamByHandle(int32 fhandle);
+
+  // *** BELOW ARE INTERFACE VERSION 29 AND ABOVE ONLY
+  // Print message to the engine's log, under one of the log levels AGSLOG_LEVEL_*.
+  AGSIFUNC(void)  Log(int level, const char *fmt, ...);
+
+  // *** BELOW ARE INTERFACE VERSION 30 AND ABOVE ONLY
+  // Create a new dynamic array, allocating space for the given number of elements
+  // of the given size. Optionally instructs to create an array for managed handles,
+  // in which case the element size must be sizeof(int32).
+  // IMPORTANT: you MUST correctly tell if this is going to be an array of handles, because
+  // otherwise engine won't know to release their references, which may lead to memory leaks.
+  // IMPORTANT: when writing handles into this array, you MUST inc ref count for each one
+  // of them (see IncrementManagedObjectRefCount), otherwise these objects may get disposed
+  // before the array itself, making these handles invalid!
+  // Dynamic arrays have their meta data allocated prior to array of elements;
+  // this function returns a pointer to the element array, which you may write to.
+  // You may return this pointer from the registered plugin's function just like any other
+  // managed object pointer.
+  AGSIFUNC(void*) CreateDynamicArray(size_t elem_count, size_t elem_size, bool is_managed_type);
+  // Retrieves dynamic array's length (number of elements).
+  // You should pass a dynamic array object either received from the engine in your registered
+  // script function, or created by you with CreateDynamicArray().
+  AGSIFUNC(size_t) GetDynamicArrayLength(const void *arr);
+  // Retrieves dynamic array's size (total capacity in bytes).
+  AGSIFUNC(size_t) GetDynamicArraySize(const void *arr);
 };
 
 
@@ -588,11 +760,12 @@ DLLEXPORT int    AGS_EditorSaveGame (char *, int);
 DLLEXPORT void   AGS_EditorLoadGame (char *, int);
 DLLEXPORT void   AGS_EngineStartup (IAGSEngine *);
 DLLEXPORT void   AGS_EngineShutdown (void);
-DLLEXPORT int    AGS_EngineOnEvent (int, int);
+DLLEXPORT intptr_t AGS_EngineOnEvent (int, intptr_t);
 DLLEXPORT int    AGS_EngineDebugHook(const char *, int, int);
 DLLEXPORT void   AGS_EngineInitGfx(const char* driverID, void *data); 
-// We export this to verify that we are an AGS Plugin
-DLLEXPORT int    AGS_PluginV2 ( ) { return 1; }
+// Export this to let engine verify that this is a compatible AGS Plugin;
+// exact return value is not essential, but should be non-zero for consistency.
+DLLEXPORT int    AGS_PluginV2 ();
 
 #endif // THIS_IS_THE_PLUGIN
 

@@ -19,7 +19,7 @@ namespace AGS.Types
 
         public static void SetFontList(IList<Font> fonts)
         {
-            // Keep a refernce to the list so it can be updated whenever we need to
+            // Keep a reference to the list so it can be updated whenever we need to
             _Fonts = fonts;
             RefreshFontList();
         }
@@ -32,6 +32,7 @@ namespace AGS.Types
             }
 
             _possibleValues.Clear();
+            _possibleValues.Add(-1, "Null Font");
             foreach (Font font in _Fonts)
             {
                 _possibleValues.Add(font.ID, font.ScriptID);

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_VIEW_H
@@ -43,8 +43,8 @@ struct ViewLoopNew
     int   numFrames;
     int   flags;
     std::vector<ViewFrame> frames;
-    // NOTE: we still need numFrames for backward compatibility:
-    // some older versions could allocate extra frame(s) for safety,
+    // NOTE: we still need numFrames:
+    // as we always allocate at least 1 frame for safety, to avoid crashes,
     // but have to report "logical" number of frames for the engine API.
 
     ViewLoopNew();
@@ -53,8 +53,8 @@ struct ViewLoopNew
     bool RunNextLoop();
     void WriteToFile_v321(Common::Stream *out);
     void ReadFromFile_v321(Common::Stream *in);
-    void WriteFrames_Aligned(Common::Stream *out);
-    void ReadFrames_Aligned(Common::Stream *in);
+    void WriteFrames(Common::Stream *out);
+    void ReadFrames(Common::Stream *in);
 };
 
 struct ViewStruct

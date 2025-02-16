@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/roomobject.h"
@@ -17,6 +17,7 @@
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
 #include "ac/object.h"
+#include "ac/roomstatus.h"
 #include "ac/runtime_defines.h"
 #include "ac/viewframe.h"
 #include "debug/debug_log.h"
@@ -27,7 +28,6 @@
 using namespace AGS::Common;
 
 extern std::vector<ViewStruct> views;
-extern GameState play;
 extern GameSetupStruct game;
 
 RoomObject::RoomObject()
@@ -72,7 +72,7 @@ void RoomObject::UpdateCyclingView(int ref_id)
 {
 	if (on != 1) return;
     if (moving>0) {
-      do_movelist_move(&moving,&x,&y);
+      do_movelist_move(moving, x, y);
       }
     if (cycling==0) return;
     if (view == RoomObject::NoView) return;
@@ -108,6 +108,7 @@ void RoomObject::CheckViewFrame()
 
 void RoomObject::ReadFromSavegame(Stream *in, int save_ver)
 {
+    const bool do_align_pad = save_ver < 0;
     x = in->ReadInt32();
     y = in->ReadInt32();
     transparent = in->ReadInt32();
@@ -132,11 +133,14 @@ void RoomObject::ReadFromSavegame(Stream *in, int save_ver)
     flags = in->ReadInt8();
     blocking_width = in->ReadInt16();
     blocking_height = in->ReadInt16();
-    if (save_ver >= 1)
+    if (do_align_pad)
+        in->ReadInt16(); // int16 padding to int32 (max)
+
+    if (save_ver >= kRoomStatSvgVersion_36016)
     {
         name = StrUtil::ReadString(in);
     }
-    if (save_ver >= 2)
+    if (save_ver >= kRoomStatSvgVersion_36025)
     { // anim vols order inverted compared to character, by mistake :(
         cur_anim_volume = static_cast<uint8_t>(in->ReadInt8());
         anim_volume = static_cast<uint8_t>(in->ReadInt8());

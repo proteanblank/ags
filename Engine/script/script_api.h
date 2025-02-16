@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -33,18 +33,34 @@ typedef RuntimeScriptValue ScriptAPIObjectFunction(void *self, const RuntimeScri
 // Sprintf that takes either script values or common argument list from plugin.
 // Uses EITHER sc_args/sc_argc or varg_ptr as parameter list, whichever is not
 // NULL, with varg_ptr having HIGHER priority.
-const char *ScriptSprintf(char *buffer, size_t buf_length, const char *format,
+size_t ScriptSprintf(char *buffer, size_t buf_length, const char *format,
                           const RuntimeScriptValue *sc_args, int32_t sc_argc, va_list *varg_ptr);
 // Sprintf that takes script values as arguments
-inline const char *ScriptSprintf(char *buffer, size_t buf_length, const char *format, const RuntimeScriptValue *args, int32_t argc)
+inline size_t ScriptSprintf(char *buffer, size_t buf_length, const char *format, const RuntimeScriptValue *args, int32_t argc)
 {
     return ScriptSprintf(buffer, buf_length, format, args, argc, nullptr);
 }
-// Variadic sprintf (needed, because all arguments are pushed as pointer-sized values). Currently used only when plugin calls
-// exported engine function. Should be removed when this plugin issue is resolved.
-inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *format, va_list &arg_ptr)
+// Sprintf that takes script values as arguments, and prints into the resizable vector
+inline const char *ScriptSprintf(std::vector<char> &buf, const char *format, const RuntimeScriptValue *args, int32_t argc)
+{
+    size_t need_len = ScriptSprintf(nullptr, 0u, format, args, argc, nullptr);
+    buf.resize(need_len + 1);
+    ScriptSprintf(buf.data(), buf.size(), format, args, argc, nullptr);
+    return buf.data();
+}
+// Variadic sprintf (needed, because all arguments are pushed as pointer-sized values).
+// Currently used only when plugin calls exported engine function.
+inline size_t ScriptVSprintf(char *buffer, size_t buf_length, const char *format, va_list &arg_ptr)
 {
     return ScriptSprintf(buffer, buf_length, format, nullptr, 0, &arg_ptr);
+}
+// // Variadic sprintf that prints into the resizable vector
+inline const char *ScriptVSprintf(std::vector<char> &buf, const char *format, va_list &arg_ptr)
+{
+    size_t need_len = ScriptSprintf(nullptr, 0u, format, nullptr, 0, &arg_ptr);
+    buf.resize(need_len + 1);
+    ScriptSprintf(buf.data(), buf.size(), format, nullptr, 0, &arg_ptr);
+    return buf.data();
 }
 
 // Helper macro for registering an API function for both script and plugin,
@@ -69,24 +85,25 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 
 //-----------------------------------------------------------------------------
 // Calls to ScriptSprintf with automatic translation
+// TODO: here and below, consider using a char buffer pool to avoid frequent reallocations
 
 #define API_SCALL_SCRIPT_SPRINTF(FUNCTION, PARAM_COUNT) \
     ASSERT_PARAM_COUNT(FUNCTION, PARAM_COUNT); \
-    char ScSfBuffer[STD_BUFFER_SIZE]; \
-    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, STD_BUFFER_SIZE, get_translation(params[PARAM_COUNT - 1].CStr), params + PARAM_COUNT, param_count - PARAM_COUNT)
+    std::vector<char> ScSfBuffer; \
+    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, get_translation(params[PARAM_COUNT - 1].CStr), params + PARAM_COUNT, param_count - PARAM_COUNT)
 
 #define API_OBJCALL_SCRIPT_SPRINTF(METHOD, PARAM_COUNT) \
     ASSERT_OBJ_PARAM_COUNT(METHOD, PARAM_COUNT); \
-    char ScSfBuffer[STD_BUFFER_SIZE]; \
-    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, STD_BUFFER_SIZE, get_translation(params[PARAM_COUNT - 1].CStr), params + PARAM_COUNT, param_count - PARAM_COUNT)
+    std::vector<char> ScSfBuffer; \
+    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, get_translation(params[PARAM_COUNT - 1].CStr), params + PARAM_COUNT, param_count - PARAM_COUNT)
 
 //-----------------------------------------------------------------------------
 // Calls to ScriptSprintf without translation
 
 #define API_SCALL_SCRIPT_SPRINTF_PURE(FUNCTION, PARAM_COUNT) \
     ASSERT_PARAM_COUNT(FUNCTION, PARAM_COUNT); \
-    char ScSfBuffer[STD_BUFFER_SIZE]; \
-    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, STD_BUFFER_SIZE, params[PARAM_COUNT - 1].CStr, params + PARAM_COUNT, param_count - PARAM_COUNT)
+    std::vector<char> ScSfBuffer; \
+    const char *scsf_buffer = ScriptSprintf(ScSfBuffer, params[PARAM_COUNT - 1].CStr, params + PARAM_COUNT, param_count - PARAM_COUNT)
 
 //-----------------------------------------------------------------------------
 // Calls to ScriptSprintfV (unsafe plugin variant)
@@ -94,15 +111,15 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_PLUGIN_SCRIPT_SPRINTF(FORMAT_STR) \
     va_list args; \
     va_start(args, FORMAT_STR); \
-    char ScSfBuffer[STD_BUFFER_SIZE]; \
-    const char *scsf_buffer = ScriptVSprintf(ScSfBuffer, STD_BUFFER_SIZE, get_translation(FORMAT_STR), args); \
+    std::vector<char> ScSfBuffer; \
+    const char *scsf_buffer = ScriptVSprintf(ScSfBuffer, get_translation(FORMAT_STR), args); \
     va_end(args)
 
 #define API_PLUGIN_SCRIPT_SPRINTF_PURE(FORMAT_STR) \
     va_list args; \
     va_start(args, FORMAT_STR); \
-    char ScSfBuffer[STD_BUFFER_SIZE]; \
-    const char *scsf_buffer = ScriptVSprintf(ScSfBuffer, STD_BUFFER_SIZE, FORMAT_STR, args); \
+    std::vector<char> ScSfBuffer; \
+    const char *scsf_buffer = ScriptVSprintf(ScSfBuffer, FORMAT_STR, args); \
     va_end(args)
 
 //-----------------------------------------------------------------------------
@@ -160,6 +177,11 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
     FUNCTION(params[0].IValue, (P1CLASS*)params[1].Ptr); \
     return RuntimeScriptValue((int32_t)0)
 
+#define API_SCALL_VOID_PINT_POBJ_PINT(FUNCTION, P1CLASS) \
+    ASSERT_PARAM_COUNT(FUNCTION, 3); \
+    FUNCTION(params[0].IValue, (P1CLASS*)params[1].Ptr, params[2].IValue); \
+    return RuntimeScriptValue((int32_t)0)
+
 #define API_SCALL_VOID_PINT_POBJ2(FUNCTION, P1CLASS, P2CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 3); \
     FUNCTION(params[0].IValue, (P1CLASS*)params[1].Ptr, (P2CLASS*)params[2].Ptr); \
@@ -198,6 +220,11 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_SCALL_VOID_POBJ_PINT2(FUNCTION, P1CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 3); \
     FUNCTION((P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue); \
+    return RuntimeScriptValue((int32_t)0)
+
+#define API_SCALL_VOID_POBJ_PINT5(FUNCTION, P1CLASS) \
+    ASSERT_PARAM_COUNT(FUNCTION, 6); \
+    FUNCTION((P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue, params[3].IValue, params[4].IValue, params[5].IValue); \
     return RuntimeScriptValue((int32_t)0)
 
 #define API_SCALL_VOID_POBJ2(FUNCTION, P1CLASS, P2CLASS) \
@@ -248,6 +275,10 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_SCALL_INT_POBJ_PINT2(FUNCTION, P1CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 3); \
     return RuntimeScriptValue().SetInt32(FUNCTION((P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue))
+
+#define API_SCALL_INT_POBJ_PINT3(FUNCTION, P1CLASS) \
+    ASSERT_PARAM_COUNT(FUNCTION, 4); \
+    return RuntimeScriptValue().SetInt32(FUNCTION((P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue, params[3].IValue))
 
 #define API_SCALL_INT_POBJ2(FUNCTION, P1CLASS, P2CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 2); \
@@ -309,6 +340,10 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
     ASSERT_PARAM_COUNT(FUNCTION, 2); \
     return RuntimeScriptValue().SetScriptObject((void*)(RET_CLASS*)FUNCTION(params[0].IValue, params[1].IValue), &RET_MGR)
 
+#define API_SCALL_OBJ_PINT4(RET_CLASS, RET_MGR, FUNCTION) \
+    ASSERT_PARAM_COUNT(FUNCTION, 4); \
+    return RuntimeScriptValue().SetScriptObject((void*)(RET_CLASS*)FUNCTION(params[0].IValue, params[1].IValue, params[2].IValue, params[3].IValue), &RET_MGR)
+
 #define API_SCALL_OBJ_PINT3_POBJ(RET_CLASS, RET_MGR, FUNCTION, P1CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 4); \
     return RuntimeScriptValue().SetScriptObject((void*)(RET_CLASS*)FUNCTION(params[0].IValue, params[1].IValue, params[2].IValue, (P1CLASS*)params[3].Ptr), &RET_MGR)
@@ -316,6 +351,10 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_SCALL_OBJ_POBJ(RET_CLASS, RET_MGR, FUNCTION, P1CLASS) \
     ASSERT_PARAM_COUNT(FUNCTION, 1); \
     return RuntimeScriptValue().SetScriptObject((void*)(RET_CLASS*)FUNCTION((P1CLASS*)params[0].Ptr), &RET_MGR)
+
+#define API_SCALL_OBJ_POBJ_PINT2(RET_CLASS, RET_MGR, FUNCTION, P1CLASS) \
+    ASSERT_PARAM_COUNT(FUNCTION, 3); \
+    return RuntimeScriptValue().SetScriptObject((void*)(RET_CLASS*)FUNCTION((P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue), &RET_MGR)
 
 #define API_SCALL_OBJAUTO(RET_CLASS, FUNCTION) \
     (void)params; (void)param_count; \
@@ -345,6 +384,11 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_SCALL_OBJAUTO_PINT5(RET_CLASS, FUNCTION) \
     ASSERT_PARAM_COUNT(FUNCTION, 5); \
     RET_CLASS* ret_obj = FUNCTION(params[0].IValue, params[1].IValue, params[2].IValue, params[3].IValue, params[4].IValue); \
+    return RuntimeScriptValue().SetScriptObject(ret_obj, ret_obj)
+
+#define API_SCALL_OBJAUTO_PINT6(RET_CLASS, FUNCTION) \
+    ASSERT_PARAM_COUNT(FUNCTION, 6); \
+    RET_CLASS* ret_obj = FUNCTION(params[0].IValue, params[1].IValue, params[2].IValue, params[3].IValue, params[4].IValue, params[5].IValue); \
     return RuntimeScriptValue().SetScriptObject(ret_obj, ret_obj)
 
 #define API_SCALL_OBJAUTO_PINT2_PBOOL(RET_CLASS, FUNCTION) \
@@ -507,6 +551,10 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
     ASSERT_OBJ_PARAM_COUNT(METHOD, 2); \
     return RuntimeScriptValue().SetInt32(METHOD((CLASS*)self, params[0].IValue, params[1].IValue))
 
+#define API_OBJCALL_INT_PINT4(CLASS, METHOD) \
+    ASSERT_OBJ_PARAM_COUNT(METHOD, 4); \
+    return RuntimeScriptValue().SetInt32(METHOD((CLASS*)self, params[0].IValue, params[1].IValue, params[2].IValue, params[3].IValue))
+
 #define API_OBJCALL_INT_POBJ(CLASS, METHOD, P1CLASS) \
     ASSERT_OBJ_PARAM_COUNT(METHOD, 1); \
     return RuntimeScriptValue().SetInt32(METHOD((CLASS*)self, (P1CLASS*)params[0].Ptr))
@@ -514,6 +562,10 @@ inline const char *ScriptVSprintf(char *buffer, size_t buf_length, const char *f
 #define API_OBJCALL_INT_POBJ_PINT(CLASS, METHOD, P1CLASS) \
     ASSERT_OBJ_PARAM_COUNT(METHOD, 2); \
     return RuntimeScriptValue().SetInt32(METHOD((CLASS*)self, (P1CLASS*)params[0].Ptr, params[1].IValue))
+
+#define API_OBJCALL_INT_POBJ_PINT2(CLASS, METHOD, P1CLASS) \
+    ASSERT_OBJ_PARAM_COUNT(METHOD, 3); \
+    return RuntimeScriptValue().SetInt32(METHOD((CLASS*)self, (P1CLASS*)params[0].Ptr, params[1].IValue, params[2].IValue))
 
 #define API_OBJCALL_INT_POBJ_PBOOL(CLASS, METHOD, P1CLASS) \
     ASSERT_OBJ_PARAM_COUNT(METHOD, 2); \

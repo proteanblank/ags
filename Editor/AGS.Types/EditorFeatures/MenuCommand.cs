@@ -35,10 +35,15 @@ namespace AGS.Types
 		}
 
 		public MenuCommand(string itemID, string itemName, Keys shortcutKey, string iconKey)
-			: this(itemID, itemName)
+			: this(itemID, itemName, shortcutKey)
 		{
-			_shortcutKey = shortcutKey;
 			_iconKey = iconKey;
+		}
+
+		public MenuCommand(string itemID, string itemName, Keys shortcutKey, string iconKey, IList<MenuCommand> subCommands)
+			: this(itemID, itemName, shortcutKey, iconKey)
+		{
+			_subCommands = subCommands;
 		}
 
 		private string _id;
@@ -48,6 +53,8 @@ namespace AGS.Types
 		private bool _enabled;
 		private bool _checked;
 		private Keys _shortcutKey = Keys.None;
+        private string _shortcutKeyDisplayString = string.Empty;
+		private IList<MenuCommand> _subCommands = null;
 
 		public bool IsSeparator
 		{
@@ -59,6 +66,12 @@ namespace AGS.Types
 			get { return _shortcutKey; }
 			set { _shortcutKey = value; }
 		}
+
+        public string ShortcutKeyDisplayString
+        {
+            get { return _shortcutKeyDisplayString; }
+            set { _shortcutKeyDisplayString = value; }
+        }
 
 		public string IconKey
 		{
@@ -94,6 +107,12 @@ namespace AGS.Types
 		{
 			get { return _checked; }
 			set { _checked = value; }
+		}
+
+		public IList<MenuCommand> SubCommands
+		{
+			get { return _subCommands; }
+			set { _subCommands = value; }
 		}
 	}
 }

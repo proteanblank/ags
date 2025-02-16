@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/game.h"
@@ -39,6 +39,7 @@
 #include "ac/overlay.h"
 #include "ac/path_helper.h"
 #include "ac/sys_events.h"
+#include "ac/room.h"
 #include "ac/roomstatus.h"
 #include "ac/sprite.h"
 #include "ac/spritecache.h"
@@ -46,6 +47,7 @@
 #include "ac/translation.h"
 #include "ac/dynobj/all_dynamicclasses.h"
 #include "ac/dynobj/all_scriptclasses.h"
+#include "ac/dynobj/cc_dynamicarray.h"
 #include "ac/dynobj/scriptcamera.h"
 #include "ac/dynobj/scriptgame.h"
 #include "ac/dynobj/dynobj_manager.h"
@@ -57,9 +59,14 @@
 #include "gfx/bitmap.h"
 #include "gfx/graphicsdriver.h"
 #include "gui/guibutton.h"
+#include "gui/guiinv.h"
+#include "gui/guilabel.h"
+#include "gui/guilistbox.h"
 #include "gui/guislider.h"
+#include "gui/guitextbox.h"
 #include "gui/guidialog.h"
 #include "main/engine.h"
+#include "main/game_run.h"
 #include "media/audio/audio_system.h"
 #include "media/video/video.h"
 #include "platform/base/agsplatformdriver.h"
@@ -85,7 +92,8 @@ extern RGB palette[256];
 extern IGraphicsDriver *gfxDriver;
 
 //=============================================================================
-GameState play;
+std::unique_ptr<AssetManager> AssetMgr;
+GamePlayState play;
 GameSetup usetup;
 GameSetupStruct game;
 RoomStatus troom;    // used for non-saveable rooms, eg. intro
@@ -106,7 +114,7 @@ int new_room_pos=0;
 int new_room_x = SCR_NO_VALUE, new_room_y = SCR_NO_VALUE;
 int new_room_loop = SCR_NO_VALUE;
 bool new_room_placeonwalkable = false;
-int proper_exit=0,our_eip=0;
+int proper_exit=0;
 
 AGS::Common::SpriteCache::Callbacks spritecallbacks = {
     get_new_size_for_sprite,
@@ -117,6 +125,12 @@ AGS::Common::SpriteCache::Callbacks spritecallbacks = {
 SpriteCache spriteset(game.SpriteInfos, spritecallbacks);
 
 std::vector<GUIMain> guis;
+std::vector<GUIButton> guibuts;
+std::vector<GUIInvWindow> guiinv;
+std::vector<GUILabel> guilabels;
+std::vector<GUIListBox> guilist;
+std::vector<GUISlider> guislider;
+std::vector<GUITextBox> guitext;
 
 CCGUIObject ccDynamicGUIObject;
 CCCharacter ccDynamicCharacter;
@@ -128,7 +142,6 @@ CCObject    ccDynamicObject;
 CCDialog    ccDynamicDialog;
 CCAudioClip ccDynamicAudioClip;
 CCAudioChannel ccDynamicAudio;
-ScriptString myScriptStringImpl;
 ScriptObject scrObj[MAX_ROOM_OBJECTS];
 std::vector<ScriptGUI> scrGui;
 ScriptHotspot scrHotspot[MAX_ROOM_HOTSPOTS];
@@ -149,10 +162,10 @@ String saveGameDirectory = "./";
 String saveGameSuffix;
 
 int game_paused=0;
-char pexbuf[STD_BUFFER_SIZE];
 
 unsigned int load_new_game = 0;
 int load_new_game_restore = -1;
+SaveCmpSelection load_new_game_restore_cmp = kSaveCmp_All;
 
 // TODO: refactor these global vars into function arguments
 int getloctype_index = 0, getloctype_throughgui = 0;
@@ -269,13 +282,16 @@ int Game_GetDialogCount()
 void set_debug_mode(bool on)
 {
     play.debug_mode = on ? 1 : 0;
-    debug_set_console(on);
 }
 
 void set_game_speed(int new_fps) {
     frames_per_second = new_fps;
     if (!isTimerFpsMaxed()) // if in maxed mode, don't update timer for now
         setTimerFps(new_fps);
+}
+
+float get_game_speed() {
+    return frames_per_second;
 }
 
 extern int cbuttfont;
@@ -404,48 +420,75 @@ const char* Game_GetSaveSlotDescription(int slnum) {
     return nullptr;
 }
 
+ScriptDateTime* Game_GetSaveSlotTime(int slnum)
+{
+    time_t ft = File::GetFileTime(get_save_game_path(slnum));
+    ScriptDateTime *sdt = new ScriptDateTime(ft);
+    ccRegisterManagedObject(sdt, sdt);
+    return sdt;
+}
 
-void restore_game_dialog() {
+void restore_game_dialog()
+{
+    restore_game_dialog2(1, LEGACY_TOP_BUILTINDIALOGSAVESLOT);
+}
+
+void restore_game_dialog2(int min_slot, int max_slot)
+{
+    // Optionally override the max slot
+    max_slot = usetup.Override.MaxSaveSlot > 0 ? usetup.Override.MaxSaveSlot : max_slot;
+
     can_run_delayed_command();
     if (thisroom.Options.SaveLoadDisabled == 1) {
         DisplayMessage(983);
         return;
     }
     if (inside_script) {
-        curscript->queue_action(ePSARestoreGameDialog, 0, "RestoreGameDialog");
+        get_executingscript()->QueueAction(PostScriptAction(ePSARestoreGameDialog, (min_slot & 0xFFFF) | (max_slot & 0xFFFF) << 16, "RestoreGameDialog"));
         return;
     }
-    do_restore_game_dialog();
+    do_restore_game_dialog(min_slot, max_slot);
 }
 
-bool do_restore_game_dialog() {
+bool do_restore_game_dialog(int min_slot, int max_slot)
+{
     setup_for_dialog();
-    int toload = loadgamedialog();
+    int toload = loadgamedialog(min_slot, max_slot);
     restore_after_dialog();
     if (toload >= 0)
         try_restore_save(toload);
     return toload >= 0;
 }
 
-void save_game_dialog() {
+void save_game_dialog()
+{
+    save_game_dialog2(1, LEGACY_TOP_BUILTINDIALOGSAVESLOT);
+}
+
+void save_game_dialog2(int min_slot, int max_slot)
+{
+    // Optionally override the max slot
+    max_slot = usetup.Override.MaxSaveSlot > 0 ? usetup.Override.MaxSaveSlot : max_slot;
+
+    can_run_delayed_command();
     if (thisroom.Options.SaveLoadDisabled == 1) {
         DisplayMessage(983);
         return;
     }
     if (inside_script) {
-        curscript->queue_action(ePSASaveGameDialog, 0, "SaveGameDialog");
+        get_executingscript()->QueueAction(PostScriptAction(ePSASaveGameDialog, (min_slot & 0xFFFF) | (max_slot & 0xFFFF) << 16, "SaveGameDialog"));
         return;
     }
-    do_save_game_dialog();
+    do_save_game_dialog(min_slot, max_slot);
 }
 
-bool do_save_game_dialog() {
+bool do_save_game_dialog(int min_slot, int max_slot) {
     setup_for_dialog();
-    int toload = savegamedialog();
+    int tosave = savegamedialog(min_slot, max_slot);
     restore_after_dialog();
-    if (toload >= 0)
-        save_game(toload, get_gui_dialog_buffer());
-    return toload >= 0;
+    if (tosave >= 0)
+        save_game(tosave, get_gui_dialog_buffer());
+    return tosave >= 0;
 }
 
 void free_do_once_tokens()
@@ -453,9 +496,15 @@ void free_do_once_tokens()
     play.do_once_tokens.clear();
 }
 
+void shutdown_game_state()
+{
+    // Try every possible game state that is represented by a global object
+    shutdown_dialog_state();
+    ShutGameWaitState();
+}
 
 // Free all the memory associated with the game
-void unload_game_file()
+void unload_game()
 {
     dispose_game_drawdata();
     // NOTE: fonts should be freed prior to stopping plugins,
@@ -463,6 +512,8 @@ void unload_game_file()
     free_all_fonts();
     close_translation();
 
+    // NOTE: script objects must be freed prior to stopping plugins,
+    // in case there are managed objects provided by plugins.
     ccRemoveAllSymbols();
     ccUnregisterAllObjects();
     pl_stop_plugins();
@@ -483,10 +534,14 @@ void unload_game_file()
     guis.clear();
     scrGui.clear();
 
+    get_overlays().clear();
+
     resetRoomStatuses();
 
+    dispose_room_pathfinder();
+
     // Free game state and game struct
-    play = GameState();
+    play = GamePlayState();
     game = GameSetupStruct();
 
     // Reset all resource caches
@@ -558,6 +613,51 @@ int Game_GetSpriteHeight(int spriteNum) {
         return 0;
 
     return game_to_data_coord(game.SpriteInfos[spriteNum].Height);
+}
+
+ScriptFileSortStyle ValidateFileSort(const char *apiname, int file_sort)
+{
+    if (file_sort < kScFileSort_None || file_sort > kScFileSort_Time)
+    {
+        debug_script_warn("%s: invalid file sort style (%d)", apiname, file_sort);
+        return kScFileSort_None;
+    }
+    return static_cast<ScriptFileSortStyle>(file_sort);
+}
+
+ScriptSaveGameSortStyle ValidateSaveGameSort(const char *apiname, int save_sort)
+{
+    if (save_sort < kScSaveGameSort_None || save_sort > kScSaveGameSort_Description)
+    {
+        debug_script_warn("%s: invalid save game sort style (%d)", apiname, save_sort);
+        return kScSaveGameSort_None;
+    }
+    return static_cast<ScriptSaveGameSortStyle>(save_sort);
+}
+
+ScriptSortDirection ValidateSortDirection(const char *apiname, int sort_dir)
+{
+    if (sort_dir < kScSortNone || sort_dir > kScSortDescending)
+    {
+        debug_script_warn("%s: invalid sorting direction (%d)", apiname, sort_dir);
+        return kScSortNone;
+    }
+    return static_cast<ScriptSortDirection>(sort_dir);
+}
+
+bool ValidateSaveSlotRange(const char *api_name, int &min_slot, int &max_slot)
+{
+    int do_max_slot = std::min(max_slot, TOP_SAVESLOT);
+    int do_min_slot = std::min(do_max_slot, std::max(0, min_slot));
+    if (do_max_slot - do_min_slot <= 0)
+    {
+        debug_script_warn("%s: empty or invalid slots range requested (requested: %d..%d, valid range %d..%d)",
+            api_name, min_slot, max_slot, 0, TOP_SAVESLOT);
+        return false;
+    }
+    min_slot = do_min_slot;
+    max_slot = do_max_slot;
+    return true;
 }
 
 void AssertView(const char *apiname, int view)
@@ -642,7 +742,8 @@ void Game_SetTextReadingSpeed(int newTextSpeed)
     if (newTextSpeed < 1)
         quitprintf("!Game.TextReadingSpeed: %d is an invalid speed", newTextSpeed);
 
-    play.text_speed = newTextSpeed;
+    if (usetup.Access.TextReadSpeed <= 0)
+        play.text_speed = newTextSpeed;
 }
 
 int Game_GetMinimumTextDisplayTimeMs()
@@ -652,7 +753,8 @@ int Game_GetMinimumTextDisplayTimeMs()
 
 void Game_SetMinimumTextDisplayTimeMs(int newTextMinTime)
 {
-    play.text_min_display_time_ms = newTextMinTime;
+    if (usetup.Access.TextReadSpeed <= 0)
+        play.text_min_display_time_ms = newTextMinTime;
 }
 
 int Game_GetIgnoreUserInputAfterTextTimeoutMs()
@@ -674,9 +776,9 @@ const char *Game_GetName() {
 }
 
 void Game_SetName(const char *newName) {
-    strncpy(play.game_name, newName, 99);
-    play.game_name[99] = 0;
-    sys_window_set_title(play.game_name);
+    play.game_name = newName;
+    sys_window_set_title(play.game_name.GetCStr());
+    GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Gamename);
 }
 
 int Game_GetSkippingCutscene()
@@ -715,14 +817,12 @@ int Game_GetColorFromRGB(int red, int grn, int blu) {
 
 const char* Game_InputBox(const char *msg) {
     char buffer[STD_BUFFER_SIZE];
-    sc_inputbox(msg, buffer);
+    ShowInputBoxImpl(msg, buffer, STD_BUFFER_SIZE);
     return CreateNewScriptString(buffer);
 }
 
 const char* Game_GetLocationName(int x, int y) {
-    char buffer[STD_BUFFER_SIZE];
-    GetLocationName(x, y, buffer);
-    return CreateNewScriptString(buffer);
+    return CreateNewScriptString(GetLocationName(x, y));
 }
 
 const char* Game_GetGlobalMessages(int index) {
@@ -730,7 +830,6 @@ const char* Game_GetGlobalMessages(int index) {
         return nullptr;
     }
     char buffer[STD_BUFFER_SIZE];
-    buffer[0] = 0;
     replace_tokens(get_translation(get_global_message(index)), buffer, STD_BUFFER_SIZE);
     return CreateNewScriptString(buffer);
 }
@@ -744,7 +843,7 @@ int Game_GetNormalFont() {
 
 const char* Game_GetTranslationFilename() {
     char buffer[STD_BUFFER_SIZE];
-    GetTranslationName(buffer);
+    GetTranslationName(buffer); // fills up to MAX_MAXSTRLEN
     return CreateNewScriptString(buffer);
 }
 
@@ -753,8 +852,8 @@ int Game_ChangeTranslation(const char *newFilename)
     if ((newFilename == nullptr) || (newFilename[0] == 0))
     { // switch back to default translation
         close_translation();
-        usetup.translation = "";
-        GUI::MarkForTranslationUpdate();
+        usetup.Translation = "";
+        GUIE::MarkForTranslationUpdate();
         return 1;
     }
 
@@ -762,8 +861,8 @@ int Game_ChangeTranslation(const char *newFilename)
     if (!init_translation(newFilename, oldTransFileName))
         return 0; // failed, kept previous translation
 
-    usetup.translation = newFilename;
-    GUI::MarkForTranslationUpdate();
+    usetup.Translation = newFilename;
+    GUIE::MarkForTranslationUpdate();
     return 1;
 }
 
@@ -814,12 +913,77 @@ ScriptCamera* Game_GetAnyCamera(int index)
 
 void Game_SimulateKeyPress(int key)
 {
-    ags_simulate_keypress(static_cast<eAGSKeyCode>(key));
+    ags_simulate_keypress(static_cast<eAGSKeyCode>(key), (game.options[OPT_KEYHANDLEAPI] == 0));
 }
 
 int Game_BlockingWaitSkipped()
 {
     return play.GetWaitSkipResult();
+}
+
+void Game_PrecacheSprite(int sprnum)
+{
+    const auto tp_start = AGS_FastClock::now();
+    spriteset.PrecacheSprite(sprnum);
+    const auto tp_filedone = AGS_FastClock::now();
+    texturecache_precache(sprnum);
+    const auto tp_texturedone = AGS_FastClock::now();
+
+    const auto dur1 = ToMilliseconds(tp_filedone - tp_start);
+    const auto dur2 = ToMilliseconds(tp_texturedone - tp_filedone);
+    const auto dur_t = ToMilliseconds(tp_texturedone - tp_start);
+    Debug::Printf("Precache sprite %d; file->mem = %lld ms, bm->tx = %lld ms, total = %lld ms", sprnum, dur1, dur2, dur_t);
+}
+
+void Game_PrecacheView(int view, int first_loop, int last_loop)
+{
+    precache_view(view - 1 /* to 0-based view index */, first_loop, last_loop, true);
+}
+
+void *Game_GetSaveSlots(int min_slot, int max_slot, int save_sort, int sort_dir)
+{
+    if (!ValidateSaveSlotRange("Game.GetSaveSlots", min_slot, max_slot))
+        return CCDynamicArray::Create(0, sizeof(int32_t), false).Obj;
+    save_sort = ValidateSaveGameSort("Game.GetSaveSlots", save_sort);
+    sort_dir = ValidateSortDirection("Game.GetSaveSlots", sort_dir);
+
+    std::vector<SaveListItem> saves;
+    FillSaveList(saves, min_slot, max_slot, false /* no desc */, (ScriptSaveGameSortStyle)save_sort, (ScriptSortDirection)sort_dir);
+
+    DynObjectRef arr = CCDynamicArray::Create(saves.size(), sizeof(int32_t), false);
+    int32_t *arr_ptr = static_cast<int32_t*>(arr.Obj);
+    for (const auto &save : saves)
+        *(arr_ptr++) = save.Slot;
+    return arr.Obj;
+}
+
+extern void prescan_saves(int *dest_arr, size_t dest_count, int min_slot, int max_slot, int file_sort, int sort_dir);
+extern ExecutingScript *curscript;
+
+void Game_ScanSaveSlots(void *dest_arr, int min_slot, int max_slot, int save_sort, int sort_dir, int user_param)
+{
+    const auto &hdr = CCDynamicArray::GetHeader(dest_arr);
+    if (hdr.GetElemCount() == 0u)
+    {
+        debug_script_warn("Game.ScanSaveSlots: empty array provided, skip execution");
+        return;
+    }
+
+    if (!ValidateSaveSlotRange("Game.ScanSaveSlots", min_slot, max_slot))
+        return;
+    save_sort = ValidateSaveGameSort("Game.ScanSaveSlots", save_sort);
+    sort_dir = ValidateSortDirection("Game.ScanSaveSlots", sort_dir);
+
+    can_run_delayed_command();
+    if (inside_script)
+    {
+        int handle = ccGetObjectHandleFromAddress(dest_arr);
+        ccAddObjectReference(handle); // add internal handle to prevent disposal
+        curscript->QueueAction(PostScriptAction(ePSAScanSaves, handle, min_slot, max_slot, save_sort, sort_dir, user_param, "ScanSaveSlots"));
+        return;
+    }
+
+    prescan_saves(static_cast<int*>(dest_arr), hdr.GetElemCount(), min_slot, max_slot, save_sort, sort_dir);
 }
 
 //=============================================================================
@@ -893,46 +1057,43 @@ void skip_serialized_bitmap(Stream *in)
     in->Seek(picwid * pichit * bpp);
 }
 
-Bitmap *create_savegame_screenshot()
+std::unique_ptr<Common::Bitmap> create_game_screenshot(int width, int height, int layers)
 {
-    int usewid = data_to_game_coord(play.screenshot_width);
-    int usehit = data_to_game_coord(play.screenshot_height);
+    // NOTE: be aware that by the historical logic AGS makes a screenshot
+    // of a "main viewport", that may be smaller in legacy "letterbox" mode.
     const Rect &viewport = play.GetMainViewport();
-    if (usewid > viewport.GetWidth())
-        usewid = viewport.GetWidth();
-    if (usehit > viewport.GetHeight())
-        usehit = viewport.GetHeight();
+    if (width <= 0)
+        width = viewport.GetWidth();
+    else
+        width = data_to_game_coord(width);
 
-    if ((play.screenshot_width < 16) || (play.screenshot_height < 16))
-        quit("!Invalid game.screenshot_width/height, must be from 16x16 to screen res");
+    if (height <= 0)
+        height = viewport.GetHeight();
+    else
+        height = data_to_game_coord(height);
 
-    return CopyScreenIntoBitmap(usewid, usehit);
+    // NOTE: if there will be a difference between script constants and internal
+    // constants of Render Layers, or any necessity to adjust these, then convert flags here.
+    std::unique_ptr<Bitmap> shot;
+    if (layers != 0)
+        shot.reset(CopyScreenIntoBitmap(width, height, &viewport, false, ~layers));
+    else
+        shot.reset(new Bitmap(width, height));
+    return shot;
 }
 
-void save_game(int slotn, const char*descript) {
+static std::unique_ptr<Common::Bitmap> create_savegame_screenshot()
+{
+    return create_game_screenshot(play.screenshot_width, play.screenshot_height, game.options[OPT_SAVESCREENSHOTLAYER]);
+}
 
-    // dont allow save in rep_exec_always, because we dont save
-    // the state of blocked scripts
-    can_run_delayed_command();
-
-    if (inside_script) {
-        snprintf(curscript->postScriptSaveSlotDescription[curscript->queue_action(ePSASaveGame, slotn, "SaveGameSlot")],
-            MAX_QUEUED_ACTION_DESC, "%s", descript);
-        return;
-    }
-
-    if (platform->GetDiskFreeSpaceMB() < 2) {
-        Display("ERROR: There is not enough disk space free to save the game. Clear some disk space and try again.");
-        return;
-    }
-
-    VALIDATE_STRING(descript);
+void save_game(int slotn, const String &descript, std::unique_ptr<Bitmap> &&image)
+{
     String nametouse = get_save_game_path(slotn);
-    std::unique_ptr<Bitmap> screenShot;
-    if (game.options[OPT_SAVESCREENSHOT] != 0)
-        screenShot.reset(create_savegame_screenshot());
+    if (!image && (game.options[OPT_SAVESCREENSHOT] != 0))
+        image = create_savegame_screenshot();
 
-    std::unique_ptr<Stream> out(StartSavegame(nametouse, descript, screenShot.get()));
+    std::unique_ptr<Stream> out(StartSavegame(nametouse, descript, image.get()));
     if (out == nullptr)
     {
         Display("ERROR: Unable to open savegame file for writing!");
@@ -940,9 +1101,9 @@ void save_game(int slotn, const char*descript) {
     }
 
     // Save dynamic game data
-    SaveGameState(out.get());
+    SaveGameState(out.get(), (SaveCmpSelection)(kSaveCmp_All & ~(game.options[OPT_SAVECOMPONENTSIGNORE] & kSaveCmp_ScriptIgnoreMask)));
     // call "After Save" event callback
-    run_on_event(GE_SAVE_GAME, RuntimeScriptValue().SetInt32(slotn));
+    run_on_event(kScriptEvent_GameSaved, slotn);
 }
 
 int gameHasBeenRestored = 0;
@@ -972,7 +1133,7 @@ std::unique_ptr<Bitmap> read_savedgame_screenshot(const String &savedgame)
     }
     if (desc.UserImage)
     {
-        desc.UserImage.reset(PrepareSpriteForUse(desc.UserImage.release(), false));
+        desc.UserImage.reset(PrepareSpriteForUse(desc.UserImage.release(), false /* no alpha */));
         return std::move(desc.UserImage);
     }
     return {};
@@ -989,25 +1150,25 @@ bool test_game_guid(const String &filepath, const String &guid, int legacy_id)
     if (!OpenMainGameFileFromDefaultAsset(src, amgr.get()))
         return false;
     GameSetupStruct g;
-    PreReadGameData(g, src.InputStream.get(), src.DataVersion);
+    PreReadGameData(g, std::move(src.InputStream), src.DataVersion);
     if (!guid.IsEmpty())
         return guid.CompareNoCase(g.guid) == 0;
     return legacy_id == g.uniqueid;
 }
 
-HSaveError load_game(const String &path, int slotNumber, bool &data_overwritten)
+HSaveError load_game(const String &path, int slotNumber, bool startup, bool &data_overwritten)
 {
     data_overwritten = false;
     gameHasBeenRestored++;
 
-    oldeip = our_eip;
-    our_eip = 2050;
+    oldeip = get_our_eip();
+    set_our_eip(2050);
 
     HSaveError err;
     SavegameSource src;
     SavegameDescription desc;
-    err = OpenSavegame(path, src, desc, kSvgDesc_EnvInfo);
-
+    desc.Slot = slotNumber;
+    err = OpenSavegame(path, src, desc, (SavegameDescElem)(kSvgDesc_EnvInfo | kSvgDesc_UserText));
     // saved in incompatible enviroment
     if (!err)
         return err;
@@ -1049,30 +1210,50 @@ HSaveError load_game(const String &path, int slotNumber, bool &data_overwritten)
             path.GetCStr(), desc.MainDataFilename.GetCStr(), desc.GameTitle.GetCStr());
     }
 
-    // do the actual restore
-    err = RestoreGameState(src.InputStream.get(), src.Version);
-    data_overwritten = true;
-    if (!err)
-        return err;
+    // Do the actual game state restore
+    SaveRestoreFeedback feedback;
+    err = RestoreGameState(src.InputStream.get(), desc,
+        RestoreGameStateOptions(src.Version,
+            (SaveCmpSelection)(kSaveCmp_All & ~(game.options[OPT_SAVECOMPONENTSIGNORE] & kSaveCmp_ScriptIgnoreMask)),
+            startup), feedback);
     src.InputStream.reset();
-    our_eip = oldeip;
+    data_overwritten = true;
 
+    // Handle restoration error
+    if (!err)
+    {
+        // We must detect a case when the save contains less data and requires
+        // a clean game reset before trying to restore again
+        if (feedback.RetryWithClearGame)
+        {
+            // Schedule same game file re-run and save restore
+            RunAGSGame(ResPaths.GamePak.Path, 0, 0);
+            load_new_game_restore = slotNumber;
+            load_new_game_restore_cmp = feedback.RetryWithoutComponents;
+            return HSaveError::None();
+        }
+        // Else bail out with error
+        return err;
+    }
+
+    set_our_eip(oldeip);
     // ensure input state is reset
     ags_clear_input_state();
     // call "After Restore" event callback
-    run_on_event(GE_RESTORE_GAME, RuntimeScriptValue().SetInt32(slotNumber));
+    run_on_event(kScriptEvent_GameRestored, slotNumber);
     return HSaveError::None();
 }
 
-bool try_restore_save(int slot)
+bool try_restore_save(int slot, bool startup)
 {
-    return try_restore_save(get_save_game_path(slot), slot);
+    return try_restore_save(get_save_game_path(slot), slot, startup);
 }
 
-bool try_restore_save(const Common::String &path, int slot)
+bool try_restore_save(const Common::String &path, int slot, bool startup)
 {
     bool data_overwritten;
-    HSaveError err = load_game(path, slot, data_overwritten);
+    Debug::Printf(kDbgMsg_Info, "Restoring saved game '%s'", path.GetCStr());
+    HSaveError err = load_game(path, slot, startup, data_overwritten);
     if (!err)
     {
         String error = String::FromFormat("Unable to restore the saved game.\n%s",
@@ -1088,6 +1269,75 @@ bool try_restore_save(const Common::String &path, int slot)
         return false;
     }
     return true;
+}
+
+void prescan_save_slots(int dest_arr_handle, int min_slot, int max_slot, int save_sort, int sort_dir, int user_param)
+{
+    void *dest_arr;
+    IScriptObject *mgr;
+    ccGetObjectAddressAndManagerFromHandle(dest_arr_handle, dest_arr, mgr);
+    if (!dest_arr || strcmp(mgr->GetType(), CCDynamicArray::TypeName) != 0)
+    {
+        debug_script_warn("Game.PrescanSaveSlots: internal error: destination array not available, has been disposed?");
+        return;
+    }
+
+    prescan_saves(static_cast<int*>(dest_arr), CCDynamicArray::GetHeader(dest_arr).GetElemCount(), min_slot, max_slot, save_sort, sort_dir);
+    ccReleaseObjectReference(dest_arr_handle); // release internal handle
+
+    run_on_event(kScriptEvent_SavesScanComplete, user_param);
+}
+
+void prescan_saves(int *dest_arr, size_t dest_count, int min_slot, int max_slot, int save_sort, int sort_dir)
+{
+    // Gather existing list of saves in the requested range
+    // ...and sort this list according to the parameters
+    std::vector<SaveListItem> saves;
+    FillSaveList(saves, min_slot, max_slot, false /* no desc */, (ScriptSaveGameSortStyle)save_sort, (ScriptSortDirection)sort_dir);
+
+    // Prescan saves from the sorted list, and fill the destination array
+    int *pdst = dest_arr;
+    for (const auto &save : saves)
+    {
+        if (pdst == dest_arr + dest_count)
+            break;
+
+        HSaveError err;
+        SavegameSource src;
+        SavegameDescription desc;
+        desc.Slot = save.Slot;
+        err = OpenSavegame(get_save_game_path(save.Slot), src, desc, (SavegameDescElem)(kSvgDesc_EnvInfo | kSvgDesc_UserText));
+        if (!err)
+        {
+            debug_script_log("Prescan save slot %d: failed to open save: %s", save.Slot, err->FullMessage().GetCStr());
+            continue;
+        }
+        // CHECKME: is this color depth test still essential? if yes, is there possible workaround?
+        else if (desc.ColorDepth != game.GetColorDepth())
+        {
+            debug_script_log("Prescan save slot %d: mismatching game color depth (game: %d-bit, save: %d-bit)", save.Slot, game.GetColorDepth(), desc.ColorDepth);
+            continue;
+        }
+
+        // Do the save prescan
+        err = PrescanSaveState(src.InputStream.get(), desc,
+            RestoreGameStateOptions(src.Version,
+                (SaveCmpSelection)(kSaveCmp_All & ~(game.options[OPT_SAVECOMPONENTSIGNORE] & kSaveCmp_ScriptIgnoreMask)),
+                false));
+
+        if (!err)
+        {
+            debug_script_log("Prescan save slot %d: incompatible: %s", save.Slot, err->FullMessage().GetCStr());
+            continue;
+        }
+
+        // Put valid slot into dest arr
+        *(pdst++) = save.Slot;
+    }
+
+    // Fill remaining destination array with "no slot" index
+    for (; pdst != dest_arr + dest_count; ++pdst)
+        *pdst = -1;
 }
 
 bool is_in_cutscene()
@@ -1266,7 +1516,7 @@ void display_switch_out_suspend()
 
     // TODO: find out if anything has to be done here for SDL backend
 
-    video_pause();
+    video_single_pause();
     // Pause all the sounds
     for (int i = 0; i < TOTAL_AUDIO_CHANNELS; i++) {
         auto* ch = AudioChans::GetChannelIfPlaying(i);
@@ -1283,8 +1533,8 @@ void display_switch_in()
 {
     Debug::Printf("Switching back into the game");
     ags_clear_input_state();
-    // If auto lock option is set, lock mouse to the game window
-    if (usetup.mouse_auto_lock && scsystem.windowed)
+    // If fullscreen, or auto lock option is set, lock mouse to the game window
+    if ((scsystem.windowed == 0) || usetup.MouseAutoLock)
         Mouse::TryLockToWindow();
     switched_away = false;
 }
@@ -1302,7 +1552,7 @@ void display_switch_in_resume()
             ch->resume();
         }
     }
-    video_resume();
+    video_single_resume();
 
     // release render targets if switching back to the full screen mode;
     // unfortunately, otherwise Direct3D fails to reset device when restoring fullscreen.
@@ -1318,14 +1568,14 @@ void display_switch_in_resume()
     game_update_suspend = false;
 }
 
-void replace_tokens(const char*srcmes,char*destm, int maxlen) {
+void replace_tokens(const char*srcmes,char*destm, size_t maxlen) {
     int indxdest=0,indxsrc=0;
     const char*srcp;
     char *destp;
     while (srcmes[indxsrc]!=0) {
         srcp=&srcmes[indxsrc];
         destp=&destm[indxdest];
-        if ((strncmp(srcp,"@IN",3)==0) | (strncmp(srcp,"@GI",3)==0)) {
+        if ((strncmp(srcp,"@IN",3)==0) || (strncmp(srcp,"@GI",3)==0)) {
             int tokentype=0;
             if (srcp[1]=='I') tokentype=1;
             else tokentype=2;
@@ -1396,11 +1646,14 @@ void get_message_text (int msnum, char *buffer, char giveErr) {
     replace_tokens(get_translation(thisroom.Messages[msnum].GetCStr()), buffer, maxlen);
 }
 
-void game_sprite_updated(int sprnum)
+void game_sprite_updated(int sprnum, bool deleted)
 {
-    update_shared_texture(sprnum);
-    // character and object draw caches
-    reset_objcache_for_sprite(sprnum, false);
+    // Notify draw system about dynamic sprite change
+    notify_sprite_changed(sprnum, deleted);
+
+    // GUI still have a special draw route, so cannot rely on object caches;
+    // will have to do a per-GUI and per-control check.
+    //
     // gui backgrounds
     for (auto &gui : guis)
     {
@@ -1412,7 +1665,7 @@ void game_sprite_updated(int sprnum)
     // gui buttons
     for (auto &but : guibuts)
     {
-        if (but.CurrentImage == sprnum)
+        if (but.GetCurrentImage() == sprnum)
         {
             but.MarkChanged();
         }
@@ -1424,97 +1677,58 @@ void game_sprite_updated(int sprnum)
         {
             slider.MarkChanged();
         }
-    }
-    // overlays
-    auto &overs = get_overlays();
-    for (auto &over : overs)
-    {
-        if (over.GetSpriteNum() == sprnum)
-            over.MarkChanged();
     }
 }
 
-void game_sprite_deleted(int sprnum)
+void precache_view(int view, int first_loop, int last_loop, bool with_sounds)
 {
-    clear_shared_texture(sprnum);
-    // character and object draw caches
-    reset_objcache_for_sprite(sprnum, true);
+    if (view < 0)
+        return;
+    if (first_loop > last_loop)
+        return;
 
-    // This is ugly, but apparently there are few games that may rely
-    // (either with or without author's intent) on newly created sprite
-    // being assigned same index as a recently deleted one, which results
-    // in new sprite "secretly" taking place of an old one on the GUI, etc.
-    // So for old games we keep only partial reset (full cleanup is 3.5.0+).
-    const bool reset_sprindex_oldstyle =
-        loaded_game_file_version < kGameVersion_350;
+    first_loop = Math::Clamp(first_loop, 0, views[view].numLoops - 1);
+    last_loop = Math::Clamp(last_loop, 0, views[view].numLoops - 1);
 
-    // room object graphics
-    if (croom != nullptr)
+    // Record cache sizes and timestamps, for diagnostic purposes
+    const size_t spcache_before = spriteset.GetCacheSize();
+    const size_t txcache_before = texturecache_get_size();
+    int total_frames = 0, total_sounds = 0;
+
+    int64_t dur_sp_load = 0, dur_tx_make = 0, dur_sound_load = 0;
+    for (int i = first_loop; i <= last_loop; ++i)
     {
-        for (size_t i = 0; i < (size_t)croom->numobj; ++i)
+        for (int j = 0; j < views[view].loops[i].numFrames; ++j, ++total_frames)
         {
-            if (objs[i].num == sprnum)
-                objs[i].num = 0;
-        }
-    }
-    // gui buttons
-    for (auto &but : guibuts)
-    {
-        if (but.Image == sprnum)
-            but.Image = 0;
-        if (but.MouseOverImage == sprnum)
-            but.MouseOverImage = 0;
-        if (but.PushedImage == sprnum)
-            but.PushedImage = 0;
+            const auto &frame = views[view].loops[i].frames[j];
+            const auto tp_detail1 = AGS_FastClock::now();
+            spriteset.PrecacheSprite(frame.pic);
+            const auto tp_detail2 = AGS_FastClock::now();
+            texturecache_precache(frame.pic);
+            const auto tp_detail3 = AGS_FastClock::now();
 
-        if (but.CurrentImage == sprnum)
-        {
-            but.CurrentImage = 0;
-            but.MarkChanged();
-        }
-    }
-
-    if (reset_sprindex_oldstyle)
-        return; // stop here for < 3.5.0 games
-
-    // gui backgrounds
-    for (size_t i = 0; i < (size_t)game.numgui; ++i)
-    {
-        if (guis[i].BgImage == sprnum)
-        {
-            guis[i].BgImage = 0;
-            guis[i].MarkChanged();
-        }
-    }
-    // gui sliders
-    for (auto &slider : guislider)
-    {
-        if ((slider.BgImage == sprnum) || (slider.HandleImage == sprnum))
-            slider.MarkChanged();
-        if (slider.BgImage == sprnum)
-            slider.BgImage = 0;
-        if (slider.HandleImage == sprnum)
-            slider.HandleImage = 0;
-    }
-    // views
-    for (size_t v = 0; v < (size_t)game.numviews; ++v)
-    {
-        for (size_t l = 0; l < (size_t)views[v].numLoops; ++l)
-        {
-            for (size_t f = 0; f < (size_t)views[v].loops[l].numFrames; ++f)
+            if (with_sounds && frame.audioclip >= 0)
             {
-                if (views[v].loops[l].frames[f].pic == sprnum)
-                    views[v].loops[l].frames[f].pic = 0;
+                ScriptAudioClip *clip = &game.audioClips[frame.audioclip];
+                auto assetpath = get_audio_clip_assetpath(clip->bundlingType, clip->fileName);
+                soundcache_precache(assetpath);
+                dur_sound_load += ToMilliseconds(AGS_FastClock::now() - tp_detail3);
+                total_sounds++;
             }
+            dur_sp_load += ToMilliseconds(tp_detail2 - tp_detail1);
+            dur_tx_make += ToMilliseconds(tp_detail3 - tp_detail2);
         }
     }
-    // overlays
-    auto &overs = get_overlays();
-    for (auto &over : overs)
-    {
-        if (over.GetSpriteNum() == sprnum)
-            over.SetSpriteNum(0);
-    }
+
+    // Print gathered time and size info
+    size_t spcache_after = spriteset.GetCacheSize();
+    size_t txcache_after = texturecache_get_size();
+    Debug::Printf("Precache view %d (loops %d-%d) with %d frames, total = %lld ms, average file->mem = %lld ms, bm->tx = %lld ms,"
+                  "\n\t\tloaded %d sounds = %lld ms",
+        view, first_loop, last_loop, total_frames, dur_sp_load + dur_tx_make + dur_sound_load,
+        dur_sp_load / total_frames, dur_tx_make / total_frames, total_sounds, dur_sound_load);
+    Debug::Printf("\tSprite cache: %zu -> %zu KB, texture cache: %zu -> %zu KB",
+        spcache_before / 1024u, spcache_after / 1024u, txcache_before / 1024u, txcache_after / 1024u);
 }
 
 //=============================================================================
@@ -1613,6 +1827,11 @@ RuntimeScriptValue Sc_Game_GetRunNextSettingForLoop(const RuntimeScriptValue *pa
 RuntimeScriptValue Sc_Game_GetSaveSlotDescription(const RuntimeScriptValue *params, int32_t param_count)
 {
     API_SCALL_OBJ_PINT(const char, myScriptStringImpl, Game_GetSaveSlotDescription);
+}
+
+RuntimeScriptValue Sc_Game_GetSaveSlotTime(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_OBJAUTO_PINT(ScriptDateTime, Game_GetSaveSlotTime);
 }
 
 // ScriptViewFrame* (int viewNumber, int loopNumber, int frame)
@@ -1863,6 +2082,26 @@ RuntimeScriptValue Sc_Game_BlockingWaitSkipped(const RuntimeScriptValue *params,
     API_SCALL_INT(Game_BlockingWaitSkipped);
 }
 
+RuntimeScriptValue Sc_Game_PrecacheSprite(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT(Game_PrecacheSprite);
+}
+
+RuntimeScriptValue Sc_Game_PrecacheView(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT3(Game_PrecacheView);
+}
+
+RuntimeScriptValue Sc_Game_GetSaveSlots(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_OBJ_PINT4(void, globalDynamicArray, Game_GetSaveSlots);
+}
+
+RuntimeScriptValue Sc_Game_ScanSaveSlots(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_POBJ_PINT5(Game_ScanSaveSlots, void);
+}
+
 void RegisterGameAPI()
 {
     ScFnRegister game_api[] = {
@@ -1879,11 +2118,20 @@ void RegisterGameAPI()
         { "Game::GetMODPattern^0",                        API_FN_PAIR(Game_GetMODPattern) },
         { "Game::GetRunNextSettingForLoop^2",             API_FN_PAIR(Game_GetRunNextSettingForLoop) },
         { "Game::GetSaveSlotDescription^1",               API_FN_PAIR(Game_GetSaveSlotDescription) },
+        { "Game::GetSaveSlotTime^1",                      API_FN_PAIR(Game_GetSaveSlotTime) },
         { "Game::GetViewFrame^3",                         API_FN_PAIR(Game_GetViewFrame) },
         { "Game::InputBox^1",                             API_FN_PAIR(Game_InputBox) },
         { "Game::SetSaveGameDirectory^1",                 API_FN_PAIR(Game_SetSaveGameDirectory) },
         { "Game::StopSound^1",                            API_FN_PAIR(StopAllSounds) },
+        { "Game::IsPluginLoaded",                         Sc_Game_IsPluginLoaded, pl_is_plugin_loaded },
+        { "Game::ChangeSpeechVox",                        API_FN_PAIR(Game_ChangeSpeechVox) },
+        { "Game::PlayVoiceClip",                          Sc_Game_PlayVoiceClip, PlayVoiceClip },
+        { "Game::SimulateKeyPress",                       API_FN_PAIR(Game_SimulateKeyPress) },
         { "Game::ResetDoOnceOnly",                        API_FN_PAIR(Game_ResetDoOnceOnly) },
+        { "Game::PrecacheSprite",                         API_FN_PAIR(Game_PrecacheSprite) },
+        { "Game::PrecacheView",                           API_FN_PAIR(Game_PrecacheView) },
+        { "Game::GetSaveSlots^4",                         API_FN_PAIR(Game_GetSaveSlots) },
+        { "Game::ScanSaveSlots^6",                        API_FN_PAIR(Game_ScanSaveSlots) },
         { "Game::get_CharacterCount",                     API_FN_PAIR(Game_GetCharacterCount) },
         { "Game::get_DialogCount",                        API_FN_PAIR(Game_GetDialogCount) },
         { "Game::get_FileName",                           API_FN_PAIR(Game_GetFileName) },
@@ -1915,10 +2163,6 @@ void RegisterGameAPI()
         { "Game::get_ViewCount",                          API_FN_PAIR(Game_GetViewCount) },
         { "Game::get_AudioClipCount",                     API_FN_PAIR(Game_GetAudioClipCount) },
         { "Game::geti_AudioClips",                        API_FN_PAIR(Game_GetAudioClip) },
-        { "Game::IsPluginLoaded",                         Sc_Game_IsPluginLoaded, pl_is_plugin_loaded },
-        { "Game::ChangeSpeechVox",                        API_FN_PAIR(Game_ChangeSpeechVox) },
-        { "Game::PlayVoiceClip",                          Sc_Game_PlayVoiceClip, PlayVoiceClip },
-        { "Game::SimulateKeyPress",                       API_FN_PAIR(Game_SimulateKeyPress) },
         { "Game::get_BlockingWaitSkipped",                API_FN_PAIR(Game_BlockingWaitSkipped) },
         { "Game::get_SpeechVoxFilename",                  API_FN_PAIR(Game_GetSpeechVoxFilename) },
         { "Game::get_Camera",                             API_FN_PAIR(Game_GetCamera) },

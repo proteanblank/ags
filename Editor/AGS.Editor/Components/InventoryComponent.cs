@@ -28,6 +28,7 @@ namespace AGS.Editor.Components
             _guiController.RegisterIcon("InventoryIcon", Resources.ResourceManager.GetIcon("iconinv-item.ico"));
             _guiController.RegisterIcon(ICON_KEY, Resources.ResourceManager.GetIcon("iconinv.ico"));
             _guiController.ProjectTree.AddTreeRoot(this, TOP_LEVEL_COMMAND_ID, "Inventory items", ICON_KEY);
+            _agsEditor.CheckGameScripts += ScanAndReportMissingInteractionHandlers;
             RePopulateTreeView();
         }
 
@@ -131,13 +132,28 @@ namespace AGS.Editor.Components
             _guiController.AddOrShowPane(document);
 		}
 
+        public override IList<string> GetManagedScriptElements()
+        {
+            return new string[] { "InventoryItem" };
+        }
+
+        public override bool ShowItemPaneByName(string name)
+        {
+            InventoryItem selectedItem = _agsEditor.CurrentGame.RootInventoryItemFolder.FindInventoryItemByName(name, true);
+            if (selectedItem == null)
+                return false;
+            _guiController.ProjectTree.SelectNode(this, GetNodeID(selectedItem));
+            ShowOrAddPane(selectedItem);
+            return true;
+        }
+
         private void OnItemIDOrNameChanged(InventoryItem item, bool name_only)
         {
             // Refresh tree, property grid and open windows
             if (name_only)
                 ChangeItemLabel(GetNodeID(item), GetNodeLabel(item));
             else
-                RePopulateTreeView(); // currently this is the only way to update tree item ids
+                RePopulateTreeView(GetNodeID(item)); // currently this is the only way to update tree item ids
 
             foreach (ContentDocument doc in _documents.Values)
             {
@@ -230,7 +246,7 @@ namespace AGS.Editor.Components
         private Dictionary<string, object> ConstructPropertyObjectList(InventoryItem item)
         {
             Dictionary<string, object> list = new Dictionary<string, object>();
-            list.Add(item.Name + " (Inventory item " + item.ID + ")", item);
+            list.Add(item.PropertyGridTitle, item);
             return list;
         }
 
@@ -252,6 +268,35 @@ namespace AGS.Editor.Components
         protected override IList<InventoryItem> GetFlatList()
         {
             return _agsEditor.CurrentGame.InventoryFlatList;
+        }
+
+        private void ScanAndReportMissingInteractionHandlers(GenericMessagesArgs args)
+        {
+            var errors = args.Messages;
+            foreach (InventoryItem inv in _agsEditor.CurrentGame.InventoryItems)
+            {
+                var funcs = _agsEditor.Tasks.FindInteractionHandlers(inv.Name, inv.Interactions, true);
+                if (funcs == null || funcs.Length == 0)
+                    continue;
+
+                for (int i = 0; i < funcs.Length; ++i)
+                {
+                    bool has_interaction = !string.IsNullOrEmpty(inv.Interactions.ScriptFunctionNames[i]);
+                    bool has_function = funcs[i].HasValue;
+                    // If we have an assigned interaction function, but the function is not found - report a missing warning
+                    if (has_interaction && !has_function)
+                    {
+                        errors.Add(new CompileWarningWithGameObject($"Inventory ({inv.ID}) {inv.Name}'s event {inv.Interactions.Schema.FunctionSuffixes[i]} function \"{inv.Interactions.ScriptFunctionNames[i]}\" not found in script {inv.Interactions.ScriptModule}.",
+                            "InventoryItem", inv.Name, true));
+                    }
+                    // If we don't have an assignment, but has a similar function - report a possible unlinked function
+                    else if (!has_interaction && has_function)
+                    {
+                        errors.Add(new CompileWarningWithGameObject($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on Inventory ({inv.ID}) {inv.Name}'s Event pane",
+                            "InventoryItem", inv.Name, funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                    }
+                }
+            }
         }
     }
 }

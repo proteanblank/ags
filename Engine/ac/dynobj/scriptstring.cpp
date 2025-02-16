@@ -2,77 +2,116 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/dynobj/scriptstring.h"
 #include <stdlib.h>
 #include <string.h>
+#include <allegro.h>
 #include "ac/string.h"
 #include "ac/dynobj/dynobj_manager.h"
 #include "util/stream.h"
 
 using namespace AGS::Common;
 
+ScriptString myScriptStringImpl;
 
-DynObjectRef ScriptString::CreateString(const char *fromText) {
-    return CreateNewScriptStringObj(fromText);
-}
-
-int ScriptString::Dispose(void* /*address*/, bool /*force*/) {
-    // always dispose
-    if (_text) {
-        free(_text);
-        _text = nullptr;
-    }
-    delete this;
-    return 1;
-}
-
-const char *ScriptString::GetType() {
+const char *ScriptString::GetType()
+{
     return "String";
 }
 
-size_t ScriptString::CalcSerializeSize(void* /*address*/)
+int ScriptString::Dispose(void *address, bool /*force*/)
 {
-    return _len + 1 + sizeof(int32_t);
+    delete[] (static_cast<uint8_t*>(address) - MemHeaderSz);
+    return 1;
 }
 
-void ScriptString::Serialize(void* /*address*/, Stream *out) {
-    const auto *cstr = _text ? _text : "";
-    out->WriteInt32(_len);
-    out->Write(cstr, _len + 1);
+size_t ScriptString::CalcSerializeSize(const void *address)
+{
+    const Header &hdr = GetHeader(address);
+    return hdr.Length + 1 + FileHeaderSz;
 }
 
-void ScriptString::Unserialize(int index, Stream *in, size_t /*data_sz*/) {
-    _len = in->ReadInt32();
-    _text = (char*)malloc(_len + 1);
-    in->Read(_text, _len + 1);
-    _text[_len] = 0; // for safety
-    ccRegisterUnserializedObject(index, _text, this);
+void ScriptString::Serialize(const void* address, Stream *out)
+{
+    const Header &hdr = GetHeader(address);
+    out->WriteInt32(hdr.Length);
+    out->Write(address, hdr.Length + 1); // it was writing trailing 0 for some reason
 }
 
-ScriptString::ScriptString(const char *text) {
-    _len = strlen(text);
-    _text = (char*)malloc(_len + 1);
-    memcpy(_text, text, _len + 1);
+void ScriptString::Unserialize(int index, Stream *in, size_t /*data_sz*/)
+{
+    size_t len = in->ReadInt32();
+    uint8_t *buf = new uint8_t[len + 1 + MemHeaderSz];
+    char *text_ptr = reinterpret_cast<char*>(buf + MemHeaderSz);
+    in->Read(text_ptr, len + 1); // it was writing trailing 0 for some reason
+    text_ptr[len] = 0; // for safety
+    Header &hdr = reinterpret_cast<Header&>(*buf);
+    hdr.Length = len;
+    hdr.ULength = ustrlen(text_ptr);
+    hdr.LastCharIdx = 0u;
+    hdr.LastCharOff = 0u;
+    ccRegisterUnserializedObject(index, text_ptr, this);
 }
 
-ScriptString::ScriptString(char *text, bool take_ownership) {
-    _len = strlen(text);
-    if (take_ownership)
+DynObjectRef ScriptString::CreateObject(uint8_t *buf)
+{
+    char *text_ptr = reinterpret_cast<char*>(buf + MemHeaderSz);
+    int32_t handle = ccRegisterManagedObject(text_ptr, &myScriptStringImpl);
+    if (handle == 0)
     {
-        _text = text;
+        delete[] buf;
+        return DynObjectRef();
     }
-    else
+    return DynObjectRef(handle, text_ptr, &myScriptStringImpl);
+}
+
+ScriptString::Buffer ScriptString::CreateBuffer(size_t len, size_t ulen)
+{
+    assert(ulen <= len);
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[len + 1 + MemHeaderSz]);
+    auto *header = reinterpret_cast<Header*>(buf.get());
+    header->Length = len;
+    header->ULength = ulen;
+    header->LastCharIdx = 0;
+    header->LastCharOff = 0;
+    return Buffer(std::move(buf), len + 1 + MemHeaderSz);
+}
+
+DynObjectRef ScriptString::Create(const char *text)
+{
+    if (!text)
+        return DynObjectRef();
+
+    int len, ulen;
+    ustrlen2(text, &len, &ulen);
+    auto buf = CreateBuffer(len, ulen);
+    memcpy(buf.Get(), text, len + 1);
+    return CreateObject(buf._buf.release());
+}
+
+DynObjectRef ScriptString::Create(Buffer &&strbuf)
+{
+    uint8_t *buf = strbuf._buf.release();
+    auto *header = reinterpret_cast<Header*>(buf);
+    char *text_ptr = reinterpret_cast<char*>(buf + MemHeaderSz);
+    text_ptr[header->Length] = 0; // fixup in case buffer did not have one added
+    if ((header->Length > 0) && (header->ULength == 0u))
     {
-        _text = (char*)malloc(_len + 1);
-        memcpy(_text, text, _len + 1);
+        // NOTE: we use this as an opportunity to recalc Length too, as this
+        // costs us no extra time, but lets fixup in case there's a '0' in the middle
+        int len, ulen;
+        ustrlen2(text_ptr, &len, &ulen);
+        header->Length = len;
+        header->ULength = ulen;
     }
+    return CreateObject(buf);
 }

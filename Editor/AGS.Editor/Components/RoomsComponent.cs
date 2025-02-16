@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -397,10 +398,10 @@ namespace AGS.Editor.Components
                 }
 
                 UnloadedRoom newRoom = new UnloadedRoom(newRoomNumber);
-                AddSingleItem(newRoom);                
+                var nodeId = AddSingleItem(newRoom);
 				_agsEditor.CurrentGame.FilesAddedOrRemoved = true;
 
-                RePopulateTreeView();
+                RePopulateTreeView(nodeId);
                 RoomListTypeConverter.SetRoomList(_agsEditor.CurrentGame.Rooms);
                 _guiController.ShowMessage("Room file imported successfully as room " + newRoomNumber + ".", MessageBoxIcon.Information);
             }
@@ -466,6 +467,11 @@ namespace AGS.Editor.Components
             room.BackgroundCount = 1;
             room.RightEdgeX = room.Width - 1;
             room.BottomEdgeY = room.Height - 1;
+            room.Interactions.ScriptModule = room.ScriptFileName;
+            foreach (var hotspot in room.Hotspots)
+                hotspot.Interactions.ScriptModule = room.Interactions.ScriptModule;
+            foreach (var region in room.Regions)
+                region.Interactions.ScriptModule = room.Interactions.ScriptModule;
             return room;
         }
 
@@ -527,16 +533,16 @@ namespace AGS.Editor.Components
                 }
 
 				EnsureScriptNamesAreUnique(room, errors);
+
+                if (errors.HasErrors)
+                {
+                    return;
+                }
+
                 try
                 {
-                    if (!errors.HasErrors)
-                    {
-                        BusyDialog.Show(pleaseWaitText, new BusyDialog.ProcessingHandler(SaveRoomOnThread), room);
-                    }
-                }
-                catch (CompileMessage ex)
-                {
-                    errors.Add(ex);
+                    BusyDialog.Show(pleaseWaitText, new BusyDialog.ProcessingHandler(SaveRoomOnThread),
+                        new CompileRoomParameters(room, errors));
                 }
                 catch (AGSEditorException ex)
                 {
@@ -629,16 +635,40 @@ namespace AGS.Editor.Components
             room.GameID = _agsEditor.CurrentGame.Settings.UniqueID;
         }
 
+        private class CompileRoomParameters
+        {
+            internal Room Room { get; set; }
+            internal CompileMessages Errors { get; set; }
+
+            internal CompileRoomParameters(Room room, CompileMessages errors)
+            {
+                Room = room;
+                Errors = errors;
+            }
+        }
+
         private object SaveRoomOnThread(IWorkProgress progress, object parameter)
-        {            
-            Room room = (Room)parameter;
+        {
+            CompileRoomParameters par = (CompileRoomParameters)parameter;
+            Room room = par.Room;
             _agsEditor.RegenerateScriptHeader(room);
             List<Script> headers = (List<Script>)_agsEditor.GetAllScriptHeaders();
-            _agsEditor.CompileScript(room.Script, headers, null);
+            _agsEditor.CompileScript(room.Script, headers, par.Errors);
+
+            if (par.Errors.HasErrors)
+            {
+                return null;
+            }
 
             _nativeProxy.SaveRoom(room);
             room.Modified = false;
-            return null;            
+
+            // Scan after saving, because saving a room here is a more critical task,
+            // and scanning is rather a extra aid.
+            if (!room.Script.AutoCompleteData.Populated)
+                AutoComplete.ConstructCache(room.Script, null);
+            ScanAndReportMissingInteractionHandlers(room, par.Errors);
+            return null;
         }
 
         private IScriptEditor GetScriptEditor(string fileName, bool showEditor)
@@ -695,7 +725,7 @@ namespace AGS.Editor.Components
                 scriptEditor.Room = _loadedRoom;
             }
             _roomScriptEditors[selectedRoom.Number] = new ContentDocument(scriptEditor,
-                selectedRoom.Script.FileName, this, SCRIPT_ICON);
+                scriptEditor.GetScriptTabName(), this, SCRIPT_ICON);
             _roomScriptEditors[selectedRoom.Number].ToolbarCommands = scriptEditor.ToolbarIcons;
             _roomScriptEditors[selectedRoom.Number].MainMenu = scriptEditor.ExtraMenu; 
         }
@@ -828,6 +858,7 @@ namespace AGS.Editor.Components
             // TODO: group these in some UpdateRoomToNewVersion method
             _loadedRoom.Modified = ImportExport.CreateInteractionScripts(_loadedRoom, errors);
             _loadedRoom.Modified |= HookUpInteractionVariables(_loadedRoom);
+            _loadedRoom.Modified |= HandleObsoleteSettings(_loadedRoom, errors);
             _loadedRoom.Modified |= AddPlayMusicCommandToPlayerEntersRoomScript(_loadedRoom, errors);
             _loadedRoom.Modified |= AdjustRoomResolution(_loadedRoom);
             // NOTE: currently the only way to know if the room was not affected by
@@ -846,10 +877,28 @@ namespace AGS.Editor.Components
             return _loadedRoom;
         }
 
+        private bool HandleObsoleteSettings(Room room, CompileMessages errors)
+        {
+#pragma warning disable 0612
+            bool scriptModified = false;
+            if (!room.SaveLoadEnabled)
+            {
+                // Simply add a warning in script comments, to let user know that something may be missing
+                room.Script.Text = string.Format("{0}{1}{2}{3}{4}{5}{6}{7}",
+                    "// WARNING: this Room had a \"Save/Load disabled\" setting, which is now deprecated,", Environment.NewLine,
+                    "// and so it was removed during upgrade. If you like to restore this behavior,", Environment.NewLine,
+                    "// you would have to implement it in script. (This warning is safe to remove)", Environment.NewLine, Environment.NewLine,
+                    room.Script.Text);
+                room.SaveLoadEnabled = true;
+            }
+            return scriptModified;
+#pragma warning restore 0612
+        }
+
         private bool AddPlayMusicCommandToPlayerEntersRoomScript(Room room, CompileMessages errors)
         {
+#pragma warning disable 0612
             bool scriptModified = false;
-
             if (room.PlayMusicOnRoomLoad > 0)
             {
                 AudioClip clip = _agsEditor.CurrentGame.FindAudioClipForOldMusicNumber(null, room.PlayMusicOnRoomLoad);
@@ -859,35 +908,21 @@ namespace AGS.Editor.Components
                     return scriptModified;
                 }
 
-                string scriptName = room.Interactions.GetScriptFunctionNameForInteractionSuffix(Room.EVENT_SUFFIX_ROOM_LOAD);
-                if (string.IsNullOrEmpty(scriptName))
+                string functionName = room.Interactions.GetScriptFunctionNameForInteractionSuffix(Room.EVENT_SUFFIX_ROOM_LOAD);
+                if (string.IsNullOrEmpty(functionName))
                 {
-                    scriptName = "Room_" + Room.EVENT_SUFFIX_ROOM_LOAD;
-                    room.Interactions.SetScriptFunctionNameForInteractionSuffix(Room.EVENT_SUFFIX_ROOM_LOAD, scriptName);
-                    room.Script.Text += Environment.NewLine + "function " + scriptName + "()" +
-                        Environment.NewLine + "{" + Environment.NewLine +
-                        "}" + Environment.NewLine;
-                    scriptModified = true;
+                    functionName = "Room_" + Room.EVENT_SUFFIX_ROOM_LOAD;
+                    room.Interactions.SetScriptFunctionNameForInteractionSuffix(Room.EVENT_SUFFIX_ROOM_LOAD, functionName);
                 }
-                int functionOffset = room.Script.Text.IndexOf(scriptName);
-                if (functionOffset < 0)
-                {
-                    errors.Add(new CompileWarning("Room " + room.Number + ": Unable to find definition for " + scriptName + " to add Room Load music " + room.PlayMusicOnRoomLoad));
-                }
-                else
-                {
-                    functionOffset = room.Script.Text.IndexOf('{', functionOffset);
-                    functionOffset = room.Script.Text.IndexOf('\n', functionOffset) + 1;
-                    string newScript = room.Script.Text.Substring(0, functionOffset);
-                    newScript += "  " + clip.ScriptName + ".Play();" + Environment.NewLine;
-                    newScript += room.Script.Text.Substring(functionOffset);
-                    room.Script.Text = newScript;
-                    room.PlayMusicOnRoomLoad = 0;
-                    scriptModified = true;
-                }
+
+                room.Script.Text = ScriptGeneration.InsertFunction(room.Script.Text, functionName, "",
+                    "  " + clip.ScriptName + ".Play();", amendExisting: true, insertBeforeExistingCode: true);
+                room.PlayMusicOnRoomLoad = 0;
+                scriptModified = true;
             }
 
             return scriptModified;
+#pragma warning restore 0612
         }
 
         private bool AdjustRoomResolution(Room room)
@@ -1034,9 +1069,19 @@ namespace AGS.Editor.Components
 			}
         }
 
+        private string GetRoomSettingsTabName()
+        {
+            if(!string.IsNullOrEmpty(_loadedRoom.Description))
+            {
+                return "Room " + _loadedRoom.Number.ToString() + (_loadedRoom.Modified ? " *" : "") + ": " + _loadedRoom.Description;
+            }
+
+            return "Room " + _loadedRoom.Number + (_loadedRoom.Modified ? " *" : "");
+        }
+
         private void CreateRoomSettings(DockData previousDockData)
         {
-            string paneTitle = "Room " + _loadedRoom.Number + (_loadedRoom.Modified ? " *" : "");
+            string paneTitle = GetRoomSettingsTabName();
 
             RoomSettingsEditor editor = new RoomSettingsEditor(_loadedRoom);
             _roomSettings = new ContentDocument(editor,
@@ -1074,7 +1119,7 @@ namespace AGS.Editor.Components
                 // Prompt it to check out if necessary
                 _agsEditor.AttemptToGetWriteAccess(_loadedRoom.FileName);
             }
-            _roomSettings.Name = "Room " + _loadedRoom.Number + (isModified ? " *" : "");
+            _roomSettings.Name = GetRoomSettingsTabName();
             _guiController.DocumentTitlesChanged();
         }
 
@@ -1090,18 +1135,38 @@ namespace AGS.Editor.Components
 
         public override void PropertyChanged(string propertyName, object oldValue)
         {
+            if (_guiController.ActivePane.SelectedPropertyGridObject is Room)
+            {
+                RoomPropertyChanged(propertyName, oldValue);
+            }
+            else if (_guiController.ActivePane.SelectedPropertyGridObject is Character)
+            {
+                // TODO: wish we could forward event to the CharacterComponent.OnPropertyChanged,
+                // but its implementation relies on it being active Pane!
+                CharacterPropertyChanged(propertyName, oldValue);
+            }
+        }
+
+        private void RoomPropertyChanged(string propertyName, object oldValue)
+        {
             if ((propertyName == UnloadedRoom.PROPERTY_NAME_DESCRIPTION) && (_loadedRoom != null))
             {
                 UnloadedRoom room = FindRoomByID(_loadedRoom.Number);
                 room.Description = _loadedRoom.Description;
-                RePopulateTreeView();
+                RePopulateTreeView(GetItemNodeID(room));
                 RoomListTypeConverter.RefreshRoomList();
+                ContentDocument doc;
+                if (_roomScriptEditors.TryGetValue(_loadedRoom.Number, out doc) && doc != null)
+                {
+                    ScriptEditor scriptEditor = ((ScriptEditor)doc.Control);
+                    UpdateScriptWindowTitle(scriptEditor);
+                }
             }
 
-			if ((propertyName == UnloadedRoom.PROPERTY_NAME_NUMBER) && (_loadedRoom != null))
-			{
-				int numberRequested = _loadedRoom.Number;
-				_loadedRoom.Number = Convert.ToInt32(oldValue);
+            if ((propertyName == UnloadedRoom.PROPERTY_NAME_NUMBER) && (_loadedRoom != null))
+            {
+                int numberRequested = _loadedRoom.Number;
+                _loadedRoom.Number = Convert.ToInt32(oldValue);
                 RenameRoom(_loadedRoom.Number, numberRequested);
                 RoomListTypeConverter.RefreshRoomList();
             }
@@ -1110,19 +1175,20 @@ namespace AGS.Editor.Components
             {
                 AdjustRoomMaskResolution(Convert.ToInt32(oldValue), _loadedRoom.MaskResolution);
             }
+        }
 
-            // TODO: wish we could forward event to the CharacterComponent.OnPropertyChanged,
-            // but its implementation relies on it being active Pane!
-            if ((_guiController.ActivePane.SelectedPropertyGridObject is Character) &&
-                (propertyName == Character.PROPERTY_NAME_SCRIPTNAME))
+        private void CharacterPropertyChanged(string propertyName, object oldValue)
+        {
+            if (propertyName == Character.PROPERTY_NAME_SCRIPTNAME)
             {
+                // TODO: re-investigate if we can allow this
                 Character character = (Character)_guiController.ActivePane.SelectedPropertyGridObject;
                 character.ScriptName = (string)oldValue;
                 _guiController.ShowMessage("You cannot edit a character's script name from here. Open the Character Editor for the character then try again.", MessageBoxIcon.Information);
             }
         }
 
-		private void RenameRoom(int currentNumber, int numberRequested)
+        private void RenameRoom(int currentNumber, int numberRequested)
 		{
 			UnloadedRoom room = _agsEditor.CurrentGame.FindRoomByID(numberRequested);
 			if (room != null)
@@ -1154,7 +1220,7 @@ namespace AGS.Editor.Components
                 _roomSettings.TreeNodeID = TREE_PREFIX_ROOM_SETTINGS + numberRequested;
 				_guiController.AddOrShowPane(_roomSettings);
 				_agsEditor.CurrentGame.FilesAddedOrRemoved = true;
-				RePopulateTreeView();
+				RePopulateTreeView(GetItemNodeID(oldRoom));
 			}
 		}
 
@@ -1286,20 +1352,34 @@ namespace AGS.Editor.Components
 
         private void GUIController_OnZoomToFile(ZoomToFileEventArgs evArgs)
         {
+            if (evArgs.Handled)
+            {
+                return; // operation has been completed by another handler
+            }
+
             int roomNumberToEdit = GetRoomNumberForFileName(evArgs.FileName, evArgs.IsDebugExecutionPoint);
             
             if (roomNumberToEdit >= 0)
             {
                 UnloadedRoom roomToGetScriptFor = GetUnloadedRoom(roomNumberToEdit);                
                 ScriptEditor editor = (ScriptEditor)CreateOrShowScript(roomToGetScriptFor).Control;
-				ZoomToCorrectPositionInScript(editor, evArgs);
+                if (editor != null)
+                {
+                    ZoomToCorrectPositionInScript(editor, evArgs);
+                    return;
+                }
             }
+
+            evArgs.Result = ZoomToFileResult.ScriptNotFound;
         }
 
         private void GUIController_OnGetScript(string fileName, ref Script script)
         {
-            if ((fileName == Script.CURRENT_ROOM_SCRIPT_FILE_NAME) &&
-                (_loadedRoom != null))
+            if (_loadedRoom == null)
+                return;
+
+            if ((fileName == Script.CURRENT_ROOM_SCRIPT_FILE_NAME) ||
+                (fileName == _loadedRoom.ScriptFileName))
             {
                 ContentDocument document;
                 if (_roomScriptEditors.TryGetValue(_loadedRoom.Number, out document))
@@ -1331,6 +1411,11 @@ namespace AGS.Editor.Components
 		{
 			foreach (ScriptAndHeader script in _agsEditor.CurrentGame.RootScriptFolder.AllItemsFlat)
 			{
+                if (!File.Exists(script.Header.FileName))
+                {
+                    continue; // project file is missing, undefined behavior
+                }
+
 				if ((Utilities.DoesFileNeedRecompile(script.Header.FileName, roomFileName)))
 				{
 					return true;
@@ -1348,12 +1433,12 @@ namespace AGS.Editor.Components
             {
                 if (!File.Exists(unloadedRoom.ScriptFileName))
                 {
-                    errors.Add(new CompileError("File not found: " + unloadedRoom.ScriptFileName + "; If you deleted this file, use the Exclude From Game option to remove it from the game."));
+                    errors.Add(new CompileError("File not found: " + unloadedRoom.ScriptFileName + "; If you deleted this file, delete the room in the Project Explorer using a context menu."));
                     success = false;
                 }
                 else if (!File.Exists(unloadedRoom.FileName))
                 {
-                    errors.Add(new CompileError("File not found: " + unloadedRoom.FileName + "; If you deleted this file, use the Exclude From Game option to remove it from the game."));
+                    errors.Add(new CompileError("File not found: " + unloadedRoom.FileName + "; If you deleted this file, delete the room from the Project Explorer using a context menu."));
                     success = false;
                 }
                 else if ((rebuildAll) ||
@@ -1371,7 +1456,9 @@ namespace AGS.Editor.Components
 				return false;
 			}
 
-			foreach (UnloadedRoom unloadedRoom in roomsToRebuild)
+            string rebuildReason = rebuildAll ? "because the full rebuild was ordered" : "because a script has changed";
+
+            foreach (UnloadedRoom unloadedRoom in roomsToRebuild)
 			{
 				Room room;
 				if ((_loadedRoom == null) || (_loadedRoom.Number != unloadedRoom.Number))
@@ -1388,15 +1475,20 @@ namespace AGS.Editor.Components
 				room.Script.SaveToDisk();
 
 				CompileMessages roomErrors = new CompileMessages();
-				SaveRoomButDoNotShowAnyErrors(room, roomErrors, "Rebuilding room " + room.Number + " because a script has changed...");
+				SaveRoomButDoNotShowAnyErrors(room, roomErrors, $"Rebuilding room {room.Number} {rebuildReason}...");
 
-				if (roomErrors.Count > 0)
+				if (roomErrors.HasErrors)
 				{
-					errors.Add(new CompileError("Failed to save room " + room.FileName + "; details below"));
-					errors.Add(roomErrors[0]);
+					errors.Add(new CompileError($"Failed to save room {room.FileName}; details below"));
+					errors.AddRange(roomErrors);
 					success = false;
 					break;
 				}
+                else if (roomErrors.Count > 0)
+                {
+                    errors.Add(new CompileWarning($"Room {room.FileName} was saved, but there were warnings; details below"));
+                    errors.AddRange(roomErrors);
+                }
 			}
 
             return success;
@@ -1524,7 +1616,7 @@ namespace AGS.Editor.Components
 			}
 
 			ProjectTree treeController = _guiController.ProjectTree;
-			ProjectTreeItem treeItem = treeController.AddTreeBranch(this, TREE_PREFIX_ROOM_NODE + room.Number, room.Number.ToString() + ": " + room.Description, iconName);
+			ProjectTreeItem treeItem = treeController.AddTreeBranch(this, GetItemNodeID(room), GetItemNodeLabel(room), iconName);
 			treeController.AddTreeLeaf(this, TREE_PREFIX_ROOM_SETTINGS + room.Number, "Edit room", iconName);
             treeController.AddTreeLeaf(this, TREE_PREFIX_ROOM_SCRIPT + room.Number, "Room script", SCRIPT_ICON);
             return treeItem;
@@ -1609,6 +1701,146 @@ namespace AGS.Editor.Components
         protected override IList<IRoom> GetFlatList()
         {
             return null;
+        }
+
+        private string GetItemNodeID(IRoom room)
+        {
+            return TREE_PREFIX_ROOM_NODE + room.Number;
+        }
+
+        private string GetItemNodeLabel(IRoom room)
+        {
+            return room.Number.ToString() + ": " + room.Description;
+        }
+
+        /// <summary>
+        /// Helper class for use when scanning for event handlers
+        /// </summary>
+        private class RoomObjectWithEvents
+        {
+            public Room Room;
+            // TODO: add parent class to room objects (and maybe game objects in general)
+            // with overridden properties like "ScriptName", "ID" and "DisplayName",
+            // this will allow to get these basic values without casting to explicit types.
+            public RoomObject Object;
+            public RoomHotspot Hotspot;
+            public RoomRegion Region;
+
+            public RoomObjectWithEvents(Room room) { Room = room; }
+            public RoomObjectWithEvents(RoomObject roomObject) { Object = roomObject; }
+            public RoomObjectWithEvents(RoomHotspot roomObject) { Hotspot = roomObject; }
+            public RoomObjectWithEvents(RoomRegion roomObject) { Region = roomObject; }
+        }
+
+        private class RoomEventReference
+        {
+            public RoomObjectWithEvents RoomObject;
+            public string TypeName;
+            public int ID;
+            public string ObjName;
+            public string EventName;
+            public string FunctionName;
+
+            public RoomEventReference(RoomObjectWithEvents obj, string evtName, string fnName)
+            {
+                RoomObject = obj;
+                EventName = evtName;
+                FunctionName = fnName;
+
+                if (RoomObject.Room != null)
+                {
+                    ObjName = "Room";
+                }
+                else if (RoomObject.Object != null)
+                {
+                    TypeName = "Object";
+                    ID = RoomObject.Object.ID;
+                    ObjName = RoomObject.Object.Name;
+                }
+                else if (RoomObject.Hotspot != null)
+                {
+                    TypeName = "Hotspot";
+                    ID = RoomObject.Hotspot.ID;
+                    ObjName = RoomObject.Hotspot.Name;
+                }
+                else if (RoomObject.Region != null)
+                {
+                    TypeName = "Region";
+                    ID = RoomObject.Region.ID;
+                    ObjName = $"Region{RoomObject.Region.ID}";
+                }
+            }
+        }
+
+        private void ScanAndReportMissingInteractionHandlers(Room room, CompileMessages errors)
+        {
+            // Gather function names from the Room and all of their contents,
+            // in order to check missing functions in a single batch.
+            List<RoomEventReference> objectEvents = new List<RoomEventReference>();
+            objectEvents.AddRange(
+                room.Interactions.ScriptFunctionNames.Select((fn, i) =>
+                   new RoomEventReference(new RoomObjectWithEvents(room), room.Interactions.FunctionSuffixes[i], room.Interactions.ScriptFunctionNames[i])));
+
+            foreach (var obj in room.Objects)
+            {
+                var objWithEvents = new RoomObjectWithEvents(obj);
+                objectEvents.AddRange(
+                    obj.Interactions.ScriptFunctionNames.Select((fn, i) =>
+                        new RoomEventReference(objWithEvents, obj.Interactions.FunctionSuffixes[i], obj.Interactions.ScriptFunctionNames[i])));
+            }
+            foreach (var hot in room.Hotspots)
+            {
+                var objWithEvents = new RoomObjectWithEvents(hot);
+                objectEvents.AddRange(
+                    hot.Interactions.ScriptFunctionNames.Select((fn, i) =>
+                        new RoomEventReference(objWithEvents, hot.Interactions.FunctionSuffixes[i], hot.Interactions.ScriptFunctionNames[i])));
+            }
+            foreach (var reg in room.Regions)
+            {
+                var objWithEvents = new RoomObjectWithEvents(reg);
+                objectEvents.AddRange(
+                    reg.Interactions.ScriptFunctionNames.Select((fn, i) =>
+                        new RoomEventReference(objWithEvents, reg.Interactions.FunctionSuffixes[i], reg.Interactions.ScriptFunctionNames[i])));
+            }
+
+            var functionNames = objectEvents.Select(evt => !string.IsNullOrEmpty(evt.FunctionName) ? evt.FunctionName : $"{evt.ObjName}_{evt.EventName}");
+            var funcs = _agsEditor.Tasks.FindEventHandlers(room.Script.FileName, room.Script.AutoCompleteData, functionNames.ToArray());
+            if (funcs == null || funcs.Length == 0)
+                return;
+
+            for (int i = 0; i < funcs.Length; ++i)
+            {
+                RoomEventReference evtRef = objectEvents[i];
+                RoomObjectWithEvents roomObject = evtRef.RoomObject;
+                bool has_interaction = !string.IsNullOrEmpty(evtRef.FunctionName);
+                bool has_function = funcs[i].HasValue;
+                // If we have an assigned interaction function, but the function is not found - report a missing warning
+                if (has_interaction && !has_function)
+                {
+                    if (roomObject.Room != null)
+                    {
+                        errors.Add(new CompileWarning($"Room {room.Number}'s event {evtRef.EventName} function \"{evtRef.FunctionName}\" not found in script {room.ScriptFileName}."));
+                    }
+                    else
+                    {
+                        errors.Add(new CompileWarning($"Room {room.Number}: {evtRef.TypeName} ({evtRef.ID}) {evtRef.ObjName}'s event {evtRef.EventName} function \"{evtRef.FunctionName}\" not found in script {room.ScriptFileName}."));
+                    }
+                }
+                // If we don't have an assignment, but has a similar function - report a possible unlinked function
+                else if (!has_interaction && has_function)
+                {
+                    if (roomObject.Room != null)
+                    {
+                        errors.Add(new CompileWarningWithFunction($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on Room {room.Number}'s Event pane",
+                            funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                    }
+                    else
+                    {
+                        errors.Add(new CompileWarningWithFunction($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on {evtRef.TypeName} ({evtRef.ID}) {evtRef.ObjName}'s Event pane",
+                            funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                    }
+                }
+            }
         }
     }
 }

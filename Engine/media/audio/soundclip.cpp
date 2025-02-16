@@ -2,25 +2,26 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
+#include <cmath>
 #include "media/audio/soundclip.h"
 #include "media/audio/audio_core.h"
 
-SOUNDCLIP::SOUNDCLIP(int slot)
+SoundClip::SoundClip(int slot, int snd_type, bool loop)
     : slot_(slot)
+    , soundType(snd_type)
+    , repeat(loop)
 {
     sourceClipID = -1;
     sourceClipType = 0;
-    soundType = 0;
-    repeat = false;
     priority = 50;
     vol255 = 0;
     vol100 = 0;
@@ -33,21 +34,22 @@ SOUNDCLIP::SOUNDCLIP(int slot)
     panning = 0;
     speed = 1000;
 
-    lengthMs = 0;
     state = PlaybackState::PlayStateInitial;
     pos = posMs = -1;
     paramsChanged = true;
 
-    freq = audio_core_slot_get_freq(slot_);
+    const auto player = audio_core_get_player(slot);
+    lengthMs = (int)std::round(player->GetDurationMs());
+    freq = player->GetFrequency();
 }
 
-SOUNDCLIP::~SOUNDCLIP()
+SoundClip::~SoundClip()
 {
     if (slot_ >= 0)
         audio_core_slot_stop(slot_);
 }
 
-int SOUNDCLIP::play()
+int SoundClip::play()
 {
     if (!is_ready())
         return false;
@@ -55,21 +57,23 @@ int SOUNDCLIP::play()
     return true;
 }
 
-void SOUNDCLIP::pause()
+void SoundClip::pause()
 {
     if (!is_ready())
         return;
-    state = audio_core_slot_pause(slot_);
+    auto player = audio_core_get_player(slot_);
+    player->Pause();
+    state = player->GetPlayStateNormal();
 }
 
-void SOUNDCLIP::resume()
+void SoundClip::resume()
 {
     if (!is_ready())
         return;
     state = PlaybackState::PlayStatePlaying;
 }
 
-int SOUNDCLIP::posms_to_pos(int pos_ms)
+int SoundClip::posms_to_pos(int pos_ms)
 {
     switch (soundType)
     {
@@ -83,44 +87,45 @@ int SOUNDCLIP::posms_to_pos(int pos_ms)
     }
 }
 
-int SOUNDCLIP::pos_to_posms(int pos)
+int SoundClip::pos_to_posms(int pos_)
 {
     switch (soundType)
     {
     case MUS_WAVE: // Pos is in samples
-        return static_cast<int>((static_cast<int64_t>(pos) * 1000) / freq);
+        return static_cast<int>((static_cast<int64_t>(pos_) * 1000) / freq);
     case MUS_MIDI: /* TODO: reimplement */
     case MUS_MOD:  /* TODO: reimplement */
         return 0;  /* better say that it does not work than return wrong value */
     default:
-        return pos;
+        return pos_;
     }
 }
 
-void SOUNDCLIP::seek(int pos)
+void SoundClip::seek(int pos_)
 {
     // TODO: we probably would need a separate implementation eventually
-    seek_ms(pos_to_posms(pos));
+    seek_ms(pos_to_posms(pos_));
 }
 
-void SOUNDCLIP::seek_ms(int pos_ms)
+void SoundClip::seek_ms(int pos_ms)
 {
     if (slot_ < 0) { return; }
-    audio_core_slot_pause(slot_);
+    auto player = audio_core_get_player(slot_);
+    player->Pause();
     // TODO: for backward compatibility and MOD/XM music support
     // need to reimplement seeking to a position which units
     // are defined according to the sound type
-    audio_core_slot_seek_ms(slot_, (float)pos_ms);
-    float posms_f;
-    audio_core_slot_get_play_state(slot_, posms_f);
+    player->Seek((float)pos_ms);
+    float posms_f = player->GetPositionMs();
     posMs = static_cast<int>(posms_f);
     pos = posms_to_pos(posMs);
 }
 
-bool SOUNDCLIP::update()
+bool SoundClip::update()
 {
     if (!is_ready()) return false;
 
+    auto player = audio_core_get_player(slot_);
     if (paramsChanged)
     {
         auto vol_f = static_cast<float>(get_final_volume()) / 255.0f;
@@ -135,12 +140,14 @@ bool SOUNDCLIP::update()
         if (panning_f < -1.0f) { panning_f = -1.0f; }
         if (panning_f > 1.0f) { panning_f = 1.0f; }
 
-        audio_core_slot_configure(slot_, vol_f, speed_f, panning_f);
+        player->SetVolume(vol_f);
+        player->SetSpeed(speed_f);
+        player->SetPanning(panning_f);
         paramsChanged = false;
     }
 
-    float posms_f;
-    PlaybackState core_state = audio_core_slot_get_play_state(slot_, posms_f);
+    PlaybackState core_state = player->GetPlayStateNormal();
+    float posms_f = player->GetPositionMs();
     posMs = static_cast<int>(posms_f);
     pos = posms_to_pos(posMs);
     if (state == core_state || IsPlaybackDone(core_state))
@@ -152,7 +159,8 @@ bool SOUNDCLIP::update()
     switch (state)
     {
     case PlaybackState::PlayStatePlaying:
-        state = audio_core_slot_play(slot_);
+        player->Play();
+        state = player->GetPlayStateNormal();
         break;
     default: /* do nothing */
         break;

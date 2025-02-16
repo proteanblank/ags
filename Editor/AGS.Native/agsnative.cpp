@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include <stdio.h>
 void ThrowManagedException(const char *message);
 #pragma unmanaged
@@ -10,10 +23,14 @@ extern "C" bool Scintilla_RegisterClasses(void *hInstance);
 #undef CreateFile
 #undef DeleteFile
 #include "util/wgt2allg.h"
-#include "ac/spritecache.h"
 #include "ac/actiontype.h"
-#include "ac/scriptmodule.h"
+#include "ac/common.h"
+#include "ac/dialogtopic.h"
 #include "ac/gamesetupstruct.h"
+#include "ac/scriptmodule.h"
+#include "ac/spritecache.h"
+#include "ac/view.h"
+#include "font/agsfontrenderer.h"
 #include "font/fonts.h"
 #include "game/main_game_file.h"
 #include "game/plugininfo.h"
@@ -29,7 +46,6 @@ extern "C" bool Scintilla_RegisterClasses(void *hInstance);
 #include "util/compress.h"
 #include "util/string_types.h"
 #include "util/string_utils.h"    // fputstring, etc
-#include "util/alignedstream.h"
 #include "util/directory.h"
 #include "util/filestream.h"
 #include "util/path.h"
@@ -39,19 +55,23 @@ extern "C" bool Scintilla_RegisterClasses(void *hInstance);
 
 using AGS::Types::AGSEditorException;
 
-using AGS::Common::AlignedStream;
 using AGS::Common::Stream;
 using AGS::Common::AssetLibInfo;
 using AGS::Common::AssetManager;
-using AGS::Common::AssetMgr;
 namespace AGSProps = AGS::Common::Properties;
 namespace BitmapHelper = AGS::Common::BitmapHelper;
 using AGS::Common::GUIMain;
+using AGS::Common::GUIButton;
+using AGS::Common::GUIInvWindow;
+using AGS::Common::GUILabel;
+using AGS::Common::GUIListBox;
+using AGS::Common::GUISlider;
+using AGS::Common::GUITextBox;
 using AGS::Common::RoomStruct;
-using AGS::Common::PInteractionScripts;
 using AGS::Common::Interaction;
 using AGS::Common::InteractionCommand;
 using AGS::Common::InteractionCommandList;
+using AGS::Common::InteractionEvents;
 typedef AGS::Common::String AGSString;
 namespace AGSDirectory = AGS::Common::Directory;
 namespace AGSFile = AGS::Common::File;
@@ -67,8 +87,9 @@ typedef AGS::Common::HError HAGSError;
 void save_room_file(RoomStruct &rs, const AGSString &path);
 
 AGSBitmap *initialize_sprite(AGS::Common::sprkey_t, AGSBitmap*, uint32_t &sprite_flags);
-void pre_save_sprite(AGSBitmap*);
 
+
+std::unique_ptr<AssetManager> AssetMgr;
 int mousex = 0, mousey = 0;
 int antiAliasFonts = 0;
 int dsc_want_hires = 0;
@@ -79,7 +100,7 @@ AGS::Common::SpriteCache::Callbacks spritecallbacks = {
     nullptr,
     initialize_sprite,
     nullptr,
-    pre_save_sprite
+    nullptr
 };
 AGS::Common::SpriteCache spriteset(thisgame.SpriteInfos, spritecallbacks);
 GUIMain tempgui; // for drawing a GUI preview
@@ -89,6 +110,9 @@ const char *old_editor_data_file = "editor.dat";
 const char *new_editor_data_file = "game.agf";
 const char *old_editor_main_game_file = "ac2game.dta";
 const char *TEMPLATE_LOCK_FILE = "template.dta";
+const char *TEMPLATE_ICON_FILE = "template.ico";
+const char *GAME_ICON_FILE = "user.ico";
+const char *TEMPLATE_DESC_FILE = "template.txt";
 const char *ROOM_TEMPLATE_ID_FILE = "rtemplate.dat";
 const int ROOM_TEMPLATE_ID_FILE_SIGNATURE = 0x74673812;
 bool spritesModified = false;
@@ -101,8 +125,14 @@ AGS::Common::Version game_compiled_version;
 int numScriptModules = 0;
 std::vector<ScriptModule> scModules;
 std::vector<DialogTopic> dialog;
-std::vector<Common::String> dlgscript;
+std::vector<AGSString> dlgscript;
 std::vector<GUIMain> guis;
+std::vector<GUIButton> guibuts;
+std::vector<GUIInvWindow> guiinv;
+std::vector<GUILabel> guilabels;
+std::vector<GUIListBox> guilist;
+std::vector<GUISlider> guislider;
+std::vector<GUITextBox> guitext;
 std::vector<ViewStruct> newViews;
 
 // A reference color depth, for correct color selection;
@@ -120,9 +150,20 @@ struct NativeRoomTools
 };
 std::unique_ptr<NativeRoomTools> RoomTools;
 
+struct NativeDrawState
+{
+    std::unique_ptr<AGSBitmap> guiSurf32;
+    std::unique_ptr<AGSBitmap> guiCtrl32;
+    std::unique_ptr<AGSBitmap> guiMainBmp;
+    std::unique_ptr<AGSBitmap> guiCtrlBmp;
+};
+std::unique_ptr<NativeDrawState> NDrawState;
 
+
+HAGSError reset_sprite_file();
+HAGSError reset_sprite_file(const AGSString &spritefile, const AGSString &indexfile);
 bool reload_font(int curFont);
-void drawBlockScaledAt(int hdc, Common::Bitmap *todraw ,int x, int y, float scaleFactor);
+void drawBlockScaledAt(HDC hdc, Common::Bitmap *todraw ,int x, int y, float scaleFactor);
 // this is to shut up the linker, it's used by CSRUN.CPP
 void write_log(const char *) { }
 SysBitmap^ ConvertBlockToBitmap(Common::Bitmap *todraw, bool useAlphaChannel);
@@ -137,47 +178,9 @@ int get_fixed_pixel_size(int coord)
 	return coord * thisgame.GetDataUpscaleMult();
 }
 
-// jibbles the sprite around to fix hi-color problems, by swapping
-// the red and blue elements
-// TODO: find out if this is actually needed. I guess this may have something to do
-// with Allegro keeping 16-bit bitmaps in an unusual format internally.
-void fix_block (Common::Bitmap *todraw) {
-  int a,b,pixval;
-  if (todraw == NULL)
-    return;
-  // TODO: redo this using direct bitmap data access for the sake of speed
-  if (todraw->GetColorDepth() == 16) {
-    for (a = 0; a < todraw->GetWidth(); a++) {
-      for (b = 0; b < todraw->GetHeight(); b++) {
-        pixval = todraw->GetPixel (a, b);
-        todraw->PutPixel (a, b, makecol16 (getb16(pixval),getg16(pixval),getr16(pixval)));
-      }
-    }
-  }
-  else if (todraw->GetColorDepth() == 32) {
-    for (a = 0; a < todraw->GetWidth(); a++) {
-      for (b = 0; b < todraw->GetHeight(); b++) {
-        pixval = todraw->GetPixel (a, b);
-        todraw->PutPixel (a, b, makeacol32 (getb32(pixval),getg32(pixval),getr32(pixval), geta32(pixval)));
-      }
-    }
-  }
-}
-
 AGSBitmap *initialize_sprite(AGS::Common::sprkey_t /*index*/, AGSBitmap *image, uint32_t &/*sprite_flags*/)
 {
-    fix_block(image);
     return image;
-}
-
-void pre_save_sprite(AGSBitmap *image)
-{
-    // NOTE: this is a nasty hack:
-    // because Editor expects slightly different RGB order, it swaps colors
-    // when loading them (call to initialize_sprite), so here we basically
-    // unfix that fix to save the data in a way that engine will expect.
-    // TODO: perhaps adjust the editor to NOT need this?!
-    fix_block(image);
 }
 
 // Safely gets a sprite, if the sprite does not exist then returns a placeholder (sprite 0)
@@ -195,11 +198,6 @@ void SetNewSprite(int slot, AGSBitmap *sprit, int flags) {
 void deleteSprite (int sprslot) {
   spriteset.DisposeSprite(sprslot);
   spritesModified = true;
-}
-
-int GetSpriteAsHBitmap(int slot) {
-  // FIXME later
-  return (int)convert_bitmap_to_hbitmap(get_sprite(slot)->GetAllegroBitmap());
 }
 
 bool DoesSpriteExist(int slot) {
@@ -266,17 +264,17 @@ void change_sprite_number(int oldNumber, int newNumber) {
   spritesModified = true;
 }
 
-int crop_sprite_edges(int numSprites, int *sprites, bool symmetric) {
+int crop_sprite_edges(const std::vector<int> &sprites, bool symmetric, Rect *crop_rect) {
   // this function has passed in a list of sprites, all the
   // same size, to crop to the size of the smallest
-  int aa, xx, yy;
+  int xx, yy;
   int width = spriteset[sprites[0]]->GetWidth();
   int height = spriteset[sprites[0]]->GetHeight();
   int left = width, right = 0;
   int top = height, bottom = 0;
 
-  for (aa = 0; aa < numSprites; aa++) {
-    Common::Bitmap *sprit = get_sprite(sprites[aa]);
+  for (const int sprnum : sprites) {
+    AGSBitmap *sprit = get_sprite(sprnum);
     int maskcol = sprit->GetMaskColor();
 
     // find the left hand side
@@ -339,8 +337,11 @@ int crop_sprite_edges(int numSprites, int *sprites, bool symmetric) {
   }
   int newWidth = (right - left) + 1;
   int newHeight = (bottom - top) + 1;
+  if (crop_rect)
+    *crop_rect = Rect(left, top, right, bottom);
 
-  if ((newWidth == width) && (newHeight == height)) {
+  if ((newWidth == width) && (newHeight == height))
+  {
     // no change in size
     return 0;
   }
@@ -351,13 +352,13 @@ int crop_sprite_edges(int numSprites, int *sprites, bool symmetric) {
 	  return 0;
   }
 
-  for (aa = 0; aa < numSprites; aa++) {
-    AGSBitmap *sprit = get_sprite(sprites[aa]);
+  for (const int sprnum : sprites) {
+    AGSBitmap *sprit = get_sprite(sprnum);
     // create a new, smaller sprite and copy across
 	std::unique_ptr<AGSBitmap> newsprit(new AGSBitmap(newWidth, newHeight, sprit->GetColorDepth()));
     newsprit->Blit(sprit, left, top, 0, 0, newWidth, newHeight);
     // set new image and keep old flags
-    spriteset.SetSprite(sprites[aa], std::move(newsprit), thisgame.SpriteInfos[aa].Flags);
+    spriteset.SetSprite(sprnum, std::move(newsprit), thisgame.SpriteInfos[sprnum].Flags);
   }
 
   spritesModified = true;
@@ -365,155 +366,127 @@ int crop_sprite_edges(int numSprites, int *sprites, bool symmetric) {
   return 1;
 }
 
+HAGSError extract_template_files_impl(const AGSString &templateFileName, const std::vector<AGSString> &check_list,
+    const AGSString &check_list_error,
+    const std::vector<AGSString> &exclude_list, const AGSString &asset_output_format)
+{
+    const AssetLibInfo *lib = nullptr;
+    std::unique_ptr<AssetManager> templateMgr(new AssetManager());
+    auto err = templateMgr->AddLibrary(templateFileName, &lib);
+    if (err != Common::kAssetNoError) 
+        return new AGSError("Failed to read the template file.", Common::GetAssetErrorText(err));
+
+    // If check_list is provided, then the package must include at least one of the files
+    if (!check_list.empty())
+    {
+        bool at_least_one_check = false;
+        for (auto check = check_list.begin();
+            !at_least_one_check && (check < check_list.end()); ++check)
+        {
+            at_least_one_check |= templateMgr->DoesAssetExist(*check);
+        }
+        if (!at_least_one_check)
+            return new AGSError(check_list_error);
+    }
+
+    for (const auto &asset : lib->AssetInfos)
+    {
+        const AGSString thisFile = asset.FileName;
+        if (thisFile.IsEmpty())
+            continue; // should not normally happen
+
+        // Don't extract excluded files
+        if (std::find_if(exclude_list.begin(), exclude_list.end(), AGS::Common::StrEqNoCasePred(thisFile))
+                != exclude_list.end())
+            continue;
+
+        std::unique_ptr<Stream> readin(templateMgr->OpenAsset(thisFile));
+        if (!readin)
+            return new AGSError(AGSString::FromFormat("Failed to open template asset '%s' for reading.", thisFile.GetCStr()));
+
+        AGSString outputName = thisFile;
+        // If format pattern is provided, then rename the output file
+        if (!asset_output_format.IsEmpty())
+        {
+            AGSString ext = AGSPath::GetFileExtension(thisFile);
+            outputName = AGSString::FromFormat(asset_output_format.GetCStr(), ext.GetCStr());
+        }
+
+        // Make sure to create necessary subfolders
+        AGSDirectory::CreateAllDirectories(".", AGSPath::GetDirectoryPath(outputName));
+        std::unique_ptr<Stream> wrout(AGSFile::CreateFile(outputName));
+        if (!wrout)
+            return new AGSError(AGSString::FromFormat("Failed to open file '%s' for writing.", outputName));
+
+        const soff_t src_len = readin->GetLength();
+        soff_t result = AGS::Common::CopyStream(readin.get(), wrout.get(), src_len);
+        if (result < src_len)
+            return new AGSError(AGSString::FromFormat("Failed to extract file '%s'.", thisFile.GetCStr()));
+    }
+
+    return HAGSError::None();
+}
+
 HAGSError extract_room_template_files(const AGSString &templateFileName, int newRoomNumber)
 {
-  const AssetLibInfo *lib = nullptr;
-  std::unique_ptr<AssetManager> templateMgr(new AssetManager());
-  auto err = templateMgr->AddLibrary(templateFileName, &lib);
-  if (err != Common::kAssetNoError) 
-  {
-    return new AGSError("Failed to read the template file.", Common::GetAssetErrorText(err));
-  }
-  if (!templateMgr->DoesAssetExist(ROOM_TEMPLATE_ID_FILE))
-  {
-    return new AGSError("Template file does not contain necessary metadata.");
-  }
-
-  size_t numFile = lib->AssetInfos.size();
-  for (size_t a = 0; a < numFile; a++) {
-    AGSString thisFile = lib->AssetInfos[a].FileName;
-    if (thisFile.IsEmpty())
-      continue; // should not normally happen
-
-    // don't extract the template metadata file
-    if (thisFile.CompareNoCase(ROOM_TEMPLATE_ID_FILE) == 0)
-      continue;
-
-    Stream *readin = templateMgr->OpenAsset(thisFile);
-    if (!readin)
-    {
-      return new AGSError(AGSString::FromFormat("Failed to open template asset '%s' for reading.", thisFile.GetCStr()));
-    }
-    char outputName[MAX_PATH];
-    AGSString extension = AGSPath::GetFileExtension(thisFile);
-    sprintf(outputName, "room%d.%s", newRoomNumber, extension.GetCStr());
-    Stream *wrout = AGSFile::CreateFile(outputName);
-    if (!wrout) 
-    {
-      delete readin;
-      return new AGSError(AGSString::FromFormat("Failed to open file '%s' for writing.", outputName));
-    }
-    
-    const size_t size = readin->GetLength();
-    char *membuff = new char[size];
-    readin->Read(membuff, size);
-    wrout->Write(membuff, size);
-    delete readin;
-    delete wrout;
-    delete[] membuff;
-  }
-
-  return HAGSError::None();
+  std::vector<AGSString> check_list = { ROOM_TEMPLATE_ID_FILE };
+  return extract_template_files_impl(templateFileName, check_list,
+      "Template file does not contain necessary metadata.",
+      check_list, AGSString::FromFormat("room%d.%%s", newRoomNumber));
 }
 
 HAGSError extract_template_files(const AGSString &templateFileName)
 {
-  const AssetLibInfo *lib = nullptr;
-  std::unique_ptr<AssetManager> templateMgr(new AssetManager());
-  auto err = templateMgr->AddLibrary(templateFileName, &lib);
-  if (err != Common::kAssetNoError) 
-  {
-    return new AGSError("Failed to read the template file", Common::GetAssetErrorText(err));
-  }
-  if ((!templateMgr->DoesAssetExist(old_editor_data_file)) && (!templateMgr->DoesAssetExist(new_editor_data_file)))
-  {
-    return new AGSError("Template file does not contain main project data.");
-  }
-
-  size_t numFile = lib->AssetInfos.size();
-  for (size_t a = 0; a < numFile; a++) {
-    AGSString thisFile = lib->AssetInfos[a].FileName;
-    if (thisFile.IsEmpty())
-      continue; // should not normally happen
-
-    // don't extract the dummy template lock file
-    if (thisFile.CompareNoCase(TEMPLATE_LOCK_FILE) == 0)
-      continue;
-
-    Stream *readin = templateMgr->OpenAsset(thisFile);
-    if (!readin)
-    {
-      return new AGSError(AGSString::FromFormat("Failed to open template asset '%s' for reading.", thisFile.GetCStr()));
-    }
-    // Make sure to create necessary subfolders,
-    // e.g. if it's an old template with Music & Sound folders
-    AGSDirectory::CreateAllDirectories(".", AGSPath::GetDirectoryPath(thisFile));
-    Stream *wrout = AGSFile::CreateFile(thisFile);
-    if (!wrout)
-    {
-      delete readin;
-      return new AGSError(AGSString::FromFormat("Failed to open file '%s' for writing.", thisFile.GetCStr()));
-    }
-    const size_t size = readin->GetLength();
-    char *membuff = new char[size];
-    readin->Read(membuff, size);
-    wrout->Write(membuff, size);
-    delete readin;
-    delete wrout;
-    delete[] membuff;
-  }
-
-  return HAGSError::None();
+  std::vector<AGSString> check_list = { old_editor_data_file, new_editor_data_file };
+  std::vector<AGSString> exclude_list = { TEMPLATE_LOCK_FILE };
+  return extract_template_files_impl(templateFileName, check_list,
+      "Template file does not contain main project data.",
+      exclude_list, {});
 }
 
-void extract_icon_from_template(AssetManager *templateMgr, char *iconName, char **iconDataBuffer, size_t *bufferSize)
+static bool load_asset_data(AssetManager *mgr, const char *asset_name, std::vector<char> &data, const size_t data_limit = SIZE_MAX)
 {
-  // make sure we get the icon from the file
+    std::unique_ptr<Stream> in(mgr->OpenAsset(asset_name));
+    if (!in)
+        return false;
+    const size_t data_sz = std::min(static_cast<size_t>(in->GetLength()), data_limit);
+    if (data_sz >= 0)
+    {
+        data.resize(data_sz);
+        in->Read(&data.front(), data_sz);
+    }
+    return true;
+}
+
+bool load_template_file(const AGSString &fileName, AGSString &description,
+    std::vector<char> &iconDataBuffer, bool isRoomTemplate)
+{
+  const AssetLibInfo *lib = nullptr;
+  std::unique_ptr<AssetManager> templateMgr(new AssetManager());
   templateMgr->SetSearchPriority(Common::kAssetPriorityLib);
-  Stream* inpu = templateMgr->OpenAsset (iconName);
-  const size_t sizey = inpu->GetLength();
-  if ((inpu != NULL) && (sizey > 0))
-  {
-    char *iconbuffer = (char*)malloc(sizey);
-    inpu->Read (iconbuffer, sizey);
-    delete inpu;
-    *iconDataBuffer = iconbuffer;
-    *bufferSize = sizey;
-  }
-  else
-  {
-    *iconDataBuffer = NULL;
-    *bufferSize = 0u;
-  }
-}
-
-int load_template_file(const AGSString &fileName, char **iconDataBuffer, size_t *iconDataSize, bool isRoomTemplate)
-{
-  const AssetLibInfo *lib = nullptr;
-  std::unique_ptr<AssetManager> templateMgr(new AssetManager());
   if (templateMgr->AddLibrary(fileName, &lib) == Common::kAssetNoError)
   {
     if (isRoomTemplate)
     {
       if (templateMgr->DoesAssetExist(ROOM_TEMPLATE_ID_FILE))
       {
-        Stream *inpu = templateMgr->OpenAsset(ROOM_TEMPLATE_ID_FILE);
-        if (inpu->ReadInt32() != ROOM_TEMPLATE_ID_FILE_SIGNATURE)
-        {
-          delete inpu;
-          return 0;
-        }
-        int roomNumber = inpu->ReadInt32();
-        delete inpu;
+        std::unique_ptr<Stream> in(templateMgr->OpenAsset(ROOM_TEMPLATE_ID_FILE));
+        if (!in)
+            return false;
+        if (in->ReadInt32() != ROOM_TEMPLATE_ID_FILE_SIGNATURE)
+            return false;
+        int roomNumber = in->ReadInt32();
+        in.reset();
+
         char iconName[MAX_PATH];
         sprintf(iconName, "room%d.ico", roomNumber);
         if (templateMgr->DoesAssetExist(iconName))
         {
-          extract_icon_from_template(templateMgr.get(), iconName, iconDataBuffer, iconDataSize);
+          load_asset_data(templateMgr.get(), iconName, iconDataBuffer);
         }
-        return 1;
+        return true;
       }
-      return 0;
+      return false;
     }
 	  else if ((templateMgr->DoesAssetExist(old_editor_data_file)) || (templateMgr->DoesAssetExist(new_editor_data_file)))
 	  {
@@ -523,39 +496,46 @@ int load_template_file(const AGSString &fileName, char **iconDataBuffer, size_t 
           (oriname.FindString(".ags") != -1))
       {
         // wasn't originally meant as a template
-	      return 0;
+	      return false;
       }
 
-	    Stream *inpu = templateMgr->OpenAsset(old_editor_main_game_file);
-	    if (inpu != NULL) 
+	    std::unique_ptr<Stream> in(templateMgr->OpenAsset(old_editor_main_game_file));
+	    if (in) 
 	    {
-		    inpu->Seek(30);
-		    int gameVersion = inpu->ReadInt32();
-		    delete inpu;
+		    in->Seek(30);
+		    int gameVersion = in->ReadInt32();
+			
             // TODO: check this out, in theory we still support pre-2.72 game import
-		    if (gameVersion != 32)
+		    if (gameVersion != 32) // CHECKME: why we use `!=` and not `>=` ? also what's 32?
 		    {
 			    // older than 2.72 template
-			    return 0;
+			    return false;
 		    }
+            in.reset();
 	    }
 
+        if (templateMgr->DoesAssetExist(TEMPLATE_DESC_FILE))
+        {
+            std::vector<char> desc_data;
+            load_asset_data(templateMgr.get(), TEMPLATE_DESC_FILE, desc_data);
+            description.SetString(&desc_data.front(), desc_data.size());
+        }
+
       int useIcon = 0;
-      char *iconName = "template.ico";
+      const char *iconName = TEMPLATE_ICON_FILE;
       if (!templateMgr->DoesAssetExist(iconName))
-        iconName = "user.ico";
-      // the file is a CLIB file, so let's extract the icon to display
+        iconName = GAME_ICON_FILE;
       if (templateMgr->DoesAssetExist(iconName))
       {
-        extract_icon_from_template(templateMgr.get(), iconName, iconDataBuffer, iconDataSize);
+        load_asset_data(templateMgr.get(), iconName, iconDataBuffer);
       }
-      return 1;
+      return true;
     }
   }
-  return 0;
+  return false;
 }
 
-void drawBlockDoubleAt (int hdc, Common::Bitmap *todraw ,int x, int y) {
+void drawBlockDoubleAt (HDC hdc, Common::Bitmap *todraw ,int x, int y) {
   drawBlockScaledAt (hdc, todraw, x, y, 2);
 }
 
@@ -629,13 +609,7 @@ void draw_gui_sprite(Common::Bitmap *g, bool use_alpha, int atxp, int atyp,
 
 void drawBlock (HDC hdc, Common::Bitmap *todraw, int x, int y) {
   set_palette_to_hdc (hdc, palette);
-  // FIXME later
   blit_to_hdc (todraw->GetAllegroBitmap(), hdc, 0,0,x,y,todraw->GetWidth(),todraw->GetHeight());
-}
-
-void copy_walkable_to_regions (void *roomptr) {
-    RoomStruct *theRoom = (RoomStruct*)roomptr;
-	theRoom->RegionMask->Blit(theRoom->WalkAreaMask.get(), 0, 0, 0, 0, theRoom->RegionMask->GetWidth(), theRoom->RegionMask->GetHeight());
 }
 
 int get_mask_pixel(void *roomptr, int maskType, int x, int y)
@@ -804,7 +778,7 @@ void draw_area_mask(RoomStruct *roomptr, Common::Bitmap *ds, RoomAreaMask maskTy
 	}
 }
 
-void draw_room_background(void *roomvoidptr, int hdc, int x, int y, int bgnum, float scaleFactor, int maskType, int selectedArea, int maskTransparency) 
+void draw_room_background(void *roomvoidptr, HDC hdc, int x, int y, int bgnum, float scaleFactor, int maskType, int selectedArea, int maskTransparency) 
 {
 	RoomStruct *roomptr = (RoomStruct*)roomvoidptr;
 
@@ -893,8 +867,8 @@ HAGSError import_sci_font(const AGSString &filename, int fslot)
         if (off < char_data_at)
             return new AGSError("Invalid character offset found in SCI file");
         in->Seek(off, Common::kSeekBegin);
-        int w = in->ReadByte() - 1; // CHECKME: why has +1 in file?
-        int h = in->ReadByte();
+        int w = in->ReadInt8() - 1; // CHECKME: why has +1 in file?
+        int h = in->ReadInt8();
         widths[i] = w;
         heights[i] = h;
         if ((w < 1) || (h < 1))
@@ -942,7 +916,7 @@ HAGSError import_sci_font(const AGSString &filename, int fslot)
 }
 
 
-int drawFontAt (int hdc, int fontnum, int x, int y, int width) {
+int drawFontAt (HDC hdc, int fontnum, int x, int y, int width) {
   assert(fontnum < thisgame.numfonts);
   if (fontnum >= thisgame.numfonts)
   {
@@ -962,8 +936,8 @@ int drawFontAt (int hdc, int fontnum, int x, int y, int width) {
   antiAliasFonts = thisgame.options[OPT_ANTIALIASFONTS];
 
   int char_height = thisgame.fonts[fontnum].Size * thisgame.fonts[fontnum].SizeMultiplier;
-  int grid_size   = max(10, char_height);
-  int grid_margin = max(4, grid_size / 4);
+  int grid_size   = std::max(10, char_height);
+  int grid_margin = std::max(4, grid_size / 4);
   grid_size += grid_margin * 2;
   grid_size *= blockSize;
   int first_char = 0;
@@ -972,7 +946,7 @@ int drawFontAt (int hdc, int fontnum, int x, int y, int width) {
 
   if (doubleSize > 1)
       width /= 2;
-  int chars_per_row = max(1, (width - (padding * 2)) / grid_size);
+  int chars_per_row = std::max(1, (width - (padding * 2)) / grid_size);
   int height = (num_chars / chars_per_row + 1) * grid_size + padding * 2;
 
   if (!hdc)
@@ -997,7 +971,7 @@ int drawFontAt (int hdc, int fontnum, int x, int y, int width) {
   if (doubleSize > 1) 
     drawBlockDoubleAt(hdc, tempblock, x, y);
   else
-    drawBlock((HDC)hdc, tempblock, x, y);
+    drawBlock(hdc, tempblock, x, y);
    
   delete tempblock;
   return height * doubleSize;
@@ -1020,63 +994,65 @@ void proportionalDraw (int newwid, int sprnum, int*newx, int*newy) {
   newy[0] = newsizy;
 }
 
-static void doDrawViewLoop (int hdc, int numFrames, ViewFrame *frames, int x, int y, int size, int cursel) {
-  int wtoDraw = size * numFrames;
-  
-  if ((numFrames > 0) && (frames[numFrames-1].pic == -1))
-    wtoDraw -= size;
+static void doDrawViewLoop(HDC hdc, const std::vector<::ViewFrame> &frames,
+    int x, int y, int size, const std::vector<int> &cursel)
+{
+    int wtoDraw = size * frames.size();
+    if ((frames.size() > 0) && (frames.back().pic == -1))
+        wtoDraw -= size;
 
-  Common::Bitmap *todraw = Common::BitmapHelper::CreateBitmap (wtoDraw, size, thisgame.color_depth*8);
-  todraw->Clear (todraw->GetMaskColor ());
-  int neww, newh;
-  for (int i = 0; i < numFrames; i++) {
-    // don't draw the Go-To-Next-Frame jibble
-    if (frames[i].pic == -1)
-      break;
-    // work out the dimensions to stretch to
-    proportionalDraw (size, frames[i].pic, &neww, &newh);
-    Common::Bitmap *toblt = get_sprite(frames[i].pic);
-    bool freeBlock = false;
-    if (toblt->GetColorDepth () != todraw->GetColorDepth ()) {
-      // 256-col sprite in hi-col game, we need to copy first
-      Common::Bitmap *oldBlt = toblt;
-      toblt = Common::BitmapHelper::CreateBitmap (toblt->GetWidth(), toblt->GetHeight(), todraw->GetColorDepth ());
-      toblt->Blit (oldBlt, 0, 0, 0, 0, oldBlt->GetWidth(), oldBlt->GetHeight());
-      freeBlock = true;
-    }
-    Common::Bitmap *flipped = NULL;
-    if (frames[i].flags & VFLG_FLIPSPRITE) {
-      // mirror the sprite
-      flipped = Common::BitmapHelper::CreateBitmap (toblt->GetWidth(), toblt->GetHeight(), todraw->GetColorDepth ());
-      flipped->Clear (flipped->GetMaskColor ());
-      flipped->FlipBlt(toblt, 0, 0, Common::kFlip_Horizontal);
-      if (freeBlock)
-        delete toblt;
-      toblt = flipped;
-      freeBlock = true;
-    }
-    todraw->StretchBlt(toblt, RectWH(size*i, 0, neww, newh));
-    if (freeBlock)
-      delete toblt;
-    if (i < numFrames-1) {
-      int linecol = makecol_depth(thisgame.color_depth * 8, 0, 64, 200);
-      if (thisgame.color_depth == 1)
+    std::unique_ptr<AGSBitmap> todraw(Common::BitmapHelper::CreateTransparentBitmap(wtoDraw, size, thisgame.GetColorDepth()));
+    std::unique_ptr<AGSBitmap> bmpbuf;
+
+    int linecol = makecol_depth(thisgame.GetColorDepth(), 0, 64, 200);
+    if (thisgame.GetColorDepth() == 8)
         linecol = 12;
+  
+    for (size_t i = 0; i < frames.size(); ++i)
+    {
+        // don't draw the Go-To-Next-Frame jibble
+        if (frames[i].pic == -1)
+            break;
+        // work out the dimensions to stretch to
+        int neww, newh;
+        proportionalDraw (size, frames[i].pic, &neww, &newh);
+        AGSBitmap *toblt = get_sprite(frames[i].pic);
+        if (toblt->GetColorDepth () != todraw->GetColorDepth ())
+        {
+            // Different color depth? make a copy
+            bmpbuf.reset(Common::BitmapHelper::CreateBitmap(toblt->GetWidth(), toblt->GetHeight(), todraw->GetColorDepth()));
+            bmpbuf->Blit (toblt, 0, 0, 0, 0, toblt->GetWidth(), toblt->GetHeight());
+            toblt = bmpbuf.get();
+        }
+        if (frames[i].flags & VFLG_FLIPSPRITE)
+        {
+            // Flipped bitmap? mirror the sprite
+            AGSBitmap *flipped = Common::BitmapHelper::CreateBitmap (toblt->GetWidth(), toblt->GetHeight(), todraw->GetColorDepth ());
+            flipped->Clear (flipped->GetMaskColor ());
+            flipped->FlipBlt(toblt, 0, 0, Common::kFlip_Horizontal);
+            bmpbuf.reset(flipped);
+            toblt = flipped;
+        }
+        todraw->StretchBlt(toblt, RectWH(size*i, 0, neww, newh), Common::kBitmap_Transparency);
+        bmpbuf.reset();
+        if (i < frames.size() - 1)
+        {
+            // Draw dividing line
+	        todraw->DrawLine (Line(size*(i+1) - 1, 0, size*(i+1) - 1, size-1), linecol);
+        }
+    }
 
-      // Draw dividing line
-	  todraw->DrawLine (Line(size*(i+1) - 1, 0, size*(i+1) - 1, size-1), linecol);
-    }
-    if (i == cursel) {
-      // Selected item
-      int linecol = makecol_depth(thisgame.color_depth * 8, 255, 255,255);
-      if (thisgame.color_depth == 1)
+    // Paint selection boxes over selected items
+    linecol = makecol_depth(thisgame.GetColorDepth(), 255, 255,255);
+    if (thisgame.GetColorDepth() == 8)
         linecol = 14;
-      
-      todraw->DrawRect(Rect (size * i, 0, size * (i+1) - 1, size-1), linecol);
+    for (int sel : cursel)
+    {
+        todraw->DrawRect(Rect(size * sel, 0, size * (sel+1) - 1, size-1), linecol);
     }
-  }
-  drawBlock ((HDC)hdc, todraw, x, y);
-  delete todraw;
+
+    // Paint result on the final GDI surface
+    drawBlock(hdc, todraw.get(), x, y);
 }
 
 // TODO: these functions duplicate ones in the engine, because game struct
@@ -1084,7 +1060,7 @@ static void doDrawViewLoop (int hdc, int numFrames, ViewFrame *frames, int x, in
 int ctx_data_to_game_size(int val, bool hires_ctx)
 {
     if (hires_ctx && !thisgame.IsLegacyHiRes())
-        return max(1, (val / HIRES_COORD_MULTIPLIER));
+        return std::max(1, (val / HIRES_COORD_MULTIPLIER));
     if (!hires_ctx && thisgame.IsLegacyHiRes())
         return val * HIRES_COORD_MULTIPLIER;
     return val;
@@ -1110,7 +1086,7 @@ int get_adjusted_spriteheight(int spr) {
   return ctx_data_to_game_size(retval, thisgame.SpriteInfos[spr].IsLegacyHiRes());
 }
 
-void drawBlockOfColour(int hdc, int x,int y, int width, int height, int colNum)
+void drawBlockOfColour(HDC hdc, int x,int y, int width, int height, int colNum)
 {
 	__my_setcolor(&colNum, colNum, BaseColorDepth);
   Common::Bitmap *palbmp = Common::BitmapHelper::CreateBitmap(width, height, thisgame.color_depth * 8);
@@ -1126,12 +1102,31 @@ void new_font () {
   thisgame.numfonts++;
 }
 
+void setup_color_conversions()
+{
+    // RGB shifts for Allegro's pixel data
+    _rgb_a_shift_32 = 24;
+    _rgb_r_shift_32 = 16;
+    _rgb_g_shift_32 = 8;
+    _rgb_b_shift_32 = 0;
+    _rgb_r_shift_24 = 16;
+    _rgb_g_shift_24 = 8;
+    _rgb_b_shift_24 = 0;
+    _rgb_r_shift_16 = 11;
+    _rgb_g_shift_16 = 5;
+    _rgb_b_shift_16 = 0;
+    _rgb_r_shift_15 = 10;
+    _rgb_g_shift_15 = 5;
+    _rgb_b_shift_15 = 0;
+}
+
 bool initialize_native()
 {
     // Set text encoding and init allegro
     set_uformat(U_UTF8);
     set_filename_encoding(U_UNICODE);
     install_allegro(SYSTEM_NONE, &errno, atexit);
+    setup_color_conversions();
 
     AssetMgr.reset(new AssetManager());
     AssetMgr->AddLibrary("."); // TODO: this is for search in editor program folder, but maybe don't use implicit cwd?
@@ -1140,25 +1135,26 @@ bool initialize_native()
 	thisgame.color_depth = 2;
     BaseColorDepth = 32;
 	thisgame.numfonts = 0;
-	new_font();
 
-	HAGSError err = spriteset.InitFile(sprsetname, sprindexname);
+    HAGSError err = reset_sprite_file();
 	if (!err)
 	  return false;
-	spriteset.SetMaxCacheSize(100 * 1024 * 1024);  // 100 mb cache // TODO: set this up in preferences?
 
 	if (!Scintilla_RegisterClasses (GetModuleHandle(NULL)))
       return false;
 
-	init_font_renderer();
+	init_font_renderer(AssetMgr.get());
+    new_font();
 
 	RoomTools.reset(new NativeRoomTools());
+    NDrawState.reset(new NativeDrawState());
 	return true;
 }
 
 void shutdown_native()
 {
     RoomTools.reset();
+    NDrawState.reset();
     // We must dispose all native bitmaps before shutting down the library
     thisroom.Free();
     shutdown_font_renderer();
@@ -1167,16 +1163,15 @@ void shutdown_native()
     AssetMgr.reset();
 }
 
-void drawBlockScaledAt (int hdc, Common::Bitmap *todraw ,int x, int y, float scaleFactor) {
+void drawBlockScaledAt (HDC hdc, Common::Bitmap *todraw ,int x, int y, float scaleFactor) {
   if (todraw->GetColorDepth () == 8)
-    set_palette_to_hdc ((HDC)hdc, palette);
+    set_palette_to_hdc (hdc, palette);
 
-  // FIXME later
-  stretch_blit_to_hdc (todraw->GetAllegroBitmap(), (HDC)hdc, 0,0,todraw->GetWidth(),todraw->GetHeight(),
+  stretch_blit_to_hdc (todraw->GetAllegroBitmap(), hdc, 0,0,todraw->GetWidth(),todraw->GetHeight(),
     x,y,todraw->GetWidth() * scaleFactor, todraw->GetHeight() * scaleFactor);
 }
 
-void drawSprite(int hdc, int x, int y, int spriteNum, bool flipImage) {
+void drawSprite(HDC hdc, int x, int y, int spriteNum, bool flipImage) {
 	Common::Bitmap *theSprite = get_sprite(spriteNum);
 
   if (theSprite == NULL)
@@ -1195,14 +1190,14 @@ void drawSprite(int hdc, int x, int y, int spriteNum, bool flipImage) {
 	}
 }
 
-void drawSpriteStretch(int hdc, int x, int y, int width, int height, int spriteNum, bool flipImage) {
+void drawSpriteStretch(HDC hdc, int x, int y, int width, int height, int spriteNum, bool flipImage) {
   Common::Bitmap *todraw = get_sprite(spriteNum);
   Common::Bitmap *tempBlock = NULL;
 	
   if (todraw->GetColorDepth () == 8)
-    set_palette_to_hdc ((HDC)hdc, palette);
+    set_palette_to_hdc (hdc, palette);
 
-  int hdcBpp = GetDeviceCaps((HDC)hdc, BITSPIXEL);
+  int hdcBpp = GetDeviceCaps(hdc, BITSPIXEL);
   if (hdcBpp != todraw->GetColorDepth())
   {
 	  tempBlock = Common::BitmapHelper::CreateBitmapCopy(todraw, hdcBpp);
@@ -1213,38 +1208,79 @@ void drawSpriteStretch(int hdc, int x, int y, int width, int height, int spriteN
     Common::Bitmap* flipped = Common::BitmapHelper::CreateBitmap(todraw->GetWidth(), todraw->GetHeight(), todraw->GetColorDepth());
     flipped->FillTransparent();
     flipped->FlipBlt(todraw, 0, 0, Common::kFlip_Horizontal);
-    stretch_blit_to_hdc(flipped->GetAllegroBitmap(), (HDC)hdc, 0, 0, flipped->GetWidth(), flipped->GetHeight(), x, y, width, height);
+    stretch_blit_to_hdc(flipped->GetAllegroBitmap(), hdc, 0, 0, flipped->GetWidth(), flipped->GetHeight(), x, y, width, height);
     delete flipped;
   } else {
-    // FIXME later
-    stretch_blit_to_hdc(todraw->GetAllegroBitmap(), (HDC)hdc, 0, 0, todraw->GetWidth(), todraw->GetHeight(), x, y, width, height);
+    stretch_blit_to_hdc(todraw->GetAllegroBitmap(), hdc, 0, 0, todraw->GetWidth(), todraw->GetHeight(), x, y, width, height);
   }
 
   delete tempBlock;
 }
 
-void drawGUIAt (int hdc, int x,int y,int x1,int y1,int x2,int y2, int resolutionFactor, float scale) {
+void drawGUIAt(HDC hdc, int x, int y, int x1, int y1, int x2, int y2, int resolutionFactor, float scale, int ctrl_trans)
+{
+    if ((tempgui.Width < 1) || (tempgui.Height < 1))
+        return;
 
-  if ((tempgui.Width < 1) || (tempgui.Height < 1))
-    return;
+    if (resolutionFactor == 1)
+        dsc_want_hires = 1;
 
-  if (resolutionFactor == 1) {
-    dsc_want_hires = 1;
-  }
+    // Prepare bitmaps
+    const ::Size gui_size = ::Size(tempgui.Width, tempgui.Height);
+    if (NDrawState->guiSurf32 == nullptr || (NDrawState->guiSurf32->GetSize() != gui_size))
+    {
+        NDrawState->guiSurf32.reset(new AGSBitmap(gui_size.Width, gui_size.Height, 32));
+        NDrawState->guiCtrl32.reset(new AGSBitmap(gui_size.Width, gui_size.Height, 32));
+    }
+    if (thisgame.color_depth != 4 && ((NDrawState->guiMainBmp == nullptr) || (NDrawState->guiMainBmp->GetSize() != gui_size)))
+    {
+        NDrawState->guiMainBmp.reset(new AGSBitmap(gui_size.Width, gui_size.Height, thisgame.color_depth * 8));
+        NDrawState->guiCtrlBmp.reset(new AGSBitmap(gui_size.Width, gui_size.Height, thisgame.color_depth * 8));
+    }
 
-  Common::Bitmap *tempblock = Common::BitmapHelper::CreateBitmap(tempgui.Width, tempgui.Height, thisgame.color_depth*8);
-  tempblock->Clear(tempblock->GetMaskColor ());
+    if (thisgame.color_depth == 1)
+        set_palette(palette);
 
-  tempgui.DrawWithControls(tempblock);
+    // Draw parent GUI
+    AGSBitmap *guimain_bmp = (thisgame.color_depth == 4) ? NDrawState->guiSurf32.get() : NDrawState->guiMainBmp.get();
+    guimain_bmp->ResetClip();
+    guimain_bmp->Clear(guimain_bmp->GetMaskColor());
+    tempgui.DrawSelf(guimain_bmp);
+    // Draw controls
+    AGSBitmap *guictrl_bmp = (thisgame.color_depth == 4) ? NDrawState->guiCtrl32.get() : NDrawState->guiCtrlBmp.get();
+    guictrl_bmp->ResetClip();
+    guictrl_bmp->Clear(guictrl_bmp->GetMaskColor());
+    tempgui.DrawControls(guictrl_bmp);
 
-  dsc_want_hires = 0;
+    // Merge drawn parts
+    AGSBitmap *final_gui = NDrawState->guiSurf32.get();
+    AGSBitmap *final_ctrl = NDrawState->guiCtrl32.get();
+    if (thisgame.color_depth != 4)
+    {
+        const int old_conv = get_color_conversion();
+        set_color_conversion(old_conv | COLORCONV_KEEP_TRANS);
+        final_gui->Blit(NDrawState->guiMainBmp.get());
+        final_ctrl->Blit(NDrawState->guiCtrlBmp.get());
+        set_color_conversion(old_conv);
+    }
+    if (ctrl_trans == 0)
+    {
+        final_gui->MaskedBlit(final_ctrl);
+    }
+    else if (ctrl_trans < 100)
+    {
+        set_trans_blender(0, 0, 0, AGS::Common::GfxDef::Trans100ToAlpha255(ctrl_trans));
+        final_gui->TransBlendBlt(final_ctrl);
+    }
 
-  if (x1 >= 0) {
-    tempblock->DrawRect(Rect (x1, y1, x2, y2), 14);
-  }
+    dsc_want_hires = 0;
 
-  drawBlockScaledAt(hdc, tempblock, x, y, scale);
-  delete tempblock;
+    if (x1 >= 0)
+    {
+        final_gui->DrawRect(Rect (x1, y1, x2, y2), 14);
+    }
+
+    drawBlockScaledAt(hdc, final_gui, x, y, scale);
 }
 
 #define SIMP_INDEX0  0
@@ -1327,7 +1363,6 @@ void sort_out_palette(Common::Bitmap *toimp, RGB*itspal, bool useBgSlots, int tr
     if (transcol!=0)
       itspal[transcol] = itspal[0];
     wsetrgb(0,0,0,0,itspal); // set index 0 to black
-    __wremap_keep_transparent = 1;
     RGB oldpale[256];
     for (int uu=0;uu<255;uu++) {
       if (useBgSlots)  //  use background scene palette
@@ -1351,15 +1386,37 @@ void update_abuf_coldepth() {
 
 bool reload_font(int curFont)
 {
-  return load_font_size(curFont, thisgame.fonts[curFont]);
+    return load_font_size(curFont, thisgame.fonts[curFont]);
 }
 
-HAGSError reset_sprite_file() {
-  HAGSError err = spriteset.InitFile(sprsetname, sprindexname);
-  if (!err)
-    return err;
-  spriteset.SetMaxCacheSize(100 * 1024 * 1024);  // 100 mb cache // TODO: set in preferences?
-  return HAGSError::None();
+bool measure_font_height(const AGSString &filename, int pixel_height, int &formal_height)
+{
+    FontMetrics metrics;
+    if (!load_font_metrics(filename, pixel_height, metrics))
+        return false;
+    formal_height = metrics.NominalHeight;
+    return true;
+}
+
+HAGSError reset_sprite_file()
+{
+    return reset_sprite_file(AGS::Common::SpriteFile::DefaultSpriteFileName,
+        AGS::Common::SpriteFile::DefaultSpriteIndexName);
+}
+
+HAGSError reset_sprite_file(const AGSString &spritefile, const AGSString &indexfile)
+{
+    auto sprite_file = AssetMgr->OpenAsset(spritefile);
+    if (!sprite_file)
+        return new AGSError(AGSString::FromFormat("Failed to open spriteset file '%s'.",
+            spritefile.GetCStr()));
+    auto index_file = AssetMgr->OpenAsset(indexfile);
+	HAGSError err = spriteset.InitFile(std::move(sprite_file), std::move(index_file));
+    if (!err)
+        return err;
+    // 100 mb cache // TODO: set this up in preferences?
+	spriteset.SetMaxCacheSize(100 * 1024 * 1024);
+    return HAGSError::None();
 }
 
 std::vector<Common::PluginInfo> thisgamePlugins;
@@ -1385,9 +1442,10 @@ HAGSError init_game_after_import(const AGS::Common::LoadedGameEntities &ents, Ga
             thisgamePlugins[i].Name.ClipRight(1);
     }
 
+    AGS::Common::GUIRefCollection guictrl_refs(guibuts, guiinv, guilabels, guilist, guislider, guitext);
     for (int i = 0; i < thisgame.numgui; ++i)
     {
-        HAGSError err = guis[i].RebuildArray();
+        HAGSError err = guis[i].RebuildArray(guictrl_refs);
         if (!err)
             return err;
     }
@@ -1419,7 +1477,7 @@ HAGSError load_dta_file_into_thisgame(const AGSString &filename)
     HGameFileError load_err = AGS::Common::OpenMainGameFile(filename, src);
     if (load_err)
     {
-        load_err = AGS::Common::ReadGameData(ents, src.InputStream.get(), src.DataVersion);
+        load_err = AGS::Common::ReadGameData(ents, std::move(src.InputStream), src.DataVersion);
         if (load_err)
             load_err = AGS::Common::UpdateGameData(ents, src.DataVersion);
     }
@@ -1453,16 +1511,15 @@ void free_old_game_data()
   free_script_modules();
 
   // free game struct last because it contains object counts
-  thisgame.Free();
+  thisgame = {};
 }
 
 // remap the scene, from its current palette oldpale to palette
-void remap_background (Common::Bitmap *scene, RGB *oldpale, RGB*palette, int exactPal) {
-  int a;  
+void remap_background (Common::Bitmap *scene, const RGB *oldpale, RGB*palette, int exactPal) {
 
   if (exactPal) {
     // exact palette import (for doing palette effects, don't change)
-    for (a=0;a<256;a++) 
+    for (int a=0;a<256;a++) 
     {
       if (thisgame.paluses[a] == PAL_BACKGROUND)
       {
@@ -1474,23 +1531,23 @@ void remap_background (Common::Bitmap *scene, RGB *oldpale, RGB*palette, int exa
 
   // find how many slots there are reserved for backgrounds
   int numbgslots=0;
-  for (a=0;a<256;a++) { oldpale[a].filler=0;
+  for (int a=0;a<256;a++) {
     if (thisgame.paluses[a]!=PAL_GAMEWIDE) numbgslots++;
   }
   // find which colours from the image palette are actually used
   int imgpalcnt[256],numimgclr=0;
   memset(&imgpalcnt[0],0,sizeof(int)*256);
 
-  for (a=0;a<(scene->GetWidth()) * (scene->GetHeight());a++) {
+  for (int a=0;a<(scene->GetWidth()) * (scene->GetHeight());a++) {
     imgpalcnt[scene->GetScanLine(0)[a]]++;
   }
-  for (a=0;a<256;a++) {
+  for (int a=0;a<256;a++) {
     if (imgpalcnt[a]>0) numimgclr++;
   }
   // count up the number of unique colours in the image
   int numclr=0,bb;
   RGB tpal[256];
-  for (a=0;a<256;a++) {
+  for (int a=0;a<256;a++) {
     if (thisgame.paluses[a]==PAL_BACKGROUND)
       wsetrgb(a,0,0,0,palette);  // black out the bg slots before starting
     if ((oldpale[a].r==0) & (oldpale[a].g==0) & (oldpale[a].b==0)) {
@@ -1517,7 +1574,7 @@ void remap_background (Common::Bitmap *scene, RGB *oldpale, RGB*palette, int exa
 
   // fill the background slots in the palette with the colours
   int palslt=255;  // start from end of palette and work backwards
-  for (a=0;a<numclr;a++) {
+  for (int a=0;a<numclr;a++) {
     while (thisgame.paluses[palslt]!=PAL_BACKGROUND) {
       palslt--;
       if (palslt<0) break;
@@ -1528,7 +1585,7 @@ void remap_background (Common::Bitmap *scene, RGB *oldpale, RGB*palette, int exa
     if (palslt<0) break;
   }
   // blank out the sprite colours, then remap the picture
-  for (a=0;a<256;a++) {
+  for (int a=0;a<256;a++) {
     if (thisgame.paluses[a]==PAL_GAMEWIDE) {
       tpal[a].r=0;
       tpal[a].g=0; tpal[a].b=0; 
@@ -1604,11 +1661,9 @@ const char *get_mask_name(RoomAreaMask mask)
 }
 
 AGSString load_room_file(RoomStruct &rs, const AGSString &filename) {
-
-  load_room(filename, &rs, thisgame.IsLegacyHiRes(), thisgame.SpriteInfos);
-
-  // Allocate enough memory to add extra variables
-  rs.LocalVariables.resize(MAX_GLOBAL_VARIABLES);
+  HAGSError err = LoadRoom(filename, &rs, AssetMgr.get(), thisgame.IsLegacyHiRes(), thisgame.SpriteInfos);
+  if (!err)
+      return err->FullMessage();
 
   // Update room palette with gamewide colours
   copy_global_palette_to_room_palette(rs);
@@ -1620,24 +1675,20 @@ AGSString load_room_file(RoomStruct &rs, const AGSString &filename) {
     if (spriteset[rs.Objects[i].Sprite] == NULL)
       rs.Objects[i].Sprite = 0;
   }
-  // Fix hi-color screens
-  // TODO: find out why this is necessary. Probably has something to do with
-  // Allegro switching color components at certain version update long time ago.
-  // do we need to do this in the engine too?
-  for (size_t i = 0; i < rs.BgFrameCount; ++i)
-    fix_block (rs.BgFrames[i].Graphic.get());
 
   set_palette_range(palette, 0, 255, 0);
   
-  if ((rs.BgFrames[0].Graphic->GetColorDepth () > 8) &&
+  if ((rs.BgFrames[0].Graphic->GetColorDepth() > 8) &&
       (thisgame.color_depth == 1))
-    MessageBox(NULL,"WARNING: This room is hi-color, but your game is currently 256-colour. You will not be able to use this room in this game. Also, the room background will not look right in the editor.", "Colour depth warning", MB_OK);
+  {
+      MessageBox(NULL, "WARNING: This room is hi-color, but your game is currently 256-colour. You will not be able to use this room in this game. Also, the room background will not look right in the editor.", "Colour depth warning", MB_OK);
+  }
 
   RoomTools->roomModified = false;
 
   validate_mask(rs.HotspotMask.get(), get_mask_name(kRoomAreaHotspot), MAX_ROOM_HOTSPOTS);
-  validate_mask(rs.WalkBehindMask.get(), get_mask_name(kRoomAreaWalkBehind), MAX_WALK_AREAS + 1);
-  validate_mask(rs.WalkAreaMask.get(), get_mask_name(kRoomAreaWalkable), MAX_WALK_AREAS + 1);
+  validate_mask(rs.WalkBehindMask.get(), get_mask_name(kRoomAreaWalkBehind), MAX_WALK_AREAS);
+  validate_mask(rs.WalkAreaMask.get(), get_mask_name(kRoomAreaWalkable), MAX_WALK_AREAS);
   validate_mask(rs.RegionMask.get(), get_mask_name(kRoomAreaRegion), MAX_ROOM_REGIONS);
   return AGSString();
 }
@@ -1645,14 +1696,14 @@ AGSString load_room_file(RoomStruct &rs, const AGSString &filename) {
 void calculate_walkable_areas (RoomStruct &rs) {
   int ww, thispix;
 
-  for (ww = 0; ww <= MAX_WALK_AREAS; ww++) {
+  for (ww = 0; ww < MAX_WALK_AREAS; ww++) {
     rs.WalkAreas[ww].Top = rs.Height;
     rs.WalkAreas[ww].Bottom = 0;
   }
   for (ww = 0; ww < rs.WalkAreaMask->GetWidth(); ww++) {
     for (int qq = 0; qq < rs.WalkAreaMask->GetHeight(); qq++) {
       thispix = rs.WalkAreaMask->GetPixel (ww, qq);
-      if (thispix > MAX_WALK_AREAS)
+      if (thispix >= MAX_WALK_AREAS)
         continue;
       if (rs.WalkAreas[thispix].Top > qq)
         rs.WalkAreas[thispix].Top = qq;
@@ -1672,7 +1723,7 @@ using namespace System::Collections::Generic;
 using namespace System::Drawing;
 using namespace System::Drawing::Imaging;
 using namespace System::Runtime::InteropServices;
-#include "scripting.h"
+#include "CompiledScript.h"
 
 void ThrowManagedException(const char *message) 
 {
@@ -1727,17 +1778,18 @@ void DrawSpriteToBuffer(int sprNum, int x, int y, float scale) {
 	}
 	else
 	{
-        drawBuffer->StretchBlt(imageToDraw, RectWH(x, y, drawWidth, drawHeight));
+        drawBuffer->StretchBlt(imageToDraw, RectWH(x, y, drawWidth, drawHeight), Common::kBitmap_Transparency);
 	}
 
 	if (imageToDraw != todraw)
 		delete imageToDraw;
 }
 
-void RenderBufferToHDC(int hdc) 
+void RenderBufferToHDC(HDC hdc) 
 {
     auto &drawBuffer = RoomTools->drawBuffer;
-	blit_to_hdc(drawBuffer->GetAllegroBitmap(), (HDC)hdc, 0, 0, 0, 0, drawBuffer->GetWidth(), drawBuffer->GetHeight());
+
+	blit_to_hdc(drawBuffer->GetAllegroBitmap(), hdc, 0, 0, 0, 0, drawBuffer->GetWidth(), drawBuffer->GetHeight());
 }
 
 void UpdateNativeSprites(SpriteFolder ^folder, std::vector<int> &missing)
@@ -1806,9 +1858,16 @@ void UpdateNativeSpritesToGame(Game ^game, CompileMessages ^errors)
         spritesModified = true;
         errors->Add(gcnew CompileWarning(String::Format(
             "Sprite file (acsprset.spr) contained less sprites than the game project referenced ({0} sprites were missing). "
-            "This could happen if it was not saved properly last time. Some sprites could be missing actual images. "
-            "You may try restoring them by reimporting from the source files.{1}{2}Affected sprites:{3}{4}",
-            missing.size(), Environment::NewLine, Environment::NewLine, Environment::NewLine, sprnum->ToString())));
+            "This could happen if it was not saved properly last time, or the files in your project folder got corrupted for some reason. "
+            "Some sprites could be missing actual images.{1}{2}"
+            "You may try restoring them by:{3}"
+            "    a) reimporting individual sprites from the source files,{4}"
+            "    b) File -> Restore all sprites from sources,{5}"
+            "    c) using sprite backup file \"backup_acsprset.spr\".{6}{7}"
+            "Affected sprites:{8}{9}",
+            missing.size(), Environment::NewLine, Environment::NewLine, Environment::NewLine,
+            Environment::NewLine, Environment::NewLine, Environment::NewLine, Environment::NewLine,
+            Environment::NewLine, sprnum->ToString())));
     }
 
     // Test for leftovers: when the game does NOT have a sprite ref,
@@ -1819,7 +1878,7 @@ void UpdateNativeSpritesToGame(Game ^game, CompileMessages ^errors)
         errors->Add(gcnew CompileWarning(String::Format(
             "Sprite file (acsprset.spr) contained extra data that is not referenced by the game project. "
             "This could happen if it was not saved properly last time. This leftover data will be removed completely "
-            "next time you save your project.")));
+            "next time you save your project. This should not affect your game.")));
     }
 }
 
@@ -1919,7 +1978,7 @@ void ReplaceSpriteFile(const AGSString &new_spritefile, const AGSString &new_ind
     finally
     {
         // Reset the sprite cache to whichever file was successfully saved
-        HAGSError err = spriteset.InitFile(use_spritefile, use_indexfile);
+        HAGSError err = reset_sprite_file(use_spritefile, use_indexfile);
         if (!err)
         {
             throw gcnew AGSEditorException(
@@ -2014,8 +2073,33 @@ void GameUpdated(Game ^game, bool forceUpdate) {
   }
 }
 
+void GameFontAdded(Game ^game, int fontNumber)
+{
+    thisgame.numfonts = game->Fonts->Count;
+    thisgame.fonts.resize(thisgame.numfonts);
+    for (int i = fontNumber; i < thisgame.numfonts; i++) 
+    {
+        GameFontUpdated(game, i, true);
+    }
+}
+
+void GameFontDeleted(Game ^game, int fontNumber)
+{
+    thisgame.numfonts = game->Fonts->Count;
+    thisgame.fonts.resize(thisgame.numfonts);
+    freefont(fontNumber);
+    for (int i = fontNumber; i < thisgame.numfonts; i++) 
+    {
+        GameFontUpdated(game, i, true);
+    }
+}
+
 void GameFontUpdated(Game ^game, int fontNumber, bool forceUpdate)
 {
+    assert(fontNumber >= 0 && fontNumber < thisgame.numfonts);
+    if (fontNumber < 0 || fontNumber >= thisgame.numfonts)
+        return;
+
     FontInfo &font_info = thisgame.fonts[fontNumber];
     AGS::Types::Font ^font = game->Fonts[fontNumber];
 
@@ -2052,172 +2136,271 @@ void GameFontUpdated(Game ^game, int fontNumber, bool forceUpdate)
     font->Height = get_font_surface_height(fontNumber);
 }
 
-void drawViewLoop (int hdc, ViewLoop^ loopToDraw, int x, int y, int size, int cursel)
+void drawViewLoop (HDC hdc, ViewLoop^ loopToDraw, int x, int y, int size, List<int>^ cursel)
 {
-  ::ViewFrame * frames = (::ViewFrame*)malloc(sizeof(::ViewFrame) * loopToDraw->Frames->Count);
-	for (int i = 0; i < loopToDraw->Frames->Count; i++) 
-	{
-		frames[i].pic = loopToDraw->Frames[i]->Image;
-		frames[i].flags = (loopToDraw->Frames[i]->Flipped) ? VFLG_FLIPSPRITE : 0;
-	}
-  // stretch_sprite is dodgy, retry a few times if it crashes
-  int retries = 0;
-  while (retries < 3)
-  {
-    try
+    std::vector<::ViewFrame> frames(loopToDraw->Frames->Count);
+    for (int i = 0; i < loopToDraw->Frames->Count; ++i) 
     {
-	    doDrawViewLoop(hdc, loopToDraw->Frames->Count, frames, x, y, size, cursel);
-      break;
+	    frames[i].pic = loopToDraw->Frames[i]->Image;
+	    frames[i].flags = (loopToDraw->Frames[i]->Flipped) ? VFLG_FLIPSPRITE : 0;
     }
-    catch (AccessViolationException ^)
-    {
-      retries++;
-    }
-  }
-  free(frames);
+    std::vector<int> selected(cursel->Count);
+    for (int i = 0; i < cursel->Count; ++i)
+        selected[i] = cursel[i];
+    doDrawViewLoop(hdc, frames, x, y, size, selected);
 }
 
-Common::Bitmap *CreateBlockFromBitmap(System::Drawing::Bitmap ^bmp, RGB *imgpal, bool fixColourDepth, bool keepTransparency, int *originalColDepth)
+// Forces transparency color to the palette index 0
+// This must be done, because AGS (or rather Allegro 4) hardcodes transparent color index as 0.
+static void NormalizePaletteTransparency(AGSBitmap *dst, cli::array<System::Drawing::Color> ^bmpPalette)
 {
-	int colDepth;
-	if (bmp->PixelFormat == PixelFormat::Format8bppIndexed)
-	{
-		colDepth = 8;
-	}
-	else if (bmp->PixelFormat == PixelFormat::Format16bppRgb555)
-	{
-		colDepth = 15;
-	}
-	else if (bmp->PixelFormat == PixelFormat::Format16bppRgb565)
-	{
-		colDepth = 16;
-	}
-	else if (bmp->PixelFormat == PixelFormat::Format24bppRgb)
-	{
-		colDepth = 24;
-	}
-	else if (bmp->PixelFormat == PixelFormat::Format32bppRgb)
-	{
-		colDepth = 32;
-	}
-	else if (bmp->PixelFormat == PixelFormat::Format32bppArgb)
-	{
-		colDepth = 32;
-	}
-  else if ((bmp->PixelFormat == PixelFormat::Format48bppRgb) ||
-           (bmp->PixelFormat == PixelFormat::Format64bppArgb) ||
-           (bmp->PixelFormat == PixelFormat::Format64bppPArgb))
-  {
-    throw gcnew AGSEditorException("The source image is 48-bit or 64-bit colour. AGS does not support images with a colour depth higher than 32-bit. Make sure that your paint program is set to produce 32-bit images (8-bit per channel), not 48-bit images (16-bit per channel).");
-  }
-	else
-	{
-		throw gcnew AGSEditorException(gcnew System::String("Unknown pixel format"));
-	}
-
-  if ((thisgame.color_depth == 1) && (colDepth > 8))
-  {
-    throw gcnew AGSEditorException("You cannot import a hi-colour or true-colour image into a 256-colour game.");
-  }
-
-  if (originalColDepth != NULL)
-    *originalColDepth = colDepth;
-
-  bool needToFixColourDepth = false;
-  if ((colDepth != thisgame.color_depth * 8) && (fixColourDepth))
-  {
-    needToFixColourDepth = true;
-  }
-
-	Common::Bitmap *tempsprite = Common::BitmapHelper::CreateBitmap(bmp->Width, bmp->Height, colDepth);
-    if (!tempsprite)
-        return nullptr; // out of mem?
-
-	System::Drawing::Rectangle rect(0, 0, bmp->Width, bmp->Height);
-	BitmapData ^bmpData = bmp->LockBits(rect, ImageLockMode::ReadWrite, bmp->PixelFormat);
-	unsigned char *address = (unsigned char*)bmpData->Scan0.ToPointer();
-	for (int y = 0; y < tempsprite->GetHeight(); y++) {
-	  memcpy(&tempsprite->GetScanLineForWriting(y)[0], address, bmp->Width * ((colDepth + 1) / 8));
-	  address += bmpData->Stride;
-	}
-	bmp->UnlockBits(bmpData);
-
-	if (colDepth == 8)
-	{
-		cli::array<System::Drawing::Color> ^bmpPalette = bmp->Palette->Entries;
-		for (int i = 0; i < 256; i++) {
-      if (i >= bmpPalette->Length)
-      {
-        // BMP files can have an arbitrary palette size, fill any
-        // missing colours with black
-			  imgpal[i].r = 1;
-			  imgpal[i].g = 1;
-			  imgpal[i].b = 1;
-      }
-      else
-      {
-			  imgpal[i].r = bmpPalette[i].R / 4;
-			  imgpal[i].g = bmpPalette[i].G / 4;
-			  imgpal[i].b = bmpPalette[i].B / 4;
-
-        if ((needToFixColourDepth) && (i > 0) && 
-            (imgpal[i].r == imgpal[0].r) &&
-            (imgpal[i].g == imgpal[0].g) && 
-            (imgpal[i].b == imgpal[0].b))
+    // Determine actual transparency index in the palette
+    int transparency_index = -1;
+    for (int i = 0; i < bmpPalette->Length; ++i)
+    {
+        if (bmpPalette[i].A == 0)
         {
-          // convert any (0,0,0) colours to (1,1,1) since the image
-          // is about to be converted to hi-colour; this will preserve
-          // any transparency
-          imgpal[i].r = (imgpal[0].r < 32) ? (imgpal[0].r + 1) : (imgpal[0].r - 1);
-			    imgpal[i].g = (imgpal[0].g < 32) ? (imgpal[0].g + 1) : (imgpal[0].g - 1);
-			    imgpal[i].b = (imgpal[0].b < 32) ? (imgpal[0].b + 1) : (imgpal[0].b - 1);
+            transparency_index = i;
+            break; // to avoid blank palette entries
         }
-      }
-		}
-	}
+    }
 
-	if (needToFixColourDepth)
-	{
-		Common::Bitmap *spriteAtRightDepth = Common::BitmapHelper::CreateBitmap(tempsprite->GetWidth(), tempsprite->GetHeight(), thisgame.color_depth * 8);
+    // Find out if the transparency index is actually used in the image:
+    // some BMPs seem to fill unused palette entries with zeroed ARGB.
+    if (transparency_index > 0)
+    {
+        const uint8_t *px_ptr = dst->GetDataForWriting();
+        const uint8_t *px_end = px_ptr + dst->GetDataSize();
+        bool found_transparency_index = false;
+        for (; px_ptr != px_end; ++px_ptr)
+        {
+            if (*px_ptr == static_cast<uint8_t>(transparency_index))
+            {
+                found_transparency_index = true;
+                break;
+            }
+        }
+        if (!found_transparency_index)
+            transparency_index = -1; // reset and ignore
+    }
+    
+    // Swap found transparent color index with index 0
+    if (transparency_index > 0)
+    {
+        System::Drawing::Color toswap = bmpPalette[0];
+        bmpPalette[0] = bmpPalette[transparency_index];
+        bmpPalette[transparency_index] = toswap;
+
+        uint8_t *px_ptr = dst->GetDataForWriting();
+        uint8_t *px_end = px_ptr + dst->GetDataSize();
+        for (; px_ptr != px_end; ++px_ptr)
+        {
+            if (*px_ptr == 0)
+                *px_ptr = static_cast<uint8_t>(transparency_index);
+            else if (*px_ptr == static_cast<uint8_t>(transparency_index))
+                *px_ptr = 0;
+        }
+    }
+}
+
+// Converts imported image's palette to the native AGS format
+static void ConvertPaletteToNativeFormat(AGSBitmap *dst, RGB *imgpal, cli::array<System::Drawing::Color> ^bmpPalette,
+    bool normalizeTrans)
+{
+    if (normalizeTrans)
+    {
+        NormalizePaletteTransparency(dst, bmpPalette);
+    }
+    
+    // Copy palette, fixing colors if necessary
+    for (int i = 0; i < 256; i++)
+    {
+        if (i >= bmpPalette->Length)
+        {
+            // BMP files can have an arbitrary palette size, fill any
+            // missing colours with black
+            imgpal[i].r = 0;
+            imgpal[i].g = 0;
+            imgpal[i].b = 0;
+            imgpal[i].a = 0;
+        }
+        else if (thisgame.color_depth == 1)
+        {
+            // allegro palette is 0-63
+            imgpal[i].r = bmpPalette[i].R / 4;
+            imgpal[i].g = bmpPalette[i].G / 4;
+            imgpal[i].b = bmpPalette[i].B / 4;
+            imgpal[i].a = 0; // filler
+        }
+        else
+        {
+            imgpal[i].r = bmpPalette[i].R;
+            imgpal[i].g = bmpPalette[i].G;
+            imgpal[i].b = bmpPalette[i].B;
+            imgpal[i].a = bmpPalette[i].A;
+        }
+    }
+}
+
+void Convert8BitToHiColor(const AGSBitmap *src, const RGB *imgpal, AGSBitmap *dst, bool keep_transparency);
+void Convert8BitARGBTo32(const AGSBitmap *src, const RGB *imgpal, AGSBitmap *dst);
+
+AGSBitmap *CreateBlockFromBitmap(System::Drawing::Bitmap ^bmp, RGB *imgpal, int *srcPalLen,
+    bool fixColourDepth, bool importAlpha, bool keepTransparency, int *originalColDepth)
+{
+    // We do the bitmap creation in two steps:
+    // First we unpack the pixels from the src bitmap to a buffer,
+    // which pixel format is compatible with Allegro BITMAP.
+    int src_depth, dst_depth;
+    switch (bmp->PixelFormat)
+    {
+    case PixelFormat::Format1bppIndexed:
+        src_depth = 1; dst_depth = 8; // convert 1-bit to 8-bit
+        break;
+    case PixelFormat::Format4bppIndexed:
+        src_depth = 4; dst_depth = 8; // convert 4-bit to 8-bit
+        break;
+    case PixelFormat::Format8bppIndexed:
+        src_depth = dst_depth = 8;
+        break;
+    case PixelFormat::Format16bppRgb555:
+        src_depth = dst_depth = 15; // FIXME: convert to 16-bit instead?
+        break;
+    case PixelFormat::Format16bppRgb565:
+        src_depth = dst_depth = 16;
+        break;
+    case PixelFormat::Format24bppRgb:
+        src_depth = dst_depth = 24; // FIXME: convert to 32-bit instead?
+        break;
+    case PixelFormat::Format32bppRgb:
+    case PixelFormat::Format32bppArgb:
+        src_depth = dst_depth = 32;
+        break;
+    case PixelFormat::Format48bppRgb:
+    case PixelFormat::Format64bppArgb:
+    case PixelFormat::Format64bppPArgb:
+        throw gcnew AGSEditorException("The source image is 48-bit or 64-bit colour. AGS does not support images with a colour depth higher than 32-bit. Make sure that your paint program is set to produce 32-bit images (8-bit per channel), not 48-bit images (16-bit per channel).");
+    default:
+        throw gcnew AGSEditorException(System::String::Format("Unsupported pixel format: \"{0}\"", bmp->PixelFormat.ToString()));
+    }
+
+    if ((thisgame.color_depth == 1) && (src_depth > 8))
+    {
+        throw gcnew AGSEditorException("You cannot import a hi-colour or true-colour image into a 256-colour game.");
+    }
+
+    if (srcPalLen)
+        *srcPalLen = bmp->Palette ? bmp->Palette->Entries->Length : 0;
+    if (originalColDepth)
+        *originalColDepth = src_depth;
+
+    System::Drawing::Rectangle rect(0, 0, bmp->Width, bmp->Height);
+    BitmapData ^bmpData = bmp->LockBits(rect, ImageLockMode::ReadOnly, bmp->PixelFormat);
+    const uint8_t *address = static_cast<const uint8_t*>(bmpData->Scan0.ToPointer());
+    std::unique_ptr<AGSBitmap> tempsprite(BitmapHelper::CreateBitmapFromPixels(bmp->Width, bmp->Height, dst_depth,
+        address, src_depth, bmpData->Stride));
+    bmp->UnlockBits(bmpData);
+
+    if (!tempsprite)
+    {
+        throw gcnew AGSEditorException("Failed to create bitmap of compatible color depth. Could be unsupported image format.");
+    }
+
+    if (src_depth <= 8)
+    {
+        ConvertPaletteToNativeFormat(tempsprite.get(), imgpal, bmp->Palette->Entries, true);
+    }
+
+    // Second step is to upgrade bitmap to the game's color depth, if necessary.
+    const int final_depth = thisgame.color_depth * 8;
+    const bool needToFixColourDepth = (dst_depth != final_depth) && (fixColourDepth);
+    if (needToFixColourDepth)
+    {
+        std::unique_ptr<AGSBitmap> spriteAtRightDepth(
+            Common::BitmapHelper::CreateBitmap(tempsprite->GetWidth(), tempsprite->GetHeight(), final_depth));
         if (!spriteAtRightDepth)
         {
-            delete tempsprite;
             return nullptr; // out of mem?
         }
 
-		if (colDepth == 8)
-		{
-			select_palette(imgpal);
-		}
+        if (dst_depth == 8)
+        {
+           select_palette(imgpal);
+        }
 
-		int oldColorConv = get_color_conversion();
-		if (keepTransparency)
-		{
-			set_color_conversion(oldColorConv | COLORCONV_KEEP_TRANS);
-		}
-		else
-		{
-			set_color_conversion(oldColorConv & ~COLORCONV_KEEP_TRANS);
-		}
+        int oldColorConv = get_color_conversion();
+        if (keepTransparency)
+        {
+           set_color_conversion(oldColorConv | COLORCONV_KEEP_TRANS);
+        }
+        else
+        {
+           set_color_conversion(oldColorConv & ~COLORCONV_KEEP_TRANS);
+        }
 
-		spriteAtRightDepth->Blit(tempsprite, 0, 0, 0, 0, tempsprite->GetWidth(), tempsprite->GetHeight());
+        if ((dst_depth == 8) && (final_depth > 8))
+        {
+            if (importAlpha && (final_depth == 32))
+                Convert8BitARGBTo32(tempsprite.get(), imgpal, spriteAtRightDepth.get());
+            else
+                Convert8BitToHiColor(tempsprite.get(), imgpal, spriteAtRightDepth.get(), keepTransparency);
+        }
+        else // let allegro do its own conversions
+        {
+          spriteAtRightDepth->Blit(tempsprite.get(), 0, 0, 0, 0, tempsprite->GetWidth(), tempsprite->GetHeight());
+        }
+        set_color_conversion(oldColorConv);
 
-		set_color_conversion(oldColorConv);
+        if (dst_depth == 8) 
+        {
+            unselect_palette();
+        }
+        tempsprite = std::move(spriteAtRightDepth);
+    }
 
-		if (colDepth == 8) 
-		{
-			unselect_palette();
-		}
-		delete tempsprite;
-		tempsprite = spriteAtRightDepth;
-	}
+    return tempsprite.release();
+}
 
-	if (colDepth > 8) 
-	{
-		fix_block(tempsprite);
-	}
+static void Convert8BitToHiColor(const AGSBitmap *src, const RGB *imgpal, AGSBitmap *dst, bool keep_transparency)
+{
+    const int dst_depth = dst->GetColorDepth();
+    // manually compose to use the full palette instead of allegro 0-63 restricted one
+    const int maskcolor = dst->GetMaskColor();
+    // define a safe magenta color to use to preserve opacity in colors that match maskcolor
+    const int safe_magenta = (dst_depth == 16)
+        ? makecol_depth(dst_depth, 255, 4, 255) // 16bit
+        : makecol_depth(dst_depth, 255, 1, 255); // 24-32 bit
 
-	return tempsprite;
+    for (int x = 0; x < src->GetWidth(); ++x)
+    {
+        for (int y = 0; y < src->GetHeight(); ++y)
+        {
+            const int px = src->GetPixel(x, y);
+            const RGB pal_color = imgpal[px];
+            const int color = makecol_depth(dst_depth, pal_color.r, pal_color.g, pal_color.b);
+            if (keep_transparency && px == 0)
+                dst->PutPixel(x, y, dst->GetMaskColor());
+            else if (keep_transparency && color == maskcolor) // replace magenta with close match
+                dst->PutPixel(x, y, safe_magenta);
+            else
+                dst->PutPixel(x, y, color);
+        }
+    }
+}
+
+static void Convert8BitARGBTo32(const AGSBitmap *src, const RGB *imgpal, AGSBitmap *dst)
+{
+    const int dst_depth = dst->GetColorDepth();
+    for (int x = 0; x < src->GetWidth(); ++x)
+    {
+        for (int y = 0; y < src->GetHeight(); ++y)
+        {
+            const int px = src->GetPixel(x, y);
+            const RGB pal_color = imgpal[px];
+            const int color = makeacol32(pal_color.r, pal_color.g, pal_color.b, pal_color.a);
+            dst->PutPixel(x, y, color);
+        }
+    }
 }
 
 void DeleteBackground(Room ^room, int backgroundNumber) 
@@ -2237,13 +2420,13 @@ void DeleteBackground(Room ^room, int backgroundNumber)
 void ImportBackground(Room ^room, int backgroundNumber, System::Drawing::Bitmap ^bmp, bool useExactPalette, bool sharePalette) 
 {
     RGB oldpale[256];
-	Common::Bitmap *newbg = CreateBlockFromBitmap(bmp, oldpale, true, false, NULL);
+	Common::Bitmap *newbg = CreateBlockFromBitmap(bmp, oldpale, nullptr, true, false, false, nullptr);
 	RoomStruct *theRoom = (RoomStruct*)(void*)room->_roomStructPtr;
 	theRoom->Width = room->Width;
 	theRoom->Height = room->Height;
 	bool resolutionChanged = (theRoom->GetResolutionType() != (AGS::Common::RoomResolutionType)room->Resolution);
 	theRoom->SetResolution((AGS::Common::RoomResolutionType)room->Resolution);
-    theRoom->MaskResolution = theRoom->MaskResolution;
+    theRoom->MaskResolution = room->MaskResolution;
 
 	if (newbg->GetColorDepth() == 8) 
 	{
@@ -2298,7 +2481,7 @@ void ImportBackground(Room ^room, int backgroundNumber, System::Drawing::Bitmap 
 void import_area_mask(void *roomptr, int maskType, System::Drawing::Bitmap ^bmp)
 {
     RGB oldpale[256];
-	Common::Bitmap *importedImage = CreateBlockFromBitmap(bmp, oldpale, false, false, NULL);
+	Common::Bitmap *importedImage = CreateBlockFromBitmap(bmp, oldpale, nullptr, false, false, false, nullptr);
 	Common::Bitmap *mask = ((RoomStruct*)roomptr)->GetMask((RoomAreaMask)maskType);
 
 	if (mask->GetWidth() != importedImage->GetWidth())
@@ -2314,7 +2497,7 @@ void import_area_mask(void *roomptr, int maskType, System::Drawing::Bitmap ^bmp)
 	}
 	delete importedImage;
 
-	validate_mask(mask, get_mask_name((RoomAreaMask)maskType), (maskType == kRoomAreaHotspot) ? MAX_ROOM_HOTSPOTS : (MAX_WALK_AREAS + 1));
+	validate_mask(mask, get_mask_name((RoomAreaMask)maskType), (maskType == kRoomAreaHotspot) ? MAX_ROOM_HOTSPOTS : MAX_WALK_AREAS);
 }
 
 SysBitmap ^export_area_mask(void *roomptr, int maskType)
@@ -2323,24 +2506,46 @@ SysBitmap ^export_area_mask(void *roomptr, int maskType)
     return ConvertBlockToBitmap(mask, false);
 }
 
+static bool DoesPaletteHaveAlpha(System::Drawing::Bitmap ^bm)
+{
+    if (bm->Palette == nullptr)
+        return false;
+    if ((bm->Palette->Flags & (0x1 | 0x4)) == 0)
+        return false;
+    for (int i = 0; i < bm->Palette->Entries->Length; ++i)
+        if ((bm->Palette->Entries[i].A != 0) && (bm->Palette->Entries[i].A != 255))
+            return true;
+    return false;
+}
+
+static bool DoesBitmapHaveAlpha(System::Drawing::Bitmap ^bm)
+{
+    if (System::Drawing::Bitmap::IsAlphaPixelFormat(bm->PixelFormat))
+        return true;
+
+    if (((int)bm->PixelFormat & (int)System::Drawing::Imaging::PixelFormat::Indexed) != 0)
+    {
+        return DoesPaletteHaveAlpha(bm);
+    }
+
+    return false;
+}
+
 Common::Bitmap *CreateNativeBitmap(System::Drawing::Bitmap^ bmp, int spriteImportMethod, bool remapColours,
     bool useRoomBackgroundColours, bool alphaChannel, int *out_flags)
 {
-    // If the input format does not have alpha - disable alpha channel flag
-    alphaChannel &= System::Drawing::Bitmap::IsAlphaPixelFormat(bmp->PixelFormat);
+    // Safety check: if requested alpha channel, test if bitmap contains one
+    alphaChannel = alphaChannel && (thisgame.color_depth == 4) && DoesBitmapHaveAlpha(bmp);
 
     RGB imgPalBuf[256];
     int importedColourDepth;
-    Common::Bitmap *tempsprite = CreateBlockFromBitmap(bmp, imgPalBuf, true, (spriteImportMethod != SIMP_NONE), &importedColourDepth);
+    Common::Bitmap *tempsprite = CreateBlockFromBitmap(bmp, imgPalBuf, nullptr, true,
+        alphaChannel, (spriteImportMethod != SIMP_NONE), &importedColourDepth);
 
-    if (thisgame.color_depth > 1)
+    int transcol;
+    sort_out_transparency(tempsprite, spriteImportMethod, imgPalBuf, importedColourDepth, transcol);
+    if (thisgame.color_depth == 1)
     {
-        sort_out_transparency(tempsprite, spriteImportMethod, imgPalBuf, useRoomBackgroundColours, importedColourDepth);
-    }
-    else
-    {
-        int transcol;
-        sort_out_transparency(tempsprite, spriteImportMethod, imgPalBuf, importedColourDepth, transcol);
         if (remapColours)
             sort_out_palette(tempsprite, imgPalBuf, useRoomBackgroundColours, transcol);
     }
@@ -2351,7 +2556,7 @@ Common::Bitmap *CreateNativeBitmap(System::Drawing::Bitmap^ bmp, int spriteImpor
         flags |= SPF_ALPHACHANNEL;
         if (tempsprite->GetColorDepth() == 32)
         {
-            BitmapHelper::ReplaceAlphaWithRGBMask(tempsprite);
+            BitmapHelper::ReplaceZeroAlphaWithRGBMask(tempsprite);
         }
     }
     else if (tempsprite->GetColorDepth() == 32)
@@ -2392,8 +2597,6 @@ void SetBitmapPaletteFromGlobalPalette(System::Drawing::Bitmap ^bmp)
 
 System::Drawing::Bitmap^ ConvertBlockToBitmap(Common::Bitmap *todraw, bool useAlphaChannel) 
 {
-  fix_block(todraw);
-
   PixelFormat pixFormat = PixelFormat::Format32bppRgb;
   if ((todraw->GetColorDepth() == 32) && (useAlphaChannel))
 	  pixFormat = PixelFormat::Format32bppArgb;
@@ -2420,7 +2623,6 @@ System::Drawing::Bitmap^ ConvertBlockToBitmap(Common::Bitmap *todraw, bool useAl
   if (pixFormat == PixelFormat::Format8bppIndexed)
     SetBitmapPaletteFromGlobalPalette(bmp);
 
-  fix_block(todraw);
   return bmp;
 }
 
@@ -2452,8 +2654,6 @@ System::Drawing::Bitmap^ ConvertBlockToBitmap32(Common::Bitmap *todraw, int widt
 	  delete tempBlock;
 	  tempBlock = newBlock;
   }
-
-  fix_block(tempBlock);
 
   PixelFormat pixFormat = PixelFormat::Format32bppRgb;
   if ((todraw->GetColorDepth() == 32) && (useAlphaChannel))
@@ -2497,6 +2697,10 @@ System::Drawing::Bitmap^ ConvertAreaMaskToBitmap(Common::Bitmap *mask)
 
 System::Drawing::Bitmap^ getSpriteAsBitmap(int spriteNum) {
   Common::Bitmap *todraw = get_sprite(spriteNum);
+  if (todraw == NULL)
+  {
+	  throw gcnew AGSEditorException(String::Format("getSpriteAsBitmap: Unable to find sprite {0}", spriteNum));
+  }
   return ConvertBlockToBitmap(todraw, (thisgame.SpriteInfos[spriteNum].Flags & SPF_ALPHACHANNEL) != 0);
 }
 
@@ -2510,6 +2714,12 @@ System::Drawing::Bitmap^ getSpriteAsBitmap32bit(int spriteNum, int width, int he
 }
 
 System::Drawing::Bitmap^ getBackgroundAsBitmap(Room ^room, int backgroundNumber) {
+
+  RoomStruct *roomptr = (RoomStruct*)(void*)room->_roomStructPtr;
+  return ConvertBlockToBitmap(roomptr->BgFrames[backgroundNumber].Graphic.get(), false);
+}
+
+System::Drawing::Bitmap^ getBackgroundAsBitmap32(Room ^room, int backgroundNumber) {
 
   RoomStruct *roomptr = (RoomStruct*)(void*)room->_roomStructPtr;
   return ConvertBlockToBitmap32(roomptr->BgFrames[backgroundNumber].Graphic.get(), room->Width, room->Height, false);
@@ -2591,11 +2801,14 @@ void ConvertGUIToBinaryFormat(GUI ^guiObj, GUIMain *gui)
           Common::GUIButton nbut;
           nbut.TextColor = button->TextColor;
           nbut.Font = button->Font;
-          nbut.Image = button->Image;
-          nbut.CurrentImage = nbut.Image;
-          nbut.MouseOverImage = button->MouseoverImage;
-          nbut.PushedImage = button->PushedImage;
+          nbut.SetNormalImage(button->Image);
+          nbut.SetCurrentImage(button->Image);
+          nbut.SetMouseOverImage(button->MouseoverImage);
+          nbut.SetPushedImage(button->PushedImage);
           nbut.TextAlignment = (::FrameAlignment)button->TextAlignment;
+          nbut.TextPaddingHor = button->TextPaddingHorizontal;
+          nbut.TextPaddingVer = button->TextPaddingVertical;
+          nbut.SetWrapText(button->WrapText);
           nbut.ClickAction[Common::kGUIClickLeft] = (Common::GUIClickAction)button->ClickAction;
           nbut.ClickData[Common::kGUIClickLeft] = button->NewModeNumber;
           nbut.SetClipImage(button->ClipImage);
@@ -2610,7 +2823,7 @@ void ConvertGUIToBinaryFormat(GUI ^guiObj, GUIMain *gui)
           Common::GUILabel nlabel;
           nlabel.TextColor = label->TextColor;
           nlabel.Font = label->Font;
-          nlabel.TextAlignment = (::HorAlignment)label->TextAlignment;
+          nlabel.TextAlignment = (::FrameAlignment)label->TextAlignment;
           Common::String text = tcv->ConvertTextProperty(label->Text);
           nlabel.SetText(text);
           guilabels.push_back(nlabel);
@@ -2671,8 +2884,8 @@ void ConvertGUIToBinaryFormat(GUI ^guiObj, GUIMain *gui)
 	  else if (textwindowedge)
 	  {
           Common::GUIButton nbut;
-          nbut.Image = textwindowedge->Image;
-          nbut.CurrentImage = nbut.Image;
+          nbut.SetNormalImage(textwindowedge->Image);
+          nbut.SetCurrentImage(textwindowedge->Image);
           guibuts.push_back(nbut);
 		  
           gui->AddControl(Common::kGUIButton, guibuts.size() - 1, &guibuts.back());
@@ -2681,24 +2894,26 @@ void ConvertGUIToBinaryFormat(GUI ^guiObj, GUIMain *gui)
       Common::GUIObject *newObj = gui->GetControl(gui->GetControlCount() - 1);
 	  newObj->X = control->Left;
 	  newObj->Y = control->Top;
-	  newObj->Width = control->Width;
-	  newObj->Height = control->Height;
+	  newObj->SetSize(control->Width, control->Height);
 	  newObj->Id = control->ID;
 	  newObj->ZOrder = control->ZOrder;
       newObj->Name = TextHelper::ConvertASCII(control->Name);
   }
 
-  gui->RebuildArray();
-  gui->ResortZOrder();
+  AGS::Common::GUIRefCollection guictrl_refs(guibuts, guiinv, guilabels, guilist, guislider, guitext);
+  gui->RebuildArray(guictrl_refs);
 }
 
-void drawGUI(int hdc, int x,int y, GUI^ guiObj, int resolutionFactor, float scale, int selectedControl) {
+void drawGUI(HDC hdc, int x, int y, GUI^ guiObj, int resolutionFactor, float scale, int ctrl_trans, int selectedControl) {
   guibuts.clear();
   guilabels.clear();
   guitext.clear();
   guilist.clear();
   guislider.clear();
   guiinv.clear();
+
+  // Setup GuiContext
+  AGS::Common::GUI::Context.Spriteset = &spriteset;
 
   ConvertGUIToBinaryFormat(guiObj, &tempgui);
   // Add dummy items to all listboxes, let user preview the fonts
@@ -2710,7 +2925,7 @@ void drawGUI(int hdc, int x,int y, GUI^ guiObj, int resolutionFactor, float scal
 
   tempgui.HighlightCtrl = selectedControl;
 
-  drawGUIAt(hdc, x, y, -1, -1, -1, -1, resolutionFactor, scale);
+  drawGUIAt(hdc, x, y, -1, -1, -1, -1, resolutionFactor, scale, ctrl_trans);
 }
 
 Dictionary<int, Sprite^>^ load_sprite_dimensions()
@@ -2994,20 +3209,20 @@ void ConvertInteractionCommandList(System::Text::StringBuilder^ sb, InteractionC
 	}
 }
 
-void CopyInteractions(AGS::Types::Interactions ^destination, AGS::Common::InteractionScripts *source)
+void CopyInteractions(AGS::Types::Interactions ^destination, const AGS::Common::InteractionEvents *source)
 {
-    size_t evt_count = min(source->ScriptFuncNames.size(), (size_t)destination->ScriptFunctionNames->Length);
+    destination->ScriptModule = TextHelper::ConvertASCII(source->ScriptModule);
+    size_t evt_count = std::min(source->Events.size(), (size_t)destination->ScriptFunctionNames->Length);
     // TODO: add a warning? if warning list would be passed in here
-
 	for (size_t i = 0; i < evt_count; i++) 
 	{
-		destination->ScriptFunctionNames[i] = TextHelper::ConvertASCII(source->ScriptFuncNames[i]);
+		destination->ScriptFunctionNames[i] = TextHelper::ConvertASCII(source->Events[i].FunctionName);
 	}
 }
 
 void ConvertInteractions(AGS::Types::Interactions ^interactions, Interaction *intr, String^ scriptFuncPrefix, AGS::Types::Game ^game, int targetTypeForUnhandledEvent)
 {
-    size_t evt_count = min(intr->Events.size(), (size_t)interactions->ScriptFunctionNames->Length);
+    size_t evt_count = std::min(intr->Events.size(), (size_t)interactions->ScriptFunctionNames->Length);
     // TODO: add a warning? if warning list would be passed in here
 
 	for (size_t i = 0; i < evt_count; i++) 
@@ -3060,7 +3275,7 @@ Game^ import_compiled_game_dta(const AGSString &filename)
   game->Settings->EnforceNewAudio = false;
 	game->Settings->EnforceObjectBasedScript = (thisgame.options[OPT_STRICTSCRIPTING] != 0);
 	game->Settings->FontsForHiRes = (thisgame.options[OPT_HIRES_FONTS] != 0);
-	game->Settings->GameName = gcnew String(thisgame.gamename);
+	game->Settings->GameName = gcnew String(thisgame.gamename.GetCStr());
 	game->Settings->UseGlobalSpeechAnimationDelay = true; // this was always on in pre-3.0 games
 	game->Settings->GUIAlphaStyle = GUIAlphaStyle::Classic;
     game->Settings->SpriteAlphaStyle = SpriteAlphaStyle::Classic;
@@ -3082,16 +3297,19 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 	game->Settings->SplitResources = thisgame.options[OPT_SPLITRESOURCES];
 	game->Settings->TextWindowGUI = thisgame.options[OPT_TWCUSTOM];
 	game->Settings->ThoughtGUI = thisgame.options[OPT_THOUGHTGUI];
-	game->Settings->TurnBeforeFacing = (thisgame.options[OPT_TURNTOFACELOC] != 0);
-	game->Settings->TurnBeforeWalking = (thisgame.options[OPT_ROTATECHARS] != 0);
+	game->Settings->TurnBeforeFacing = (thisgame.options[OPT_CHARTURNWHENFACE] != 0);
+	game->Settings->TurnBeforeWalking = (thisgame.options[OPT_CHARTURNWHENWALK] != 0);
 	game->Settings->WalkInLookMode = (thisgame.options[OPT_WALKONLOOK] != 0);
 	game->Settings->WhenInterfaceDisabled = (InterfaceDisabledAction)thisgame.options[OPT_DISABLEOFF];
 	game->Settings->UniqueID = thisgame.uniqueid;
-    game->Settings->SaveGameFolderName = gcnew String(thisgame.gamename);
+    game->Settings->SaveGameFolderName = gcnew String(thisgame.gamename.GetCStr());
     game->Settings->RenderAtScreenResolution = (RenderAtScreenResolution)thisgame.options[OPT_RENDERATSCREENRES];
     game->Settings->AllowRelativeAssetResolutions = (thisgame.options[OPT_RELATIVEASSETRES] != 0);
     game->Settings->ScaleMovementSpeedWithMaskResolution = (thisgame.options[OPT_WALKSPEEDABSOLUTE] == 0);
-    game->Settings->UseOldKeyboardHandling = (thisgame.options[OPT_KEYHANDLEAPI] == 0);
+    game->Settings->UseOldKeyboardHandling = (thisgame.options[OPT_KEYHANDLEAPI] == 0); // inverted, 0 for old
+    game->Settings->ScaleCharacterSpriteOffsets = (thisgame.options[OPT_SCALECHAROFFSETS] != 0);
+    game->Settings->UseOldVoiceClipNaming = (thisgame.options[OPT_VOICECLIPNAMERULE] == 0); // inverted, 0 for old
+    game->Settings->GameFPS = (thisgame.options[OPT_GAMEFPS] > 0) ? thisgame.options[OPT_GAMEFPS] : 40;
 
     TextConverter^ tcv = gcnew TextConverter(game->TextEncoding);
 
@@ -3136,10 +3354,10 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 		game->Plugins->Add(plugin);
 	}
 
-	for (int i = 0; i < numGlobalVars; i++)
+	for (int i = 0; i < thisgame.numIntrVars; i++)
 	{
 		OldInteractionVariable ^intVar;
-		intVar = gcnew OldInteractionVariable(TextHelper::ConvertASCII(globalvars[i].Name), globalvars[i].Value);
+		intVar = gcnew OldInteractionVariable(TextHelper::ConvertASCII(thisgame.intrVars[i].Name), thisgame.intrVars[i].Value);
 		game->OldInteractionVariables->Add(intVar);
 	}
 	
@@ -3189,8 +3407,8 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 		character->MovementSpeedX = thisgame.chars[i].walkspeed;
 		character->MovementSpeedY = thisgame.chars[i].walkspeed_y;
 		character->NormalView = thisgame.chars[i].defview + 1;
-		character->RealName = gcnew String(thisgame.chars[i].name);
-		character->ScriptName = gcnew String(thisgame.chars[i].scrname);
+		character->RealName = gcnew String(thisgame.chars2[i].name_new.GetCStr());
+		character->ScriptName = gcnew String(thisgame.chars2[i].scrname_new.GetCStr());
 		character->Solid = !(thisgame.chars[i].flags & CHF_NOBLOCKING);
 		character->SpeechColor = thisgame.chars[i].talkcolor;
 		character->SpeechView = (thisgame.chars[i].talkview < 1) ? 0 : (thisgame.chars[i].talkview + 1);
@@ -3198,7 +3416,8 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 		character->StartX = thisgame.chars[i].x;
 		character->StartY = thisgame.chars[i].y;
     character->ThinkingView = (thisgame.chars[i].thinkview < 1) ? 0 : (thisgame.chars[i].thinkview + 1);
-		character->TurnBeforeWalking = !(thisgame.chars[i].flags & CHF_NOTURNING);
+		character->TurnBeforeWalking = !(thisgame.chars[i].flags & CHF_NOTURNWHENWALK);
+        character->TurnWhenFacing = (thisgame.chars[i].flags & CHF_TURNWHENFACE) != 0;
 		character->UniformMovementSpeed = (thisgame.chars[i].walkspeed_y == UNIFORM_WALK_SPEED);
 		character->UseRoomAreaLighting = !(thisgame.chars[i].flags & CHF_NOLIGHTING);
 		character->UseRoomAreaScaling = !(thisgame.chars[i].flags & CHF_MANUALSCALING);
@@ -3279,7 +3498,7 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 		cursor->HotspotX = thisgame.mcurs[i].hotx;
 		cursor->HotspotY = thisgame.mcurs[i].hoty;
 		cursor->ID = i;
-		cursor->Name = gcnew String(thisgame.mcurs[i].name);
+		cursor->Name = gcnew String(thisgame.mcurs[i].name.GetCStr());
 		cursor->StandardMode = ((thisgame.mcurs[i].flags & MCF_STANDARD) != 0);
 		cursor->View = thisgame.mcurs[i].view + 1;
 		if (cursor->View < 1) cursor->View = 0;
@@ -3314,7 +3533,7 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 	{
 		InventoryItem^ invItem = gcnew InventoryItem();
     invItem->CursorImage = thisgame.invinfo[i].pic;
-		invItem->Description = gcnew String(thisgame.invinfo[i].name);
+		invItem->Description = gcnew String(thisgame.invinfo[i].name.GetCStr());
 		invItem->Image = thisgame.invinfo[i].pic;
 		invItem->HotspotX = thisgame.invinfo[i].hotx;
 		invItem->HotspotY = thisgame.invinfo[i].hoty;
@@ -3343,10 +3562,10 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 		game->PropertySchema->PropertyDefinitions->Add(schemaItem);
 	}
 
+    AGS::Common::GUIRefCollection guictrl_refs(guibuts, guiinv, guilabels, guilist, guislider, guitext);
 	for (int i = 0; i < thisgame.numgui; i++)
 	{
-		guis[i].RebuildArray();
-	    guis[i].ResortZOrder();
+		guis[i].RebuildArray(guictrl_refs);
 
 		GUI^ newGui;
 		if (guis[i].IsTextWindow()) 
@@ -3389,7 +3608,7 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 					AGS::Types::GUITextWindowEdge^ edge = gcnew AGS::Types::GUITextWindowEdge();
 					Common::GUIButton *copyFrom = (Common::GUIButton*)curObj;
 					newControl = edge;
-					edge->Image = copyFrom->Image;
+					edge->Image = copyFrom->GetNormalImage();
 				}
 				else
 				{
@@ -3398,10 +3617,13 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 					newControl = newButton;
 					newButton->TextColor = copyFrom->TextColor;
 					newButton->Font = copyFrom->Font;
-					newButton->Image = copyFrom->Image;
-					newButton->MouseoverImage = copyFrom->MouseOverImage;
-					newButton->PushedImage = copyFrom->PushedImage;
+					newButton->Image = copyFrom->GetNormalImage();
+					newButton->MouseoverImage = copyFrom->GetMouseOverImage();
+					newButton->PushedImage = copyFrom->GetPushedImage();
 					newButton->TextAlignment = (AGS::Types::FrameAlignment)copyFrom->TextAlignment;
+                    newButton->TextPaddingHorizontal = copyFrom->TextPaddingHor;
+                    newButton->TextPaddingVertical = copyFrom->TextPaddingVer;
+                    newButton->WrapText = copyFrom->IsWrapText();
                     newButton->ClickAction = (GUIClickAction)copyFrom->ClickAction[Common::kGUIClickLeft];
 					newButton->NewModeNumber = copyFrom->ClickData[Common::kGUIClickLeft];
                     newButton->ClipImage = copyFrom->IsClippingImage();
@@ -3417,7 +3639,7 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 				newControl = newLabel;
 				newLabel->TextColor = copyFrom->TextColor;
 				newLabel->Font = copyFrom->Font;
-				newLabel->TextAlignment = (AGS::Types::HorizontalAlignment)copyFrom->TextAlignment;
+				newLabel->TextAlignment = (AGS::Types::FrameAlignment)copyFrom->TextAlignment;
 				newLabel->Text = tcv->Convert(copyFrom->GetText());
 				break;
 				}
@@ -3476,14 +3698,16 @@ Game^ import_compiled_game_dta(const AGSString &filename)
 			default:
 				throw gcnew AGSEditorException("Unknown control type found: " + ((int)ctrl_type).ToString());
 			}
-			newControl->Width = (curObj->Width > 0) ? curObj->Width : 1;
-			newControl->Height = (curObj->Height > 0) ? curObj->Height : 1;
+            ::Size size = curObj->GetSize();
+			newControl->Width = (size.Width > 0) ? size.Width : 1;
+			newControl->Height = (size.Height > 0) ? size.Height : 1;
 			newControl->Left = curObj->X;
 			newControl->Top = curObj->Y;
 			newControl->ZOrder = curObj->ZOrder;
             newControl->Clickable = curObj->IsClickable();
             newControl->Enabled = curObj->IsEnabled();
             newControl->Visible = curObj->IsVisible();
+            newControl->Parent = newGui;
 			newControl->ID = j;
 			newControl->Name = TextHelper::ConvertASCII(curObj->Name);
 			newGui->Controls->Add(newControl);
@@ -3506,7 +3730,7 @@ System::String ^load_room_script(System::String ^fileName)
     AGS::Common::HRoomFileError err = OpenRoomFile(roomFileName, src);
     if (err)
     {
-        err = AGS::Common::ExtractScriptText(scriptText, src.InputStream.get(), src.DataVersion);
+        err = AGS::Common::ExtractScriptText(scriptText, std::move(src.InputStream), src.DataVersion);
         if (err.HasError() && err->Code() == AGS::Common::kRoomFileErr_BlockNotFound)
             return nullptr; // simply did not find the script text
     }
@@ -3531,6 +3755,8 @@ void convert_room_from_native(const RoomStruct &rs, Room ^room, System::Text::En
         tcv = gcnew TextConverter(System::Text::Encoding::GetEncoding(enc_opt.ToInt()));
     }
     catch (...) {}
+
+    String ^roomScriptName = String::Format("room{0}.asc", room->Number);
 
     room->GameID = rs.GameID;
     room->BottomEdgeY = rs.Edges.Bottom;
@@ -3595,6 +3821,7 @@ void convert_room_from_native(const RoomStruct &rs, Room ^room, System::Text::En
 		{
 			CopyInteractions(obj->Interactions, rs.Objects[i].EventHandlers.get());
 		}
+        obj->Interactions->ScriptModule = roomScriptName;
 
 		room->Objects->Add(obj);
 	}
@@ -3618,9 +3845,10 @@ void convert_room_from_native(const RoomStruct &rs, Room ^room, System::Text::En
 		{
 			CopyInteractions(hotspot->Interactions, rs.Hotspots[i].EventHandlers.get());
 		}
+        hotspot->Interactions->ScriptModule = roomScriptName;
 	}
 
-	for (size_t i = 0; i <= MAX_WALK_AREAS; ++i) 
+	for (size_t i = 0; i < MAX_WALK_AREAS; ++i) 
 	{
 		RoomWalkableArea ^area = room->WalkableAreas[i];
 		area->ID = i;
@@ -3675,6 +3903,7 @@ void convert_room_from_native(const RoomStruct &rs, Room ^room, System::Text::En
 		{
 			CopyInteractions(area->Interactions, rs.Regions[i].EventHandlers.get());
 		}
+        area->Interactions->ScriptModule = roomScriptName;
 	}
 
 	ConvertCustomProperties(room->Properties, &rs.Properties);
@@ -3687,6 +3916,7 @@ void convert_room_from_native(const RoomStruct &rs, Room ^room, System::Text::En
 	{
 		CopyInteractions(room->Interactions, rs.EventHandlers.get());
 	}
+    room->Interactions->ScriptModule = roomScriptName;
 }
 
 AGS::Types::Room^ load_crm_file(UnloadedRoom ^roomToLoad, System::Text::Encoding ^defEncoding)
@@ -3729,9 +3959,9 @@ void convert_room_to_native(Room ^room, RoomStruct &rs)
 	rs.Edges.Left = room->LeftEdgeX;
 	rs.Options.MusicVolume = (RoomVolumeMod)room->MusicVolumeAdjustment;
 	rs.Options.PlayerView = room->PlayerCharacterView;
-	rs.Options.StartupMusic = room->PlayMusicOnRoomLoad;
+	rs.Options.StartupMusic = 0; // [OBSOLETE]
 	rs.Edges.Right = room->RightEdgeX;
-	rs.Options.SaveLoadDisabled = room->SaveLoadEnabled ? 0 : 1;
+	rs.Options.SaveLoadDisabled = false; // [OBSOLETE]
 	rs.Options.PlayerCharOff = room->ShowPlayerCharacter ? 0 : 1;
 	rs.Edges.Top = room->TopEdgeY;
 	rs.Width = room->Width;
@@ -3868,14 +4098,15 @@ void save_default_crm_file(Room ^room)
     save_room_file(rs, roomFileName);
 }
 
-PInteractionScripts convert_interaction_scripts(Interactions ^interactions)
+std::unique_ptr<InteractionEvents> convert_interaction_scripts(Interactions ^interactions)
 {
-    AGS::Common::InteractionScripts *native_scripts = new AGS::Common::InteractionScripts();
+    std::unique_ptr<InteractionEvents> native_inter(new InteractionEvents());
+    native_inter->ScriptModule = TextHelper::ConvertASCII(interactions->ScriptModule);
 	for each (String^ funcName in interactions->ScriptFunctionNames)
 	{
-        native_scripts->ScriptFuncNames.push_back(TextHelper::ConvertASCII(funcName));
+        native_inter->Events.push_back(TextHelper::ConvertASCII(funcName));
 	}
-    return PInteractionScripts(native_scripts);
+    return native_inter;
 }
 
 void convert_room_interactions_to_native(Room ^room, RoomStruct &rs)
@@ -3908,10 +4139,6 @@ void save_room_file(RoomStruct &rs, const AGSString &path)
     rs.BackgroundBPP = rs.BgFrames[0].Graphic->GetBPP();
     for (int i = 0; i < 256; ++i)
         thisroom.Palette[i] = thisroom.BgFrames[0].Palette[i];
-    // Fix hi-color screens
-    // TODO: find out why this is needed; may be related to the Allegro internal 16-bit bitmaps format
-    for (size_t i = 0; i < (size_t)rs.BgFrameCount; ++i)
-        fix_block(rs.BgFrames[i].Graphic.get());
 
     std::unique_ptr<Stream> out(AGSFile::CreateFile(path));
     if (out == NULL)
@@ -3920,11 +4147,6 @@ void save_room_file(RoomStruct &rs, const AGSString &path)
     AGS::Common::HRoomFileError err = AGS::Common::WriteRoomData(&rs, out.get(), kRoomVersion_Current);
     if (!err)
         quit(AGSString::FromFormat("save_room: unable to write room data, error was:\r\n%s", err->FullMessage()));
-
-    // Fix hi-color screens back again
-    // TODO: find out why this is needed; may be related to the Allegro internal 16-bit bitmaps format
-    for (size_t i = 0; i < rs.BgFrameCount; ++i)
-        fix_block(rs.BgFrames[i].Graphic.get());
 }
 
 

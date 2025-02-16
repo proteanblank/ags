@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -27,10 +27,11 @@ extern void RegisterDateTimeAPI();
 extern void RegisterDialogAPI();
 extern void RegisterDialogOptionsRenderingAPI();
 extern void RegisterDrawingSurfaceAPI(ScriptAPIVersion base_api, ScriptAPIVersion compat_api);
+extern void RegisterDynamicArrayAPI();
 extern void RegisterDynamicSpriteAPI();
 extern void RegisterFileAPI();
 extern void RegisterGameAPI();
-extern void RegisterGlobalAPI();
+extern void RegisterGlobalAPI(ScriptAPIVersion base_api, ScriptAPIVersion compat_api);
 extern void RegisterGUIAPI();
 extern void RegisterGUIControlAPI();
 extern void RegisterHotspotAPI();
@@ -53,6 +54,7 @@ extern void RegisterSystemAPI();
 extern void RegisterTextBoxAPI();
 extern void RegisterViewFrameAPI();
 extern void RegisterViewportAPI();
+extern void RegisterSaveInfoAPI();
 
 extern void RegisterStaticObjects();
 
@@ -67,10 +69,11 @@ void setup_script_exports(ScriptAPIVersion base_api, ScriptAPIVersion compat_api
     RegisterDialogAPI();
     RegisterDialogOptionsRenderingAPI();
     RegisterDrawingSurfaceAPI(base_api, compat_api);
+    RegisterDynamicArrayAPI();
     RegisterDynamicSpriteAPI();
     RegisterFileAPI();
     RegisterGameAPI();
-    RegisterGlobalAPI();
+    RegisterGlobalAPI(base_api, compat_api);
     RegisterGUIAPI();
     RegisterGUIControlAPI();
     RegisterHotspotAPI();
@@ -93,6 +96,7 @@ void setup_script_exports(ScriptAPIVersion base_api, ScriptAPIVersion compat_api
     RegisterTextBoxAPI();
     RegisterViewFrameAPI();
     RegisterViewportAPI();
+    RegisterSaveInfoAPI();
 
     RegisterStaticObjects();
 }

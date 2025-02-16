@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include "gtest/gtest.h"
 #include "preproc/preprocessor.h"
 #include <util/string_compat.h>
@@ -12,7 +25,7 @@ namespace Preprocessor {
 std::vector<AGSString> SplitLines(const AGSString& str)
 {
     std::vector<AGSString> str_lines = str.Split('\n');
-    for (int i = 0; i < str_lines.size(); i++) {
+    for (size_t i = 0; i < str_lines.size(); i++) {
         if (str_lines[i].CompareRight("\r", 1) == 0) {
             str_lines[i].ClipRight(1);
         }
@@ -303,6 +316,298 @@ Display("This does");
 }
 
 
+TEST(Preprocess, IfDefNested) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+#define DEFINEME
+#ifdef DEFINEME
+Display("This displays!");
+#endif // DEFINEME
+#ifndef DEFINEME
+#ifdef DEFINEME_NESTED
+Display("This doesn't");
+#endif // DEFINEME_NESTED
+#ifndef DEFINEME_NESTED
+Display("This doesn't");
+#endif // !DEFINEME_NESTED
+#endif // !DEFINEME
+
+#undef DEFINEME
+#ifdef DEFINEME
+Display("This doesn't");
+#endif // DEFINEME
+#ifndef DEFINEME
+#ifdef DEFINEME_NESTED
+Display("This doesn't");
+#endif // DEFINEME_NESTED
+#ifndef DEFINEME_NESTED
+Display("This displays!");
+#endif // !DEFINEME_NESTED
+#endif // !DEFINEME
+
+#define DEFINEME_NESTED
+#ifdef DEFINEME
+Display("This doesn't");
+#endif // DEFINEME
+#ifndef DEFINEME
+#ifdef DEFINEME_NESTED
+Display("This displays!");
+#endif // DEFINEME_NESTED
+#ifndef DEFINEME_NESTED
+Display("This doesn't");
+#endif // !DEFINEME_NESTED
+#endif // !DEFINEME
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ScriptIfDefElseNested");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 41);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_ScriptIfDefElseNested\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "");
+    ASSERT_STREQ(lines[7].GetCStr(), "");
+    ASSERT_STREQ(lines[8].GetCStr(), "");
+    ASSERT_STREQ(lines[9].GetCStr(), "");
+    ASSERT_STREQ(lines[10].GetCStr(), "");
+    ASSERT_STREQ(lines[11].GetCStr(), "");
+    ASSERT_STREQ(lines[12].GetCStr(), "");
+    ASSERT_STREQ(lines[13].GetCStr(), "");
+    ASSERT_STREQ(lines[14].GetCStr(), "");
+    ASSERT_STREQ(lines[15].GetCStr(), "");
+    ASSERT_STREQ(lines[16].GetCStr(), "");
+    ASSERT_STREQ(lines[17].GetCStr(), "");
+    ASSERT_STREQ(lines[18].GetCStr(), "");
+    ASSERT_STREQ(lines[19].GetCStr(), "");
+    ASSERT_STREQ(lines[20].GetCStr(), "");
+    ASSERT_STREQ(lines[21].GetCStr(), "");
+    ASSERT_STREQ(lines[22].GetCStr(), "");
+    ASSERT_STREQ(lines[23].GetCStr(), "");
+    ASSERT_STREQ(lines[24].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[25].GetCStr(), "");
+    ASSERT_STREQ(lines[26].GetCStr(), "");
+    ASSERT_STREQ(lines[27].GetCStr(), "");
+    ASSERT_STREQ(lines[28].GetCStr(), "");
+    ASSERT_STREQ(lines[29].GetCStr(), "");
+    ASSERT_STREQ(lines[30].GetCStr(), "");
+    ASSERT_STREQ(lines[31].GetCStr(), "");
+    ASSERT_STREQ(lines[32].GetCStr(), "");
+    ASSERT_STREQ(lines[33].GetCStr(), "");
+    ASSERT_STREQ(lines[34].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[35].GetCStr(), "");
+    ASSERT_STREQ(lines[36].GetCStr(), "");
+    ASSERT_STREQ(lines[37].GetCStr(), "");
+}
+
+
+TEST(Preprocess, IfDefElse) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+#define FOO
+#ifdef FOO
+Display("This displays!");
+#else
+Display("This doesn't");
+#endif
+#ifndef FOO
+Display("This doesn't");
+#else
+Display("This displays!");
+#endif
+#undef FOO
+#ifdef FOO
+Display("This doesn't");
+#else
+Display("This displays!");
+#endif
+#ifndef FOO
+Display("This displays!");
+#else
+Display("This doesn't");
+#endif
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ScriptIfDefElse");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 25);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_ScriptIfDefElse\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "");
+    ASSERT_STREQ(lines[7].GetCStr(), "");
+    ASSERT_STREQ(lines[8].GetCStr(), "");
+    ASSERT_STREQ(lines[9].GetCStr(), "");
+    ASSERT_STREQ(lines[10].GetCStr(), "");
+    ASSERT_STREQ(lines[11].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[12].GetCStr(), "");
+    ASSERT_STREQ(lines[13].GetCStr(), "");
+    ASSERT_STREQ(lines[14].GetCStr(), "");
+    ASSERT_STREQ(lines[15].GetCStr(), "");
+    ASSERT_STREQ(lines[16].GetCStr(), "");
+    ASSERT_STREQ(lines[17].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[18].GetCStr(), "");
+    ASSERT_STREQ(lines[19].GetCStr(), "");
+    ASSERT_STREQ(lines[20].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[21].GetCStr(), "");
+    ASSERT_STREQ(lines[22].GetCStr(), "");
+    ASSERT_STREQ(lines[23].GetCStr(), "");
+}
+
+
+TEST(Preprocess, IfDefElseNested) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+#define DEFINEME
+#ifdef DEFINEME
+Display("This displays!");
+#else
+#ifdef DEFINEME_NESTED
+Display("This doesn't");
+#else
+Display("This doesn't either");
+#endif // DEFINEME_NESTED
+#endif // DEFINEME
+
+#undef DEFINEME
+#ifdef DEFINEME
+Display("This doesn't");
+#else
+#ifdef DEFINEME_NESTED
+Display("This doesn't either");
+#else
+Display("This displays!");
+#endif // DEFINEME_NESTED
+#endif // DEFINEME
+
+#define DEFINEME_NESTED
+#ifdef DEFINEME
+Display("This doesn't");
+#else
+#ifdef DEFINEME_NESTED
+Display("This displays!");
+#else
+Display("This doesn't");
+#endif // DEFINEME_NESTED
+#endif // DEFINEME
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ScriptIfDefElseNested");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 35);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_ScriptIfDefElseNested\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "");
+    ASSERT_STREQ(lines[7].GetCStr(), "");
+    ASSERT_STREQ(lines[8].GetCStr(), "");
+    ASSERT_STREQ(lines[9].GetCStr(), "");
+    ASSERT_STREQ(lines[10].GetCStr(), "");
+    ASSERT_STREQ(lines[11].GetCStr(), "");
+    ASSERT_STREQ(lines[12].GetCStr(), "");
+    ASSERT_STREQ(lines[13].GetCStr(), "");
+    ASSERT_STREQ(lines[14].GetCStr(), "");
+    ASSERT_STREQ(lines[15].GetCStr(), "");
+    ASSERT_STREQ(lines[16].GetCStr(), "");
+    ASSERT_STREQ(lines[17].GetCStr(), "");
+    ASSERT_STREQ(lines[18].GetCStr(), "");
+    ASSERT_STREQ(lines[19].GetCStr(), "");
+    ASSERT_STREQ(lines[20].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[21].GetCStr(), "");
+    ASSERT_STREQ(lines[22].GetCStr(), "");
+    ASSERT_STREQ(lines[23].GetCStr(), "");
+    ASSERT_STREQ(lines[24].GetCStr(), "");
+    ASSERT_STREQ(lines[25].GetCStr(), "");
+    ASSERT_STREQ(lines[26].GetCStr(), "");
+    ASSERT_STREQ(lines[27].GetCStr(), "");
+    ASSERT_STREQ(lines[28].GetCStr(), "");
+    ASSERT_STREQ(lines[29].GetCStr(), "Display(\"This displays!\");");
+    ASSERT_STREQ(lines[30].GetCStr(), "");
+    ASSERT_STREQ(lines[31].GetCStr(), "");
+    ASSERT_STREQ(lines[32].GetCStr(), "");
+}
+
+
+TEST(Preprocess, IfDefNestedElseIfDef) {
+        Preprocessor pp = Preprocessor();
+        const char* inpl = R"EOS(
+#define FOO
+#define BAR
+#ifdef FOO
+#ifdef BAR
+Display("FOO and BAR are defined");
+#else
+Display("Only FOO is defined");
+#endif
+#endif
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "IfDefNestedElseIfDef");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 12);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_IfDefNestedElseIfDef\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "Display(\"FOO and BAR are defined\");");
+    ASSERT_STREQ(lines[7].GetCStr(), "");
+    ASSERT_STREQ(lines[8].GetCStr(), "");
+    ASSERT_STREQ(lines[9].GetCStr(), "");
+    ASSERT_STREQ(lines[10].GetCStr(), "");
+}
+
+TEST(Preprocess, EscapeCharacters) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+#define ESCAPE_SEQUENCE_STRING "This string has escape characters: \n\t\r\\\""
+Display(ESCAPE_SEQUENCE_STRING);
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "EscapeCharacters");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 5);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_EscapeCharacters\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "Display(\"This string has escape characters: \\n\\t\\r\\\\\\\"\");");
+    ASSERT_STREQ(lines[4].GetCStr(), "");
+}
+
 TEST(Preprocess, IfVer) {
     Preprocessor pp = Preprocessor();
     pp.SetAppVersion("3.6.0.5");
@@ -390,6 +695,192 @@ Display("test");
     EXPECT_STREQ(last_seen_cc_error(), "#endif has no matching #if");
 }
 
+TEST(Preprocess, ElseWithoutIf) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+#ifdef BAR
+#endif
+Display("test");
+#else
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ElseWithoutIf");
+
+    EXPECT_STREQ(last_seen_cc_error(), "#else has no matching #if");
+}
+
+TEST(Preprocess, FormatsScriptName) {
+    Preprocessor pp = Preprocessor();
+
+    String res = pp.Preprocess("", "room2.asc");
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 2);
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_room2.asc\"");
+    clear_error();
+
+    String res2 = pp.Preprocess("", "Rooms\\2\\room2.asc");
+    std::vector<AGSString> lines2 = SplitLines(res2);
+    ASSERT_EQ(lines2.size(), 2);
+    ASSERT_STREQ(lines2[0].GetCStr(), "\"__NEWSCRIPTSTART_Rooms\\\\2\\\\room2.asc\"");
+}
+
+TEST(Preprocess, NonLatinUnicodeComment) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+// this is a comment
+// this is a comment with invalid latin characters Иह€한𐍈 <- here
+// 1234
+//#define invalid 5
+// invalid
+int i;
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ScriptNonLatinUnicodeComment");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 9);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_ScriptNonLatinUnicodeComment\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "");
+    ASSERT_STREQ(lines[7].GetCStr(), "int i;");
+}
+
+TEST(Preprocess, NonLatinUnicodeInString) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+// this is a comment
+// the string below has invalid latin characters
+string st = "aИह€한𐍈";
+//#define invalid 5
+// invalid
+int i;
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "ScriptNonLatinUnicodeInString");
+
+    EXPECT_STREQ(last_seen_cc_error(), "");
+    std::vector<AGSString> lines = SplitLines(res);
+    ASSERT_EQ(lines.size(), 9);
+
+    ASSERT_STREQ(lines[0].GetCStr(), "\"__NEWSCRIPTSTART_ScriptNonLatinUnicodeInString\"");
+    ASSERT_STREQ(lines[1].GetCStr(), "");
+    ASSERT_STREQ(lines[2].GetCStr(), "");
+    ASSERT_STREQ(lines[3].GetCStr(), "");
+    ASSERT_STREQ(lines[4].GetCStr(), "string st = \"aИह€한𐍈\";");
+    ASSERT_STREQ(lines[5].GetCStr(), "");
+    ASSERT_STREQ(lines[6].GetCStr(), "");
+    ASSERT_STREQ(lines[7].GetCStr(), "int i;");
+}
+
+TEST(Preprocess, NonLatinUnicodeInScript) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+// the variable below has invalid latin characters
+int aИह€한𐍈 = 15;
+int i;
+)EOS";
+
+    clear_error();
+    pp.Preprocess(inpl, "ScriptName");
+
+    ASSERT_NE(pp.GetLastError().Type, ErrorCode::None);
+    ASSERT_EQ(pp.GetLastError().Type, ErrorCode::InvalidCharacter);
+}
+
+TEST(Preprocess, NonLatinUnicodeInFunctionName) {
+    Preprocessor pp = Preprocessor();
+    const char* inpl = R"EOS(
+// function name has invalid latin characters
+void FuncИह€한𐍈() {
+    int i = 10;
+}
+)EOS";
+
+    clear_error();
+    pp.Preprocess(inpl, "ScriptName");
+
+    ASSERT_NE(pp.GetLastError().Type, ErrorCode::None);
+    ASSERT_EQ(pp.GetLastError().Type, ErrorCode::InvalidCharacter);
+}
+
+TEST(Preprocess, UnterminatedStringSingleQuote) {
+    Preprocessor pp = Preprocessor();
+    const char *inpl = R"EOS(
+int Func1()
+{
+    'unterminated string
+    return 0;
+}
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "UnterminatedStringSingleQuote");
+
+    // According to the googletest docs,
+    // the expected value should come first, the tested expression second
+    // Then in the case of a failed test, the reported message comes out correctly.
+    EXPECT_STREQ("Unterminated string: ''' is missing", last_seen_cc_error());
+    auto err = pp.GetLastError();
+    // script lines are 1-based, because line 0 is a NEW SCRIPT MARKER added by preproc
+    EXPECT_EQ(4, currentline);
+}
+
+TEST(Preprocess, UnterminatedStringDoubleQuote) {
+    Preprocessor pp = Preprocessor();
+    const char *inpl = R"EOS(
+int Func1()
+{
+    "unterminated string
+    return 0;
+}
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "UnterminatedStringDoubleQuote");
+
+    EXPECT_STREQ(last_seen_cc_error(), "Unterminated string: '\"' is missing");
+    // script lines are 1-based, because line 0 is a NEW SCRIPT MARKER added by preproc
+    EXPECT_EQ(currentline, 4);
+}
+
+TEST(Preprocess, MultipleNewScriptMarkers) {
+    Preprocessor pp = Preprocessor();
+    const char *inpl = R"EOS(
+"__NEWSCRIPTSTART_Dialog1"
+int Func1()
+{
+    return 0;
+}
+"__NEWSCRIPTSTART_Dialog2"
+int Func2()
+{
+    "unterminated string
+    return 0;
+}
+"__NEWSCRIPTSTART_Dialog3"
+int Func3()
+{
+    return 0;
+}
+)EOS";
+
+    clear_error();
+    String res = pp.Preprocess(inpl, "MultipleNewScriptMarkers");
+
+    EXPECT_STREQ("Unterminated string: '\"' is missing", last_seen_cc_error());
+    EXPECT_STREQ("Dialog2", ccCurScriptName.c_str());
+    // Line count starts from the nearest NEW SCRIPT MARKER
+    EXPECT_EQ(3, currentline);
+}
 
 } // Preprocessor
 } // AGS

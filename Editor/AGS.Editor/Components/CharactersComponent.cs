@@ -37,6 +37,7 @@ namespace AGS.Editor.Components
             _guiController.RegisterIcon(ICON_KEY, Resources.ResourceManager.GetIcon("charactr.ico"));
             _guiController.RegisterIcon("CharacterIcon", Resources.ResourceManager.GetIcon("charactr-item.ico"));
             _guiController.ProjectTree.AddTreeRoot(this, TOP_LEVEL_COMMAND_ID, "Characters", ICON_KEY);
+            _agsEditor.CheckGameScripts += ScanAndReportMissingInteractionHandlers;
             RePopulateTreeView();
         }
 
@@ -154,13 +155,40 @@ namespace AGS.Editor.Components
 			_guiController.AddOrShowPane(document);
 		}
 
+        public override IList<string> GetManagedScriptElements()
+        {
+            return new string[] { "Character" };
+        }
+
+        public override bool ShowItemPaneByName(string name)
+        {
+            IList<Character> characters = GetFlatList();
+            foreach(Character c in characters)
+            {
+                if(c.ScriptName == name)
+                {
+                    _guiController.ProjectTree.SelectNode(this, GetNodeID(c));
+                    ShowOrAddPane(c);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public void ShowPlayerCharacter()
+        {
+            Character player = Factory.AGSEditor.CurrentGame.PlayerCharacter;
+            _guiController.ProjectTree.SelectNode(this, GetNodeID(player));
+            ShowOrAddPane(player);
+        }
+
         private void OnItemIDOrNameChanged(Character item, bool name_only)
         {
             // Refresh tree, property grid and open windows
             if (name_only)
                 ChangeItemLabel(GetNodeID(item), GetNodeLabel(item));
             else
-                RePopulateTreeView(); // currently this is the only way to update tree item ids
+                RePopulateTreeView(GetNodeID(item)); // currently this is the only way to update tree item ids
 
             foreach (ContentDocument doc in _documents.Values)
             {
@@ -282,13 +310,12 @@ namespace AGS.Editor.Components
             {
                 _guiController.ShowMessage("An error occurred importing the character file. The error was: " + Environment.NewLine + Environment.NewLine + ex.Message, MessageBoxIcon.Warning);
             }
-            RePopulateTreeView();
         }        
 
         private Dictionary<string, object> ConstructPropertyObjectList(Character item)
         {
             Dictionary<string, object> list = new Dictionary<string, object>();
-            list.Add(item.ScriptName + " (Character " + item.ID + ")", item);
+            list.Add(item.PropertyGridTitle, item);
             return list;
         }
 
@@ -302,9 +329,9 @@ namespace AGS.Editor.Components
             return _agsEditor.CurrentGame.CharacterFlatList;
         }
 
-        private string GetNodeID(Character character)
+        private string GetNodeID(Character item)
         {
-            return ITEM_COMMAND_PREFIX + character.ID;
+            return ITEM_COMMAND_PREFIX + item.ID;
         }
 
         private string GetNodeLabel(Character item)
@@ -343,6 +370,35 @@ namespace AGS.Editor.Components
         protected override string GetFolderDeleteConfirmationText()
         {
             return "Are you sure you want to delete this folder and all its characters?" + Environment.NewLine + Environment.NewLine + "If any of the characters are referenced in code by their number it could cause crashes in the game.";
+        }
+
+        private void ScanAndReportMissingInteractionHandlers(GenericMessagesArgs args)
+        {
+            var errors = args.Messages;
+            foreach (Character c in _agsEditor.CurrentGame.Characters)
+            {
+                var funcs = _agsEditor.Tasks.FindInteractionHandlers(c.ScriptName, c.Interactions, true);
+                if (funcs == null || funcs.Length == 0)
+                    continue;
+
+                for (int i = 0; i < funcs.Length; ++i)
+                {
+                    bool has_interaction = !string.IsNullOrEmpty(c.Interactions.ScriptFunctionNames[i]);
+                    bool has_function = funcs[i].HasValue;
+                    // If we have an assigned interaction function, but the function is not found - report a missing warning
+                    if (has_interaction && !has_function)
+                    {
+                        errors.Add(new CompileWarningWithGameObject($"Character ({c.ID}) {c.ScriptName}'s event {c.Interactions.Schema.FunctionSuffixes[i]} function \"{c.Interactions.ScriptFunctionNames[i]}\" not found in script {c.Interactions.ScriptModule}.",
+                            "Character", c.ScriptName, true));
+                    }
+                    // If we don't have an assignment, but has a similar function - report a possible unlinked function
+                    else if (!has_interaction && has_function)
+                    {
+                        errors.Add(new CompileWarningWithGameObject($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on Character ({c.ID}) {c.ScriptName}'s Event pane",
+                            "Character", c.ScriptName, funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                    }
+                }
+            }
         }
     }
 }

@@ -2,113 +2,198 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
+#include "script/systemimports.h"
 #include <stdlib.h>
 #include <string.h>
-#include "script/systemimports.h"
 
-SystemImports simp;
-SystemImports simp_for_plugin;
+using namespace AGS::Common;
 
-uint32_t SystemImports::add(const String &name, const RuntimeScriptValue &value, ccInstance *anotherscr)
+
+void ScriptSymbolsMap::Add(const String &name, uint32_t index)
 {
-    uint32_t ixof = get_index_of(name);
+    _lookup[name] = index;
+}
+
+void ScriptSymbolsMap::Remove(const String &name)
+{
+    _lookup.erase(name);
+}
+
+void ScriptSymbolsMap::Clear()
+{
+    _lookup.clear();
+}
+
+uint32_t ScriptSymbolsMap::GetIndexOf(const String &name) const
+{
+    auto it = _lookup.find(name);
+    if (it != _lookup.end())
+        return it->second;
+
+    // Not found...
+    return UINT32_MAX;
+}
+
+uint32_t ScriptSymbolsMap::GetIndexOfAny(const String &name) const
+{
+    // Import names may be potentially formed as:
+    //
+    //     [type::]name[^argnum]
+    //
+    // where "type" is the name of a type, "name" is the name of a function,
+    // "argnum" is the number of arguments.
+
+    const size_t argnum_at = std::min(name.GetLength(), name.FindChar(_appendageSeparator));
+    const size_t append_end = name.GetLength();
+    // TODO: optimize this by supporting string views! or compare methods which let compare with a substring of input
+    const String name_only = name.Left(argnum_at);
+    const String argnum_only = name.Mid(argnum_at + 1, append_end - argnum_at - 1);
+
+    // Scan the range of possible matches, starting with pure name without appendages.
+    // The match logic is this:
+    // * the request is compared one section after another, first base name, then first
+    //   appendage, then second appendage, and so forth (in case we support multiple appendages);
+    // * as we go we save and update the best match: symbol that has only base name,
+    //   symbol that has base name + first appendage, and so forth.
+    // * if no exact match is found, then we use the best saved match.
+    //
+    // We know as a fact that in an ordered string container shorter names come first
+    // and longer names come after, meaning that symbols without appendage will be met first.
+    uint32_t best_match = UINT32_MAX;
+    for (auto it = _lookup.lower_bound(name_only); it != _lookup.end(); ++it)
+    {
+        const String &try_sym = it->first;
+        // First - compare base name section
+        // If base name is not matching, then there's no reason to continue the range
+        if (try_sym.CompareLeft(name_only, argnum_at) != 0)
+            break;
+
+        // If the symbol is longer, but there's no separator after base name,
+        // then the symbol has a different, longer base name (e.g. "FindChar" vs "FindCharacter")
+        if ((try_sym.GetLength() > name_only.GetLength()) && try_sym[name_only.GetLength()] != _appendageSeparator)
+            continue;
+
+        // Search for appendage separators in the matching symbol
+        const size_t sym_argnum_at = std::min(try_sym.GetLength(), try_sym.FindChar(_appendageSeparator, argnum_at));
+        const size_t sym_append_end = try_sym.GetLength();
+
+        //---------------------------------------------------------------------
+        // Check the argnum appendage
+
+        // If the symbol does not have any appendages, then:
+        // - if request does not have any either, that's the exact match;
+        // - otherwise save it as a best match and continue searching;
+        if (sym_argnum_at == try_sym.GetLength())
+        {
+            if (argnum_at == name.GetLength())
+                return it->second;
+            best_match = it->second;
+            continue;
+        }
+
+        // If the request is without argnum, then optionally choose the first found symbol
+        // which has at least base name matching
+        if (argnum_at == name.GetLength())
+        {
+            if (_allowMatchExpanded)
+                return it->second;
+            break; // exact base-name match would be first in order, so no reason to continue
+        }
+
+        // Compare argnum appendage, and skip on failure
+        if ((sym_append_end != append_end) || try_sym.CompareMid(argnum_only, argnum_at + 1) != 0)
+            continue;
+
+        // Matched whole appendage, found exact match
+        return it->second;
+    }
+    
+    // If no exact match was found, then select the closest found match
+    if (best_match != UINT32_MAX)
+        return best_match;
+
+    // Not found...
+    return UINT32_MAX;
+}
+
+
+SystemImports::SystemImports()
+    : _lookup('^', true /* allow to match symbols with more appendages */)
+{
+}
+
+uint32_t SystemImports::Add(const String &name, const RuntimeScriptValue &value, const ccInstance *inst)
+{
+    assert(value.IsValid());
+    uint32_t ixof = GetIndexOf(name);
     // Check if symbol already exists
     if (ixof != UINT32_MAX)
     {
         // Only allow override if not a script-exported function
-        if (anotherscr == nullptr)
+        if (inst == nullptr)
         {
-            imports[ixof].Value = value;
-            imports[ixof].InstancePtr = anotherscr;
+            _imports[ixof] = ScriptImport(name, value, nullptr);
         }
         return ixof;
     }
 
-    ixof = imports.size();
-    for (size_t i = 0; i < imports.size(); ++i)
+    ixof = _imports.size();
+    for (size_t i = 0; i < _imports.size(); ++i)
     {
-        if (imports[i].Name == nullptr)
+        if (_imports[i].Name.IsEmpty())
         {
             ixof = i;
             break;
         }
     }
 
-    btree[name] = ixof;
-    if (ixof == imports.size())
-        imports.push_back(ScriptImport());
-    imports[ixof].Name          = name;
-    imports[ixof].Value         = value;
-    imports[ixof].InstancePtr   = anotherscr;
+    if (ixof == _imports.size())
+        _imports.emplace_back(name, value, inst);
+    else
+        _imports[ixof] = ScriptImport(name, value, inst);
+    _lookup.Add(name, ixof);
     return ixof;
 }
 
-void SystemImports::remove(const String &name)
+void SystemImports::Remove(const String &name)
 {
-    uint32_t idx = get_index_of(name);
+    uint32_t idx = GetIndexOf(name);
     if (idx == UINT32_MAX)
         return;
-    btree.erase(imports[idx].Name);
-    imports[idx].Name = nullptr;
-    imports[idx].Value.Invalidate();
-    imports[idx].InstancePtr = nullptr;
+
+    _lookup.Remove(_imports[idx].Name);
+    _imports[idx] = {};
 }
 
-const ScriptImport *SystemImports::getByName(const String &name)
+const ScriptImport *SystemImports::GetByName(const String &name) const
 {
-    uint32_t o = get_index_of(name);
+    uint32_t o = GetIndexOf(name);
     if (o == UINT32_MAX)
         return nullptr;
 
-    return &imports[o];
+    return &_imports[o];
 }
 
-const ScriptImport *SystemImports::getByIndex(uint32_t index)
+const ScriptImport *SystemImports::GetByIndex(uint32_t index) const
 {
-    if (index >= imports.size())
+    if (index >= _imports.size())
         return nullptr;
 
-    return &imports[index];
+    return &_imports[index];
 }
 
-uint32_t SystemImports::get_index_of(const String &name)
+String SystemImports::FindName(const RuntimeScriptValue &value) const
 {
-    IndexMap::const_iterator it = btree.find(name);
-    if (it != btree.end())
-        return it->second;
-
-    // CHECKME: what are "mangled names" and where do they come from?
-    String mangled_name = String::FromFormat("%s$", name.GetCStr());
-    // if it's a function with a mangled name, allow it
-    it = btree.lower_bound(mangled_name);
-    if (it != btree.end() && it->first.CompareLeft(mangled_name) == 0)
-        return it->second;
-
-    if (name.GetLength() > 3)
-    {
-        size_t c = name.FindCharReverse('^');
-        if (c != String::NoIndex && (c == name.GetLength() - 2 || c == name.GetLength() - 3))
-        {
-            // Function with number of prametrs on the end
-            // attempt to find it without the param count
-            return get_index_of(name.Left(c));
-        }
-    }
-    return UINT32_MAX;
-}
-
-String SystemImports::findName(const RuntimeScriptValue &value)
-{
-    for (const auto &import : imports)
+    for (const auto &import : _imports)
     {
         if (import.Value == value)
         {
@@ -118,30 +203,28 @@ String SystemImports::findName(const RuntimeScriptValue &value)
     return String();
 }
 
-void SystemImports::RemoveScriptExports(ccInstance *inst)
+void SystemImports::RemoveScriptExports(const ccInstance *inst)
 {
     if (!inst)
     {
         return;
     }
 
-    for (auto &import : imports)
+    for (auto &import : _imports)
     {
-        if (import.Name == nullptr)
+        if (import.Name.IsEmpty())
             continue;
 
         if (import.InstancePtr == inst)
         {
-            btree.erase(import.Name);
-            import.Name = nullptr;
-            import.Value.Invalidate();
-            import.InstancePtr = nullptr;
+            _lookup.Remove(import.Name);
+            import = {};
         }
     }
 }
 
-void SystemImports::clear()
+void SystemImports::Clear()
 {
-    btree.clear();
-    imports.clear();
+    _lookup.Clear();
+    _imports.clear();
 }

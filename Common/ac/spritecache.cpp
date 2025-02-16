@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "core/platform.h"
@@ -16,15 +16,18 @@
 #include "ac/gamestructdefines.h"
 #include "debug/out.h"
 #include "gfx/bitmap.h"
+#include "util/memory_compat.h"
 
 using namespace AGS::Common;
 
+// Internal SpriteCache's flags, not serialized in game data
+//
 // Tells that the sprite is found in the game resources.
 #define SPRCACHEFLAG_ISASSET        0x01
 // Tells that the sprite is assigned externally and cannot be autodisposed.
 #define SPRCACHEFLAG_EXTERNAL       0x02
-// Tells that the sprite index was remapped to the placeholder (sprite 0).
-#define SPRCACHEFLAG_REMAP0         0x04
+// Tells that the asset sprite failed to load
+#define SPRCACHEFLAG_ERROR          0x04
 // Locked sprites are ones that should not be freed when out of cache space.
 #define SPRCACHEFLAG_LOCKED         0x08
 
@@ -49,11 +52,9 @@ SpriteCache::SpriteCache(std::vector<SpriteInfo> &sprInfos, const Callbacks &cal
     _callbacks.InitSprite = (callbacks.InitSprite) ? callbacks.InitSprite : DummyInitSprite;
     _callbacks.PostInitSprite = (callbacks.PostInitSprite) ? callbacks.PostInitSprite : DummyPostInitSprite;
     _callbacks.PrewriteSprite = (callbacks.PrewriteSprite) ? callbacks.PrewriteSprite : DummyPrewriteSprite;
-}
 
-SpriteCache::~SpriteCache()
-{
-    Reset();
+    // Generate a placeholder sprite: 1x1 transparent bitmap
+    _placeholder.reset(BitmapHelper::CreateTransparentBitmap(1, 1));
 }
 
 size_t SpriteCache::GetSpriteSlotCount() const
@@ -72,6 +73,18 @@ bool SpriteCache::IsAssetSprite(sprkey_t index) const
         _spriteData[index].IsAssetSprite(); // found in the game resources
 }
 
+bool SpriteCache::IsSpriteLoaded(sprkey_t index) const
+{
+    return ResourceCache::Exists(index);
+}
+
+bool SpriteCache::IsAssetUnloaded(sprkey_t index) const
+{
+    return index >= 0 && (size_t)index < _spriteData.size() && // in the valid range
+        _spriteData[index].IsAssetSprite() && // found in the game resources
+        !ResourceCache::Exists(index);
+}
+
 void SpriteCache::Reset()
 {
     _file.Close();
@@ -88,9 +101,11 @@ bool SpriteCache::SetSprite(sprkey_t index, std::unique_ptr<Bitmap> image, int f
         Debug::Printf(kDbgGroup_SprCache, kDbgMsg_Error, "SetSprite: unable to use index %d", index);
         return false;
     }
-    if (!image)
+
+    if (!image || image->GetSize().IsNull() || image->GetColorDepth() <= 0)
     {
-        Debug::Printf(kDbgGroup_SprCache, kDbgMsg_Error, "SetSprite: attempt to assign nullptr to index %d", index);
+        DisposeSprite(index); // free previous item in this slot anyway
+        Debug::Printf(kDbgGroup_SprCache, kDbgMsg_Error, "SetSprite: attempt to assign an invalid bitmap to index %d", index);
         return false;
     }
 
@@ -115,10 +130,10 @@ void SpriteCache::SetEmptySprite(sprkey_t index, bool as_asset)
     ResourceCache::Dispose(index); // make sure it's free
     if (as_asset)
         _spriteData[index].Flags = SPRCACHEFLAG_ISASSET;
-    RemapSpriteToSprite0(index);
+    RemapSpriteToPlaceholder(index);
 }
 
-Bitmap *SpriteCache::RemoveSprite(sprkey_t index)
+std::unique_ptr<Bitmap> SpriteCache::RemoveSprite(sprkey_t index)
 {
     assert(index >= 0); // out of positive range indexes are valid to fail
     if (index < 0 || (size_t)index >= _spriteData.size())
@@ -126,7 +141,7 @@ Bitmap *SpriteCache::RemoveSprite(sprkey_t index)
     std::unique_ptr<Bitmap> image = ResourceCache::Remove(index);
     InitNullSprite(index);
     SprCacheLog("RemoveSprite: %d", index);
-    return image.release();
+    return image;
 }
 
 void SpriteCache::DisposeSprite(sprkey_t index)
@@ -175,17 +190,17 @@ sprkey_t SpriteCache::GetFreeIndex()
 
 bool SpriteCache::SpriteData::IsAssetSprite() const
 {
-    return (Flags & SPRCACHEFLAG_ISASSET) != 0; // found in game resources
+    return (Flags & SPRCACHEFLAG_ISASSET) != 0;
 }
 
-bool SpriteCache::SpriteData::IsRemapped() const
+bool SpriteCache::SpriteData::IsError() const
 {
-    return (Flags & SPRCACHEFLAG_REMAP0) != 0; // was remapped to placeholder (sprite 0)
+    return (Flags & SPRCACHEFLAG_ERROR) != 0;
 }
 
 bool SpriteCache::SpriteData::IsExternalSprite() const
 {
-    return (Flags & SPRCACHEFLAG_EXTERNAL) != 0; // assigned externally
+    return (Flags & SPRCACHEFLAG_EXTERNAL) != 0;
 }
 
 bool SpriteCache::SpriteData::IsLocked() const
@@ -195,7 +210,7 @@ bool SpriteCache::SpriteData::IsLocked() const
 
 bool SpriteCache::DoesSpriteExist(sprkey_t index) const
 {
-    return index >= 0 && (size_t)index < _spriteData.size() && // in the valid range
+    return (index >= 0 && (size_t)index < _spriteData.size()) && // in the valid range
         _spriteData[index].IsValid(); // has assigned sprite
 }
 
@@ -208,19 +223,21 @@ Bitmap *SpriteCache::operator [] (sprkey_t index)
 {
     // invalid sprite slot
     assert(index >= 0); // out of positive range indexes are valid to fail
-    if (index < 0 || (size_t)index >= _spriteData.size())
-        return nullptr;
+    if (!DoesSpriteExist(index) || _spriteData[index].IsError())
+        return _placeholder.get();
 
-    // Resolve potentially remapped sprites
-    index = GetDataIndex(index);
     // Try get image from cache
     auto &image = ResourceCache::Get(index);
     if (image)
         return image.get();
     // If no ready image, but has an asset, then try loading one
     if (_spriteData[index].IsAssetSprite())
-        return LoadSprite(index);
-    return nullptr;
+    {
+        auto *bitmap = LoadSprite(index);
+        if (bitmap)
+            return bitmap;
+    }
+    return _placeholder.get();
 }
 
 void SpriteCache::DisposeAllCached()
@@ -228,7 +245,7 @@ void SpriteCache::DisposeAllCached()
     ResourceCache::DisposeFreeItems();
 }
 
-void SpriteCache::Precache(sprkey_t index)
+void SpriteCache::PrecacheSprite(sprkey_t index)
 {
     assert(index >= 0); // out of positive range indexes are valid to fail
     if (index < 0 || (size_t)index >= _spriteData.size())
@@ -238,17 +255,64 @@ void SpriteCache::Precache(sprkey_t index)
 
     if (!ResourceCache::Exists(index))
         LoadSprite(index);
-
-    // make sure locked sprites can't fill the cache
-    ResourceCache::Lock(index);
-    _spriteData[index].Flags |= SPRCACHEFLAG_LOCKED;
     SprCacheLog("Precached %d", index);
 }
 
-sprkey_t SpriteCache::GetDataIndex(sprkey_t index)
+std::unique_ptr<Bitmap> SpriteCache::LoadSpriteNoCache(sprkey_t index)
 {
-    assert((index >= 0) && ((size_t)index < _spriteData.size()));
-    return (_spriteData[index].Flags & SPRCACHEFLAG_REMAP0) == 0 ? index : 0;
+    // invalid sprite slot
+    assert(index >= 0); // out of positive range indexes are valid to fail
+    if (!DoesSpriteExist(index) || _spriteData[index].IsError())
+        return std::unique_ptr<Bitmap>(BitmapHelper::CreateBitmapCopy(_placeholder.get()));
+
+    // Try get image from cache
+    auto &image = ResourceCache::Get(index);
+    if (image)
+        return std::unique_ptr<Bitmap>(BitmapHelper::CreateBitmapCopy(image.get()));
+    // If no ready image, but has an asset, then try loading one
+    if (_spriteData[index].IsAssetSprite())
+    {
+        // TODO: see to optimize this later; the problem is with _callbacks.PostInitSprite
+        // that assumes that the sprite can be accessed from cache by index.
+        auto *bitmap = LoadSprite(index);
+        if (bitmap)
+            return ResourceCache::Remove(index);
+    }
+    return std::unique_ptr<Bitmap>(BitmapHelper::CreateBitmapCopy(_placeholder.get()));
+}
+
+void SpriteCache::LockSprite(sprkey_t index)
+{
+    assert(index >= 0); // out of positive range indexes are valid to fail
+    if (index < 0 || (size_t)index >= _spriteData.size())
+        return;
+    if (!_spriteData[index].IsAssetSprite())
+        return; // cannot lock a non-asset sprite
+
+    if (ResourceCache::Exists(index))
+    {
+        ResourceCache::Lock(index);
+        _spriteData[index].Flags |= SPRCACHEFLAG_LOCKED;
+    }
+    else
+    {
+        LoadSprite(index, true);
+    }
+    SprCacheLog("Locked %d", index);
+}
+
+void SpriteCache::UnlockSprite(sprkey_t index)
+{
+    assert(index >= 0); // out of positive range indexes are valid to fail
+    if (index < 0 || (size_t)index >= _spriteData.size())
+        return;
+    if (!_spriteData[index].IsAssetSprite() ||
+        !_spriteData[index].IsLocked())
+        return; // cannot unlock a non-asset sprite, or non-locked sprite
+
+    ResourceCache::Release(index);
+    _spriteData[index].Flags &= ~SPRCACHEFLAG_LOCKED;
+    SprCacheLog("Unlocked %d", index);
 }
 
 size_t SpriteCache::CalcSize(const std::unique_ptr<Bitmap> &item)
@@ -257,7 +321,7 @@ size_t SpriteCache::CalcSize(const std::unique_ptr<Bitmap> &item)
     return item ? (item->GetWidth() * item->GetHeight() * item->GetBPP()) : 0u;
 }
 
-Bitmap *SpriteCache::LoadSprite(sprkey_t index)
+Bitmap *SpriteCache::LoadSprite(sprkey_t index, bool lock)
 {
     assert((index >= 0) && ((size_t)index < _spriteData.size()));
     if (index < 0 || (size_t)index >= _spriteData.size())
@@ -269,9 +333,9 @@ Bitmap *SpriteCache::LoadSprite(sprkey_t index)
     if (!image)
     {
         Debug::Printf(kDbgGroup_SprCache, kDbgMsg_Warn,
-            "LoadSprite: failed to load sprite %d:\n%s\n - remapping to sprite 0.", index,
+            "LoadSprite: failed to load sprite %d:\n%s\n - remapping to placeholder.", index,
             err ? "Sprite does not exist." : err->FullMessage().GetCStr());
-        RemapSpriteToSprite0(index);
+        RemapSpriteToPlaceholder(index);
         return nullptr;
     }
 
@@ -280,8 +344,8 @@ Bitmap *SpriteCache::LoadSprite(sprkey_t index)
     if (!image)
     {
         Debug::Printf(kDbgGroup_SprCache, kDbgMsg_Warn,
-            "LoadSprite: failed to initialize sprite %d, remapping to sprite 0.", index);
-        RemapSpriteToSprite0(index);
+            "LoadSprite: failed to initialize sprite %d, remapping to placeholder.", index);
+        RemapSpriteToPlaceholder(index);
         return nullptr;
     }
 
@@ -289,12 +353,13 @@ Bitmap *SpriteCache::LoadSprite(sprkey_t index)
     _sprInfos[index].Width = image->GetWidth();
     _sprInfos[index].Height = image->GetHeight();
 
-    // Add to the cache
-    ResourceCache::Put(index, std::unique_ptr<Bitmap>(image));
-    _spriteData[index].Flags = SPRCACHEFLAG_ISASSET;
-    if (index == 0) // keep sprite 0 locked
-        _spriteData[index].Flags |= SPRCACHEFLAG_LOCKED;
-    SprCacheLog("Loaded %d, size now %zu KB", index, _cacheSize / 1024);
+    // Add to the cache, lock if requested or if it's sprite 0
+    const bool should_lock = lock || (index == 0);
+    ResourceCache::Put(index, std::unique_ptr<Bitmap>(image), kCacheItem_Locked * should_lock);
+    _spriteData[index].Flags =
+          SPRCACHEFLAG_ISASSET |
+          SPRCACHEFLAG_LOCKED * should_lock;
+    SprCacheLog("Loaded %d, normal size %zu KB", index, _cacheSize / 1024);
 
     // Let the external user to react to the new sprite;
     // note that this callback is allowed to modify the sprite's pixels,
@@ -303,14 +368,12 @@ Bitmap *SpriteCache::LoadSprite(sprkey_t index)
     return image;
 }
 
-void SpriteCache::RemapSpriteToSprite0(sprkey_t index)
+void SpriteCache::RemapSpriteToPlaceholder(sprkey_t index)
 {
     assert((index > 0) && ((size_t)index < _spriteData.size()));
-    if (index <= 0)
-        return; // don't remap sprite 0 to itself
-    _sprInfos[index] = _sprInfos[0];
-    _spriteData[index].Flags |= SPRCACHEFLAG_REMAP0;
-    SprCacheLog("RemapSpriteToSprite0: %d", index);
+    _sprInfos[index] = SpriteInfo(_placeholder->GetWidth(), _placeholder->GetHeight(), 0);
+    _spriteData[index].Flags |= SPRCACHEFLAG_ERROR;
+    SprCacheLog("RemapSpriteToPlaceholder: %d", index);
 }
 
 void SpriteCache::InitNullSprite(sprkey_t index)
@@ -340,12 +403,13 @@ int SpriteCache::SaveToFile(const String &filename, int store_flags, SpriteCompr
     return SaveSpriteFile(filename, sprites, &_file, store_flags, compress, index);
 }
 
-HError SpriteCache::InitFile(const String &filename, const String &sprindex_filename)
+HError SpriteCache::InitFile(std::unique_ptr<Stream> &&sprite_file,
+                             std::unique_ptr<Stream> &&index_file)
 {
     Reset();
 
     std::vector<Size> metrics;
-    HError err = _file.OpenFile(filename, sprindex_filename, metrics);
+    HError err = _file.OpenFile(std::move(sprite_file), std::move(index_file), metrics);
     if (!err)
         return err;
 

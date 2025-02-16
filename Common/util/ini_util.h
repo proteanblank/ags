@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -20,6 +20,8 @@
 #define __AGS_CN_UTIL__INIUTIL_H
 
 #include <map>
+#include <memory>
+#include "util/stream.h"
 #include "util/string.h"
 
 namespace AGS
@@ -43,6 +45,11 @@ String  CfgReadString(const ConfigTree &cfg, const String &sectn, const String &
 // Specialized variant for reading into char buffer, for code compatibility
 void    CfgReadString(char *cbuf, size_t buf_sz,
     const ConfigTree &cfg, const String &sectn, const String &item, const String &def = "");
+// Looks up for a item key in a given section, returns actual key if one exists, or empty string otherwise,
+// optionally compares item name in case-insensitive way.
+// NOTE: this is a compatibility hack, in case we cannot enforce key case-sensitivity in some case.
+String  CfgFindKey(const ConfigTree &cfg, const String &sectn, const String &item, bool nocase = false);
+
 //
 // Helper functions for writing values into a ConfigTree
 void    CfgWriteInt(ConfigTree &cfg, const String &sectn, const String &item, int value);
@@ -66,14 +73,14 @@ namespace IniUtil
     // Returns FALSE if the file could not be opened.
     bool Read(const String &file, ConfigTree &tree);
     // Same as above, but reads from the provided stream.
-    void Read(Stream *in, ConfigTree &tree);
+    void Read(std::unique_ptr<Stream> &&in, ConfigTree &tree);
     // Serialize given tree to the given file in INI text format.
     // The INI format suggests only one nested level (group - items).
     // The first level values are treated as a global section items.
     // The sub-nodes beyond 2nd level are ignored completely.
     void Write(const String &file, const ConfigTree &tree);
     // Same as above, but writes to the provided stream
-    void Write(Stream *out, const ConfigTree &tree);
+    void Write(std::unique_ptr<Stream> &&out, const ConfigTree &tree);
     // Serialize given tree to the string in INI text format.
     // TODO: implement proper memory/string stream compatible with base Stream
     // class and merge this with Write function.
@@ -84,8 +91,6 @@ namespace IniUtil
     // If item already exists, only value is overwrited, if section exists,
     // new items are appended to the end of it; completely new sections are
     // appended to the end of text.
-    // Source and destination streams may refer either to different objects,
-    // or same stream opened for both reading and writing.
     // Returns FALSE if the file could not be opened for writing.
     bool Merge(const String &file, const ConfigTree &tree);
     // Similar to the above, but merges the key-value tree into the provided

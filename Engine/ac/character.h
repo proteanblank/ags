@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -70,12 +70,13 @@ void    Character_SetIdleView(CharacterInfo *chaa, int iview, int itime);
 void    Character_SetOption(CharacterInfo *chaa, int flag, int yesorno);
 void    Character_SetSpeed(CharacterInfo *chaa, int xspeed, int yspeed);
 void    Character_StopMoving(CharacterInfo *charp);
+void    Character_StopMovingEx(CharacterInfo *charp, bool force_walkable_area);
 void    Character_Tint(CharacterInfo *chaa, int red, int green, int blue, int opacity, int luminance);
 void    Character_Think(CharacterInfo *chaa, const char *text);
 void    Character_UnlockView(CharacterInfo *chaa);
 void    Character_UnlockViewEx(CharacterInfo *chaa, int stopMoving);
-void    Character_Walk(CharacterInfo *chaa, int x, int y, int blocking, int direct);
-void    Character_Move(CharacterInfo *chaa, int x, int y, int blocking, int direct);
+void    Character_Walk(CharacterInfo *chaa, int x, int y, int blocking, int ignwal);
+void    Character_Move(CharacterInfo *chaa, int x, int y, int blocking, int ignwal);
 void    Character_WalkStraight(CharacterInfo *chaa, int xx, int yy, int blocking);
 
 void    Character_RunInteraction(CharacterInfo *chaa, int mood);
@@ -164,16 +165,15 @@ int     Character_GetSpeakingFrame(CharacterInfo *chaa);
 
 //=============================================================================
 
-struct MoveList;
+class MoveList;
 namespace AGS { namespace Common { class Bitmap; } }
 using namespace AGS; // FIXME later
 
 // Configures and starts character animation.
 void animate_character(CharacterInfo *chap, int loopn, int sppd, int rept,
-    int noidleoverride = 0, int direction = 0, int sframe = 0, int volume = 100);
+    int direction = 0, int sframe = 0, int volume = 100);
 // Clears up animation parameters
 void stop_character_anim(CharacterInfo *chap);
-void walk_character(int chac,int tox,int toy,int ignwal, bool autoWalkAnims);
 int  find_looporder_index (int curloop);
 // returns 0 to use diagonal, 1 to not
 int  useDiagonal (CharacterInfo *char1);
@@ -183,14 +183,19 @@ void start_character_turning (CharacterInfo *chinf, int useloop, int no_diagonal
 void fix_player_sprite(MoveList*cmls,CharacterInfo*chinf);
 // Check whether two characters have walked into each other
 int  has_hit_another_character(int sourceChar);
-int  doNextCharMoveStep (CharacterInfo *chi, int &char_index, CharacterExtras *chex);
+int  doNextCharMoveStep(CharacterInfo *chi, CharacterExtras *chex);
 // Tells if character is currently moving, in eWalkableAreas mode
 bool is_char_walking_ndirect(CharacterInfo *chi);
-int  find_nearest_walkable_area_within(int *xx, int *yy, int range, int step);
-void find_nearest_walkable_area (int *xx, int *yy);
-void walk_character(int chac,int tox,int toy,int ignwal, bool autoWalkAnims);
+bool FindNearestWalkableAreaForCharacter(const Point &src, Point &dst, bool force_move);
 void FindReasonableLoopForCharacter(CharacterInfo *chap);
-void walk_or_move_character(CharacterInfo *chaa, int x, int y, int blocking, int direct, bool isWalk);
+// Start character walk or move; calculate path using destination and optionally "ignore walls" flag
+void move_character(CharacterInfo *chaa, int tox, int toy, bool ignwal, bool walk_anim);
+// Start character walk or move along the straight line until any non-passable area is met
+void move_character_straight(CharacterInfo *chaa, int x, int y, bool walk_anim);
+// Start character walk; calculate path using destination and optionally "ignore walls" flag
+void walk_character(CharacterInfo *chaa, int tox, int toy, bool ignwal);
+// Start character walk the straight line until any non-passable area is met
+void walk_character_straight(CharacterInfo *chaa, int tox, int toy);
 int  wantMoveNow (CharacterInfo *chi, CharacterExtras *chex);
 void setup_player_character(int charid);
 Common::Bitmap *GetCharacterImage(int charid, bool *is_original = nullptr);
@@ -214,6 +219,9 @@ int get_character_currently_talking();
 void DisplaySpeech(const char*texx, int aschar);
 int update_lip_sync(int talkview, int talkloop, int *talkframeptr);
 
+// Recalculate dynamic character properties, e.g. after restoring a game save
+void restore_characters();
+
 // Calculates character's bounding box in room coordinates (takes only in-room transform into account)
 // use_frame_0 optionally tells to use frame 0 of current loop instead of current frame.
 Rect GetCharacterRoomBBox(int charid, bool use_frame_0 = false);
@@ -222,10 +230,27 @@ Rect GetCharacterRoomBBox(int charid, bool use_frame_0 = false);
 // or the one that is least far away from its camera; calculated as a perpendicular distance between two AABBs.
 PViewport FindNearestViewport(int charid);
 
+// Character_DoMove converts and validates script parameters, and calls corresponding internal character move function
+void Character_DoMove(CharacterInfo *chaa, const char *api_name,
+    int x, int y, bool walk_straight, int blocking, int ignwal, bool walk_anim);
+
+//
+// Character update functions
+// TODO: move these into a runtime Character class, when there will be a proper one,
+// merging CharacterInfo and CharacterExtras.
+//
+void UpdateCharacterMoveAndAnim(CharacterInfo *chi, CharacterExtras *chex, std::vector<int> &followingAsSheep);
+void UpdateFollowingExactlyCharacter(CharacterInfo *chi);
+bool UpdateCharacterTurning(CharacterInfo *chi, CharacterExtras *chex);
+void UpdateCharacterMoving(CharacterInfo *chi, CharacterExtras *chex, int &doing_nothing);
+bool UpdateCharacterAnimating(CharacterInfo *chi, CharacterExtras *chex, int &doing_nothing);
+void UpdateCharacterIdle(CharacterInfo *chi, CharacterExtras *chex, int &doing_nothing);
+void UpdateCharacterFollower(CharacterInfo *chi, std::vector<int> &followingAsSheep, int &doing_nothing);
+
 extern CharacterInfo*playerchar;
 extern int32_t _sc_PlayerCharPtr;
 
 // order of loops to turn character in circle from down to down
-extern int turnlooporder[8];
+extern const int turnlooporder[8];
 
 #endif // __AGS_EE_AC__CHARACTER_H

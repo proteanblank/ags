@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/draw.h"
@@ -36,7 +36,6 @@ using namespace AGS::Common;
 using namespace AGS::Engine;
 
 extern GameSetupStruct game;
-extern GameState play;
 extern RoomStatus*croom;
 extern RoomObject*objs;
 extern SpriteCache spriteset;
@@ -133,6 +132,13 @@ void DrawingSurface_DrawImageImpl(ScriptDrawingSurface* sds, Bitmap* src,
     Bitmap *ds = sds->GetBitmapSurface();
     if (src == ds) {} // ignore for now; bitmap lib supports, and may be used for effects
         /* debug_script_warn("DrawingSurface.DrawImage: drawing onto itself"); */
+    if (src->GetColorDepth() != ds->GetColorDepth())
+    {
+        if (sprite_id >= 0)
+            debug_script_warn("DrawImage: Sprite %d colour depth %d-bit not same as destination depth %d-bit", sprite_id, src->GetColorDepth(), ds->GetColorDepth());
+        else
+            debug_script_warn("DrawImage: Source image colour depth %d-bit not same as destination depth %d-bit", src->GetColorDepth(), ds->GetColorDepth());
+    }
     if ((trans < 0) || (trans > 100))
         debug_script_warn("DrawingSurface.DrawImage: invalid transparency %d, range is %d - %d", trans, 0, 100);
     trans = Math::Clamp(trans, 0, 100);
@@ -156,6 +162,8 @@ void DrawingSurface_DrawImageImpl(ScriptDrawingSurface* sds, Bitmap* src,
     if (src_height == SCR_NO_VALUE) { src_height = src->GetHeight(); }
     else { sds->SizeToGameResolution(&src_height); }
 
+    sds->PointToGameResolution(&dst_x, &dst_y);
+
     if (dst_x >= ds->GetWidth() || dst_x + dst_width <= 0 || dst_y >= ds->GetHeight() || dst_y + dst_height <= 0 ||
         src_x >= src->GetWidth() || src_x + src_width <= 0 || src_y >= src->GetHeight() || src_y + src_height <= 0)
         return; // source or destination rects lie completely off surface
@@ -165,37 +173,25 @@ void DrawingSurface_DrawImageImpl(ScriptDrawingSurface* sds, Bitmap* src,
 
     // TODO: possibly optimize by not making a stretched intermediate bitmap
     // if simplier blit/draw_sprite could be called (no translucency with alpha channel).
-    bool needToFreeBitmap = false;
+    std::unique_ptr<Bitmap> conv_src;
     if (dst_width != src->GetWidth() || dst_height != src->GetHeight() ||
         src_width != src->GetWidth() || src_height != src->GetHeight())
     {
         // Resize and/or partial copy specified
-        Bitmap *newPic = BitmapHelper::CreateBitmap(dst_width, dst_height, src->GetColorDepth());
-        newPic->StretchBlt(src,
+        conv_src.reset(BitmapHelper::CreateBitmap(dst_width, dst_height, src->GetColorDepth()));
+        conv_src->StretchBlt(src,
             RectWH(src_x, src_y, src_width, src_height),
             RectWH(0, 0, dst_width, dst_height));
 
-        src = newPic;
-        needToFreeBitmap = true;
+        src = conv_src.get();
     }
 
     ds = sds->StartDrawing();
-    sds->PointToGameResolution(&dst_x, &dst_y);
-
-    if (src->GetColorDepth() != ds->GetColorDepth()) {
-        if (sprite_id >= 0)
-            debug_script_warn("DrawImage: Sprite %d colour depth %d-bit not same as background depth %d-bit", sprite_id, src->GetColorDepth(), ds->GetColorDepth());
-        else
-            debug_script_warn("DrawImage: Source image colour depth %d-bit not same as background depth %d-bit", src->GetColorDepth(), ds->GetColorDepth());
-    }
 
     draw_sprite_support_alpha(ds, sds->hasAlphaChannel != 0, dst_x, dst_y, src, src_has_alpha,
         kBlendMode_Alpha, GfxDef::Trans100ToAlpha255(trans));
 
     sds->FinishedDrawing();
-
-    if (needToFreeBitmap)
-        delete src;
 }
 
 void DrawingSurface_DrawImage(ScriptDrawingSurface* sds,
@@ -327,11 +323,10 @@ void DrawingSurface_DrawString(ScriptDrawingSurface *sds, int xx, int yy, int fo
 {
     sds->PointToGameResolution(&xx, &yy);
     Bitmap *ds = sds->StartDrawing();
-    // don't use wtextcolor because it will do a 16->32 conversion
     color_t text_color = sds->currentColour;
-    if ((ds->GetColorDepth() <= 8) && (play.raw_color > 255)) {
+    if ((ds->GetColorDepth() <= 8) && (text_color > 255)) {
         text_color = ds->GetCompatibleColor(1);
-        debug_script_warn ("RawPrint: Attempted to use hi-color on 256-col background");
+        debug_script_warn ("DrawingSurface.DrawString: Attempted to use color %d on 256-col surface", text_color);
     }
     String res_str = GUI::ApplyTextDirection(text);
     wouttext_outline(ds, xx, yy, font, text_color, res_str.GetCStr());
@@ -347,7 +342,8 @@ void DrawingSurface_DrawStringWrapped(ScriptDrawingSurface *sds, int xx, int yy,
     sds->PointToGameResolution(&xx, &yy);
     sds->SizeToGameResolution(&wid);
 
-    if (break_up_text_into_lines(msg, Lines, wid, font) == 0)
+    const char *draw_text = skip_voiceover_token(msg);
+    if (break_up_text_into_lines(draw_text, Lines, wid, font) == 0)
         return;
 
     Bitmap *ds = sds->StartDrawing();
@@ -355,7 +351,7 @@ void DrawingSurface_DrawStringWrapped(ScriptDrawingSurface *sds, int xx, int yy,
 
     for (size_t i = 0; i < Lines.Count(); i++)
     {
-        GUI::DrawTextAlignedHor(ds, Lines[i].GetCStr(), font, text_color,
+        GUI::DrawTextAlignedHor(ds, Lines[i], font, text_color,
             xx, xx + wid - 1, yy + linespacing*i, (FrameAlignment)alignment);
     }
 
@@ -516,7 +512,10 @@ RuntimeScriptValue Sc_DrawingSurface_DrawStringWrapped_Old(void *self, const Run
 
 RuntimeScriptValue Sc_DrawingSurface_DrawStringWrapped(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_OBJCALL_VOID_PINT5_POBJ(ScriptDrawingSurface, DrawingSurface_DrawStringWrapped, const char);
+    API_OBJCALL_SCRIPT_SPRINTF(DrawingSurface_DrawString, 6);
+    DrawingSurface_DrawStringWrapped((ScriptDrawingSurface*)self, params[0].IValue, params[1].IValue, params[2].IValue,
+        params[3].IValue, params[4].IValue, scsf_buffer);
+    return RuntimeScriptValue((int32_t)0);
 }
 
 // void (ScriptDrawingSurface* target, ScriptDrawingSurface* source, int translev)
@@ -594,11 +593,16 @@ RuntimeScriptValue Sc_DrawingSurface_GetWidth(void *self, const RuntimeScriptVal
 //
 //=============================================================================
 
-// void (ScriptDrawingSurface *sds, int xx, int yy, int font, const char* texx, ...)
 void ScPl_DrawingSurface_DrawString(ScriptDrawingSurface *sds, int xx, int yy, int font, const char* texx, ...)
 {
     API_PLUGIN_SCRIPT_SPRINTF(texx);
     DrawingSurface_DrawString(sds, xx, yy, font, scsf_buffer);
+}
+
+void ScPl_DrawingSurface_DrawStringWrapped(ScriptDrawingSurface *sds, int xx, int yy, int wid, int font, int alignment, const char *msg, ...)
+{
+    API_PLUGIN_SCRIPT_SPRINTF(msg);
+    DrawingSurface_DrawStringWrapped(sds, xx, yy, wid, font, alignment, scsf_buffer);
 }
 
 void RegisterDrawingSurfaceAPI(ScriptAPIVersion base_api, ScriptAPIVersion /*compat_api*/)
@@ -631,7 +635,12 @@ void RegisterDrawingSurfaceAPI(ScriptAPIVersion base_api, ScriptAPIVersion /*com
 
     // Few functions have to be selected based on API level
     if (base_api < kScriptAPI_v350)
+    {
         ccAddExternalObjectFunction("DrawingSurface::DrawStringWrapped^6", API_FN_PAIR(DrawingSurface_DrawStringWrapped_Old));
+    }
     else
+    { // old non-variadic and new variadic variants
         ccAddExternalObjectFunction("DrawingSurface::DrawStringWrapped^6", API_FN_PAIR(DrawingSurface_DrawStringWrapped));
+        ccAddExternalObjectFunction("DrawingSurface::DrawStringWrapped^106", Sc_DrawingSurface_DrawStringWrapped, (void*)ScPl_DrawingSurface_DrawStringWrapped);
+    }
 }

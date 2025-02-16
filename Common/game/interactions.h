@@ -2,25 +2,34 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
-// Interaction structs.
+// Interaction structs: they define engine's reaction to player interaction
+// with various game objects.
+//
+// There are two kinds of interaction systems: the modern and legacy ones.
+// The new one, represented by InteractionEvents struct, is very simple:
+// it is defined as a indexed list of script function names, where index is a
+// internal index of a interaction type or event (object-specific),
+// and function name tells which function to run, either in a global script
+// or room script (again, object-specific).
 //
 //-----------------------------------------------------------------------------
 //
-// Most of the interaction types here were used before the script and have
-// very limited capabilities. They were removed from AGS completely in
-// generation 3.0. The code is left for backwards compatibility.
+// Legacy system was used prior the proper scripting was introduced in AGS.
+// This sytem was removed from AGS Editor completely in generation 3.0,
+// so it's here strictly for backwards compatibility.
 //
-//-----------------------------------------------------------------------------
+// Legacy system is represented by Interaction struct, and is defined by a
+// tree-like collection of events, conditions and actions.
 //
 /* THE WAY THIS WORKS:
 *
@@ -39,18 +48,75 @@
 #define __AGS_CN_GAME__INTEREACTIONS_H
 
 #include <memory>
-#include "util/string_types.h"
-
-#define LOCAL_VARIABLE_OFFSET       10000
-#define MAX_GLOBAL_VARIABLES        100
-#define MAX_ACTION_ARGS             5
-#define MAX_NEWINTERACTION_EVENTS   30
-#define MAX_COMMANDS_PER_LIST       40
+#include <vector>
+#include "util/error.h"
+#include "util/string.h"
 
 namespace AGS
 {
 namespace Common
 {
+
+class Stream;
+
+//-----------------------------------------------------------------------------
+//
+// InteractionEvents (modern interaction system).
+// A indexed list of script functions for all the supported events.
+// Indexes are object-specific.
+//
+//-----------------------------------------------------------------------------
+
+enum InteractionEventsVersion
+{
+    kInterEvents_Initial = 0,
+    kInterEvents_v362    = 3060200,
+};
+
+// A indexed list of function links for all the supported events.
+struct InteractionEvents
+{
+    // An optional name of a script module to run functions in
+    String ScriptModule;
+    // Script function names, corresponding to the event's index,
+    // paired with Enabled flag to tell if this event handler has to be processed
+    struct EventHandler
+    {
+        String FunctionName;
+        // At runtime we may want to receive function's call result and update
+        // Enabled status, but result may be delayed, so we have to use a shared memory object for safety.
+        // TODO: have this in runtime-only struct, when we have a clear separation
+        std::shared_ptr<bool> Enabled;
+
+        inline bool IsEnabled() const { return Enabled && *Enabled; }
+
+        EventHandler(const String &fn_name)
+            : FunctionName(fn_name), Enabled(new bool(!fn_name.IsEmpty())) {}
+    };
+    std::vector<EventHandler> Events;
+
+    // Read and create pre-3.6.2 version of the InteractionEvents
+    static std::unique_ptr<InteractionEvents> CreateFromStream_v361(Stream *in);
+    // Read and create 3.6.2+ version of the InteractionEvents
+    static std::unique_ptr<InteractionEvents> CreateFromStream_v362(Stream *in);
+    void Read_v361(Stream *in);
+    HError Read_v362(Stream *in);
+    void Write_v361(Stream *out) const;
+    void Write_v362(Stream *out) const;
+};
+
+typedef std::unique_ptr<InteractionEvents> UInteractionEvents;
+
+
+//-----------------------------------------------------------------------------
+//
+// Interactions (legacy interaction system).
+//
+//-----------------------------------------------------------------------------
+
+#define MAX_ACTION_ARGS             5
+#define MAX_NEWINTERACTION_EVENTS   30
+#define MAX_COMMANDS_PER_LIST       40
 
 enum InterValType : int8_t
 {
@@ -96,14 +162,14 @@ struct InteractionCommand
     void Assign(const InteractionCommand &ic, InteractionCommandList *parent);
     void Reset();
 
-    void Read_v321(Stream *in, bool &has_children);
-    void Write_v321(Stream *out) const;
+    void Read(Stream *in, bool &has_children);
+    void Write(Stream *out) const;
 
     InteractionCommand &operator = (const InteractionCommand &ic);
 
 private:
-    void ReadValues_Aligned(Stream *in);
-    void WriteValues_Aligned(Stream *out) const;
+    void ReadValues(Stream *in);
+    void WriteValues(Stream *out) const;
 };
 
 
@@ -120,12 +186,12 @@ struct InteractionCommandList
 
     void Reset();
 
-    void Read_v321(Stream *in);
-    void Write_v321(Stream *out) const;
+    void Read(Stream *in);
+    void Write(Stream *out) const;
 
 protected:
-    void Read_Aligned(Common::Stream *in, std::vector<bool> &cmd_children);
-    void Write_Aligned(Common::Stream *out) const;
+    void ReadCommands(Common::Stream *in, std::vector<bool> &cmd_children);
+    void WriteCommands(Common::Stream *out) const;
 };
 
 
@@ -158,21 +224,11 @@ struct Interaction
     void Reset();
 
     // Game static data (de)serialization
-    static Interaction *CreateFromStream(Stream *in);
-    void                Write(Stream *out) const;
-
-    // Reading and writing runtime data from/to savedgame;
-    // NOTE: these are backwards-compatible methods, that do not always
-    // have practical sense
-    void ReadFromSavedgame_v321(Stream *in);
-    void WriteToSavedgame_v321(Stream *out) const;
-    void ReadTimesRunFromSave_v321(Stream *in);
-    void WriteTimesRunToSave_v321(Stream *out) const;
+    static std::unique_ptr<Interaction> CreateFromStream(Stream *in);
+    void Write(Stream *out) const;
 
     Interaction &operator =(const Interaction &inter);
 };
-
-typedef std::shared_ptr<Interaction> PInteraction;
 
 
 // Legacy pre-3.0 kind of global and local room variables
@@ -189,24 +245,10 @@ struct InteractionVariable
     void Write(Stream *out) const;
 };
 
-typedef std::vector<InteractionVariable> InterVarVector;
 
-
-// A list of script function names for all supported events
-struct InteractionScripts
-{
-    StringV ScriptFuncNames;
-
-    static InteractionScripts *CreateFromStream(Stream *in);
-};
-
-typedef std::shared_ptr<InteractionScripts> PInteractionScripts;
+typedef std::unique_ptr<Interaction> UInteraction;
 
 } // namespace Common
 } // namespace AGS
-
-// Legacy global variables
-extern AGS::Common::InteractionVariable globalvars[MAX_GLOBAL_VARIABLES];
-extern int numGlobalVars;
 
 #endif // __AGS_CN_GAME__INTEREACTIONS_H

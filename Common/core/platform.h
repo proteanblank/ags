@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #ifndef __AC_PLATFORM_H
 #define __AC_PLATFORM_H
 
@@ -123,6 +136,12 @@
     #error "Unknown platform"
 #endif
 
+#if defined(__MINGW32__)
+#define AGS_PLATFORM_WINDOWS_MINGW (1)
+#else
+#define AGS_PLATFORM_WINDOWS_MINGW (0)
+#endif
+
 #if defined(_DEBUG)
     #define AGS_PLATFORM_DEBUG  (1)
 #elif ! defined(NDEBUG)
@@ -146,6 +165,7 @@
                         AGS_PLATFORM_OS_MACOS)
 #define AGS_PLATFORM_MOBILE ((AGS_PLATFORM_OS_ANDROID) || (AGS_PLATFORM_OS_IOS))
 
+#define AGS_SUPPORT_MULTIDISPLAY (AGS_PLATFORM_DESKTOP)
 #define AGS_HAS_DIRECT3D (AGS_PLATFORM_OS_WINDOWS)
 #define AGS_HAS_OPENGL (AGS_PLATFORM_OS_WINDOWS    || \
                         AGS_PLATFORM_OS_ANDROID    || \
@@ -161,9 +181,13 @@
 // Only allow searching around for game data on desktop systems;
 // otherwise use explicit argument either from program wrapper, command-line
 // or read from default config.
+//  FIXME: AGS_PLATFORM_OS_IOS normally should not be here;
+//         need to find out how to pass a path to game file
+//         from the ObjectiveC application side.
 #define AGS_SEARCH_FOR_GAME_ON_LAUNCH (AGS_PLATFORM_OS_WINDOWS    || \
                                        AGS_PLATFORM_OS_LINUX      || \
                                        AGS_PLATFORM_OS_MACOS      || \
+                                       AGS_PLATFORM_OS_IOS        || \
                                        AGS_PLATFORM_OS_EMSCRIPTEN || \
                                        AGS_PLATFORM_OS_FREEBSD )
 

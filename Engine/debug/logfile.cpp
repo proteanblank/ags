@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -30,16 +30,25 @@ LogFile::LogFile()
 {
 }
 
+void LogFile::OnRegister()
+{
+    if (!_filePath.IsEmpty())
+        Debug::Printf(kDbgMsg_Info, "Logging to %s", _filePath.GetCStr());
+}
+
 void LogFile::PrintMessage(const DebugMessage &msg)
 {
     if (!_file.get())
     {
         if (_filePath.IsEmpty())
-            return;
-        _file.reset(File::OpenFile(_filePath, _openMode == kLogFile_Append ? Common::kFile_Create : Common::kFile_CreateAlways,
-            Common::kFile_Write));
+            return; // was disabled
+
+        _file = File::OpenFile(_filePath, _openMode == kLogFile_Append ? kFile_Create : kFile_CreateAlways,
+            kStream_Write);
         if (!_file)
         {
+            // TODO: find a method to disable an output in DebugManager
+            // if output fails, use return value or a callback for this
             Debug::Printf("Unable to write log to '%s'.", _filePath.GetCStr());
             _filePath = "";
             return;
@@ -71,10 +80,10 @@ bool LogFile::OpenFile(const String &file_path, OpenMode open_mode)
     }
     else
     {
-        _file.reset(File::OpenFile(file_path,
-                           open_mode == kLogFile_Append ? Common::kFile_Create : Common::kFile_CreateAlways,
-                           Common::kFile_Write));
-        return _file.get() != nullptr;
+        _file = File::OpenFile(file_path,
+                           open_mode == kLogFile_Append ? kFile_Create : kFile_CreateAlways,
+                           kStream_Write);
+        return _file != nullptr;
     }
 }
 

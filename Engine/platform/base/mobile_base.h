@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "core/platform.h"
@@ -38,15 +38,11 @@ struct MobileSetup
     int gfx_renderer = 0;
     int gfx_scaling = 0;
     int gfx_smoothing = 0;
-    int gfx_super_sampling = 0;
     int gfx_smooth_sprites = 0;
 
     // Audio options
     int audio_enabled = 0;
     int audio_cachesize = 0;
-
-    // Video playback options
-    int video_framedrop = 0;
 
     // Debug options
     int debug_write_to_logcat = 0;

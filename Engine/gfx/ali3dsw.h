@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -150,8 +150,8 @@ class SDLRendererGraphicsDriver : public GraphicsDriverBase
 public:
     SDLRendererGraphicsDriver();
 
-    const char*GetDriverName() override { return "SDL 2D Software renderer"; }
-    const char*GetDriverID() override { return "Software"; }
+    const char *GetDriverID() override { return "Software"; }
+    const char *GetDriverName() override { return "SDL 2D Software renderer"; }
 
     bool RequiresFullRedrawEachFrame() override { return false; }
     bool HasAcceleratedTransform() override { return false; }
@@ -165,28 +165,29 @@ public:
     bool SetRenderFrame(const Rect &dst_rect) override;
     bool IsModeSupported(const DisplayMode &mode) override;
     int  GetDisplayDepthForNativeDepth(int native_color_depth) const override;
-    IGfxModeList *GetSupportedModeList(int color_depth) override;
+    IGfxModeList *GetSupportedModeList(int display_index, int color_depth) override;
     PGfxFilter GetGraphicsFilter() const override;
     void UnInit();
     // Clears the screen rectangle. The coordinates are expected in the **native game resolution**.
     void ClearRectangle(int x1, int y1, int x2, int y2, RGB *colorToUse) override;
     int  GetCompatibleBitmapFormat(int color_depth) override;
-    size_t GetAvailableTextureMemory() override { return 0; /* not using textures for sprites anyway */ }
+    // Returns available texture memory in bytes, or 0 if this query is not supported
+    uint64_t GetAvailableTextureMemory() override { return 0; /* not using textures for sprites anyway */ }
 
     IDriverDependantBitmap* CreateDDB(int width, int height, int color_depth, bool opaque) override;
     IDriverDependantBitmap *CreateDDB(std::shared_ptr<Texture> txdata, bool opaque) override
         { return nullptr; /* not supported */ }
-    IDriverDependantBitmap* CreateDDBFromBitmap(Bitmap *bitmap, bool has_alpha, bool opaque) override;
+    IDriverDependantBitmap* CreateDDBFromBitmap(const Bitmap *bitmap, bool has_alpha, bool opaque) override;
     IDriverDependantBitmap* CreateRenderTargetDDB(int width, int height, int color_depth, bool opaque) override;
-    void UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, Bitmap *bitmap, bool has_alpha) override;
+    void UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, const Bitmap *bitmap, bool has_alpha) override;
     void DestroyDDB(IDriverDependantBitmap* ddb) override;
 
     // Create texture data with the given parameters
     Texture *CreateTexture(int, int, int, bool, bool) override { return nullptr; /* not supported */}
     // Create texture and initialize its pixels from the given bitmap; optionally assigns a ID
-    Texture *CreateTexture(Common::Bitmap*, bool, bool) override { return nullptr; /* not supported */ }
+    Texture *CreateTexture(const Bitmap*, bool, bool) override { return nullptr; /* not supported */ }
     // Update texture data from the given bitmap
-    void UpdateTexture(Texture *txdata, Common::Bitmap*, bool, bool) override { /* not supported */}
+    void UpdateTexture(Texture *txdata, const Bitmap*, bool, bool) override { /* not supported */}
     // Retrieve shared texture object from the given DDB
     std::shared_ptr<Texture> GetTexture(IDriverDependantBitmap *ddb) override { return nullptr; /* not supported */ }
 
@@ -194,19 +195,25 @@ public:
     void SetScreenFade(int red, int green, int blue) override;
     void SetScreenTint(int red, int green, int blue) override;
     void SetStageScreen(const Size &sz, int x = 0, int y = 0) override;
+    // Redraw last draw lists, optionally filtering specific batches
+    void RedrawLastFrame(uint32_t /*batch_skip_filter*/) override
+    {
+        // we already have a last frame on a virtual screen,
+        // but batch skipping is currently not supported
+    }
 
     void RenderToBackBuffer() override;
     void Render() override;
     void Render(int xoff, int yoff, Common::GraphicFlip flip) override;
-    bool GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_native_res, GraphicResolution *want_fmt) override;
-    void FadeOut(int speed, int targetColourRed, int targetColourGreen, int targetColourBlue) override;
-    void FadeIn(int speed, PALETTE pal, int targetColourRed, int targetColourGreen, int targetColourBlue) override;
-    void BoxOutEffect(bool blackingOut, int speed, int delay) override;
+    void Render(IDriverDependantBitmap *target) override;
+    void GetCopyOfScreenIntoDDB(IDriverDependantBitmap *target, uint32_t batch_skip_filter = 0u) override;
+    bool GetCopyOfScreenIntoBitmap(Bitmap *destination, const Rect *src_rect, bool at_native_res,
+        GraphicResolution *want_fmt, uint32_t batch_skip_filter = 0u) override;
     bool SupportsGammaControl() override ;
     void SetGamma(int newGamma) override;
     void UseSmoothScaling(bool /*enabled*/) override { }
     bool DoesSupportVsyncToggle() override { return (SDL_VERSION_ATLEAST(2, 0, 18)) && _capsVsync; }
-    void RenderSpritesAtScreenResolution(bool /*enabled*/, int /*supersampling*/) override { }
+    void RenderSpritesAtScreenResolution(bool /*enabled*/) override { }
     Bitmap *GetMemoryBackBuffer() override;
     void SetMemoryBackBuffer(Bitmap *backBuffer) override;
     Bitmap *GetStageBackBuffer(bool mark_dirty) override;
@@ -233,6 +240,8 @@ private:
 
     SDL_Renderer *_renderer = nullptr;
     SDL_Texture *_screenTex = nullptr;
+    bool _isDirectX = false; // records if created DirectX based renderer
+    int _fullscreenDisplay = -1; // a display where exclusive fullscreen was created
     // BITMAP struct for wrapping screen texture locked pixels, so that we may use blit()
     BITMAP *_fakeTexBitmap = nullptr;
     unsigned char *_lastTexPixels = nullptr;
@@ -266,10 +275,6 @@ private:
     // Renders single sprite batch on the precreated surface
     size_t RenderSpriteBatch(const ALSpriteBatch &batch, size_t from, Common::Bitmap *surface, int surf_offx, int surf_offy);
 
-    void highcolor_fade_in(Bitmap *vs, void(*draw_callback)(), int speed, int targetColourRed, int targetColourGreen, int targetColourBlue);
-    void highcolor_fade_out(Bitmap *vs, void(*draw_callback)(), int speed, int targetColourRed, int targetColourGreen, int targetColourBlue);
-    void __fade_from_range(PALETTE source, PALETTE dest, int speed, int from, int to) ;
-    void __fade_out_range(int speed, int from, int to, int targetColourRed, int targetColourGreen, int targetColourBlue) ;
     // Copy raw screen bitmap pixels to the SDL texture
     void BlitToTexture();
     // Render SDL texture on screen

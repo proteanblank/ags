@@ -1,13 +1,14 @@
 using AGS.Types;
 using AGS.Types.AutoComplete;
 using AGS.Types.Interfaces;
-using ScintillaNET;
 using AGS.Controls;
+using ScintillaNET;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows.Forms;
 
 namespace AGS.Editor
@@ -32,7 +33,6 @@ namespace AGS.Editor
         private const string CONTEXT_MENU_CUT = "CtxCut";
         private const string CONTEXT_MENU_COPY = "CtxCopy";
         private const string CONTEXT_MENU_PASTE = "CtxPaste";
-        private const string CONTEXT_MENU_GO_TO_DEFINITION = "CtxDefinition";
 
         private const string THIS_STRUCT = "this";
         private const int INVALID_POSITION = -1;
@@ -106,9 +106,10 @@ namespace AGS.Editor
         private int _scriptFontSize = Factory.AGSEditor.Settings.ScriptFontSize;
         private string _calltipFont = Factory.AGSEditor.Settings.ScriptTipFont;
         private int _calltipFontSize = Factory.AGSEditor.Settings.ScriptTipFontSize;
+        private bool _toggleLineCommentAddsSpace = Factory.AGSEditor.Settings.ToggleLineCommentAddsSpace;
         private ColorTheme _theme;
 
-        private void UpdateColorTheme()
+        private void UpdateColorThemeStyleDefault()
         {
             if (_theme == null) return;
             ColorTheme t = _theme;
@@ -116,6 +117,15 @@ namespace AGS.Editor
             if (!t.Has("script-editor/text-editor")) return;
             t.SetColor("script-editor/text-editor/global-default/background", c => scintillaControl1.Styles[Style.Default].BackColor = c);
             t.SetColor("script-editor/text-editor/global-default/foreground", c => scintillaControl1.Styles[Style.Default].ForeColor = c);
+        }
+
+        private void UpdateColorTheme()
+        {
+            if (_theme == null) return;
+            ColorTheme t = _theme;
+
+            if (!t.Has("script-editor/text-editor")) return;
+            UpdateColorThemeStyleDefault();
             t.SetColor("script-editor/text-editor/default/background", c => scintillaControl1.Styles[Style.Cpp.Default].BackColor = c);
             t.SetColor("script-editor/text-editor/default/foreground", c => scintillaControl1.Styles[Style.Cpp.Default].ForeColor = c);
             t.SetColor("script-editor/text-editor/word-1/background", c => scintillaControl1.Styles[Style.Cpp.Word].BackColor = c);
@@ -184,6 +194,13 @@ namespace AGS.Editor
             t.SetColor("script-editor/text-editor/caret/caret-fore", c => scintillaControl1.CaretForeColor = c);
             t.SetColor("script-editor/text-editor/caret/caret-line-back", c => scintillaControl1.CaretLineBackColor = c);
             t.SetInt("script-editor/text-editor/caret/caret-line-back-alpha", i => scintillaControl1.CaretLineBackColorAlpha = i);
+
+            t.SetColor("script-editor/text-editor/character/background", c => scintillaControl1.Styles[Style.Cpp.Character].BackColor = c);
+            t.SetColor("script-editor/text-editor/character/foreground", c => scintillaControl1.Styles[Style.Cpp.Character].ForeColor = c);
+            t.SetColor("script-editor/text-editor/brace-light/background", c => scintillaControl1.Styles[Style.BraceLight].BackColor = c);
+            t.SetColor("script-editor/text-editor/brace-light/foreground", c => scintillaControl1.Styles[Style.BraceLight].ForeColor = c);
+            t.SetColor("script-editor/text-editor/brace-bad/background", c => scintillaControl1.Styles[Style.BraceBad].BackColor = c);
+            t.SetColor("script-editor/text-editor/brace-bad/foreground", c => scintillaControl1.Styles[Style.BraceBad].ForeColor = c);
         }
 
         private void UpdateColors()
@@ -256,8 +273,9 @@ namespace AGS.Editor
 
             this.scintillaControl1.Styles[Style.Default].Font = _scriptFont;
             this.scintillaControl1.Styles[Style.Default].Size = _scriptFontSize;
+            UpdateColorThemeStyleDefault();
 
-            scintillaControl1.StyleClearAll();
+            scintillaControl1.StyleClearAll(); // propagates default style to other styles
 
             this.scintillaControl1.Styles[Style.BraceBad].Font = _scriptFont;
             this.scintillaControl1.Styles[Style.BraceBad].Size = _scriptFontSize;
@@ -307,6 +325,8 @@ namespace AGS.Editor
             // to make this work properly we need to supply keywords for preprocessor,
             // otherwise lexer will not know about external defines.
             scintillaControl1.SetProperty("lexer.cpp.track.preprocessor", "0");
+            // avoid confusing comment fold feature, see https://github.com/adventuregamestudio/ags/issues/2323
+            scintillaControl1.SetProperty("fold.cpp.comment.explicit", "0");
 
             Factory.GUIController.ColorThemes.Apply(LoadColorTheme);
             UpdateAllStyles();
@@ -403,6 +423,8 @@ namespace AGS.Editor
 
             scintillaControl1.SetFoldFlags(FoldFlags.LineAfterContracted); // Draw line below if collapsed
             scintillaControl1.Margins[2].Sensitive = true;
+
+            scintillaControl1.AutomaticFold = ScintillaNET.AutomaticFold.Show | ScintillaNET.AutomaticFold.Change;
         }
 
         void scintillaControl1_MarginClick(object sender, MarginClickEventArgs e)
@@ -506,6 +528,105 @@ namespace AGS.Editor
                 else
                     this.scintillaControl1.StyleNeeded -= ScintillaControl1_StyleNeeded;
             }
+        }
+
+        public void ToggleLineComment()
+        {
+            // There are essentially two modes of comment/uncomment here
+            // addsSpace == false:
+            //   comment is inserted as the first character of the line,
+            //   uncommenting will not modify space characters
+            // addsSpace == true:
+            //   comment is inserted as the first indentation character with and additional space after,
+            //   uncommenting will remove one space character after if it exists.
+            const string commentLineSymbol = "//";
+            bool addsSpace = _toggleLineCommentAddsSpace;
+            string comment = commentLineSymbol + (addsSpace ? " " : "");
+            bool setSelectionAtEnd = false;
+            int selStart, selEnd;
+
+            if (string.IsNullOrEmpty(scintillaControl1.SelectedText))
+            {
+                int tmpline = scintillaControl1.LineFromPosition(scintillaControl1.CurrentPosition);
+                selStart = scintillaControl1.Lines[tmpline].Position;
+                selEnd = scintillaControl1.Lines[tmpline].EndPosition;
+            }
+            else
+            {
+                int tmplineStart = scintillaControl1.LineFromPosition(scintillaControl1.SelectionStart);
+                int tmplineEnd = scintillaControl1.LineFromPosition(scintillaControl1.SelectionEnd);
+
+                selStart = scintillaControl1.Lines[tmplineStart].Position;
+                selEnd = scintillaControl1.Lines[tmplineEnd].EndPosition;
+                setSelectionAtEnd = true;
+            }
+
+            int lineSelStart = scintillaControl1.LineFromPosition(selStart);
+            int lineSelEnd = scintillaControl1.LineFromPosition(selEnd);
+
+            string firstLine = scintillaControl1.Lines[lineSelStart].Text;
+            bool isUncomment = firstLine.Trim().StartsWith(commentLineSymbol);
+
+            scintillaControl1.BeginUndoAction();
+
+            for (int i = lineSelStart; i < lineSelEnd; i++)
+            {
+                Line line = scintillaControl1.Lines[i];
+                int lineStartPos = line.Position;
+                int lineEndPos = line.EndPosition;
+                int lineIndentPos = scintillaControl1.GetLineIndentationPosition(i);
+
+                string lineText = scintillaControl1.GetTextRange(lineIndentPos, lineEndPos - lineIndentPos);
+
+                if (isUncomment)
+                {
+                    bool canUncommentLine = lineText.StartsWith(commentLineSymbol);
+                    if (!canUncommentLine) continue;
+
+                    int len = commentLineSymbol.Length;
+                    for (; len < lineText.Length; len++)
+                    {
+                        if (lineText[len] != '/') break;
+                    }
+
+                    if(addsSpace && len < lineText.Length && lineText[len] == ' ')
+                    {
+                        len++;
+                    }
+
+                    scintillaControl1.SetSel(lineIndentPos, lineIndentPos + len);
+                    scintillaControl1.ReplaceSelection("");
+                }
+                else
+                {
+                    if (addsSpace)
+                    {
+                        if (string.IsNullOrEmpty(lineText.Trim()))
+                            this.scintillaControl1.InsertText(lineIndentPos, commentLineSymbol);
+                        else
+                            this.scintillaControl1.InsertText(lineIndentPos, comment);
+                    } 
+                    else
+                    {
+                        this.scintillaControl1.InsertText(lineStartPos, comment);
+                    }
+                }
+            }
+
+            if (setSelectionAtEnd)
+            {
+                selStart = scintillaControl1.Lines[lineSelStart].Position;
+                selEnd = scintillaControl1.Lines[lineSelEnd - 1].EndPosition;
+                scintillaControl1.SetSel(selStart, selEnd - 1);
+            }
+            else
+            {
+                scintillaControl1.GotoPosition(selEnd);
+                scintillaControl1.CurrentPosition = selStart;
+                scintillaControl1.SetEmptySelection(scintillaControl1.CurrentPosition);
+            }
+
+            scintillaControl1.EndUndoAction();
         }
 
         public void GoToPosition(int newPos)
@@ -654,9 +775,12 @@ namespace AGS.Editor
             var thisKeyList = dialogKeywords ? _dialogKeywords : _keywords;
             foreach (string s in arr)
             {
-                s.Trim();
-                _keywordSets[(int)type].Add(s);
-                thisKeyList.Add(s);
+                string s_trimmed = s.Trim();
+                if (!string.IsNullOrEmpty(s_trimmed))
+                {
+                    _keywordSets[(int)type].Add(s_trimmed);
+                    thisKeyList.Add(s_trimmed);
+                }
             }
         }
 
@@ -739,14 +863,55 @@ namespace AGS.Editor
             get { return this.scintillaControl1.Modified; }
         }
 
-        public int FindLineNumberForText(string text)
+        /// <summary>
+        /// Search for the exact text match in the script, and returns
+        /// the corresponding line number. Returns -1 if no such text was found.
+        /// plainCodeOnly tells if comments and string literals should be ignored.
+        /// </summary>
+        public int FindLineNumberForText(string text, bool plainCodeOnly)
         {
+            // Here's a problem: InsideStringOrComment relies on scintilla styling;
+            // but styling is not necessarily present at the time if we just loaded a document.
+            // So we force the styling in case it was not done here yet.
             string currentText = this.scintillaControl1.Text;
-            if (currentText.IndexOf(text) >= 0)
+            int pos;
+            for (pos = currentText.IndexOf(text);
+                pos >= 0 && plainCodeOnly && InsideStringOrCommentForceStyling(pos, text.Length);
+                pos = currentText.IndexOf(text, pos + text.Length))
             {
-                return FindLineNumberForCharacterIndex(currentText.IndexOf(text));
             }
-            return 0;
+
+            if (pos >= 0)
+            {
+                return FindLineNumberForCharacterIndex(pos);
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// Search the script for the regex pattern, and returns
+        /// the corresponding line number. Returns -1 if no such text was found.
+        /// plainCodeOnly tells if comments and string literals should be ignored.
+        /// </summary>
+        public int FindLineNumberForPattern(string pattern, bool plainCodeOnly)
+        {
+            // Here's a problem: InsideStringOrComment relies on scintilla styling;
+            // but styling is not necessarily present at the time if we just loaded a document.
+            // So we force the styling in case it was not done here yet.
+            string currentText = this.scintillaControl1.Text;
+            Regex regex = new Regex(pattern);
+            Match match;
+            for (match = regex.Match(currentText);
+                match.Success && plainCodeOnly && InsideStringOrCommentForceStyling(match.Index, match.Length);
+                match = regex.Match(currentText, match.Index + match.Length))
+            {
+            }
+
+            if (match.Success)
+            {
+                return FindLineNumberForCharacterIndex(match.Index);
+            }
+            return -1;
         }
 
         public int FindLineNumberForCharacterIndex(int pos)
@@ -1340,7 +1505,7 @@ namespace AGS.Editor
         public ScriptStruct FindGlobalVariableOrType(string type)
         {
             bool dummy = false;
-            return FindGlobalVariableOrType(type, ref dummy);
+            return FindGlobalVariableOrType(type, out dummy);
         }
 
         private IList<IScript> GetAutoCompleteScriptList()
@@ -1375,7 +1540,7 @@ namespace AGS.Editor
             return null;
         }
 
-        private ScriptStruct FindGlobalVariableOrType(string type, ref bool staticAccess)
+        private ScriptStruct FindGlobalVariableOrType(string type, out bool staticAccess)
         {
             // First try search for a type that has this name
             var foundType = FindGlobalType(type);
@@ -1402,9 +1567,10 @@ namespace AGS.Editor
             return null;
         }
 
-        private string ReadNextWord(ref string pathedExpression)
+        private string ReadNextWord(ref string pathedExpression, out bool indexedAccess)
         {
             string thisWord = string.Empty;
+            indexedAccess = false;
             while ((pathedExpression.Length > 0) &&
                 ((Char.IsLetterOrDigit(pathedExpression[0])) || (pathedExpression[0] == '_')))
             {
@@ -1423,6 +1589,7 @@ namespace AGS.Editor
                     cursorPos++;
                 }
                 pathedExpression = pathedExpression.Substring(cursorPos);
+                indexedAccess = true;
             }
             if ((pathedExpression.Length > 0) && (pathedExpression[0] == '.'))
             {
@@ -1497,38 +1664,44 @@ namespace AGS.Editor
                 pathedExpression = string.Empty;
             }
 
-            string thisWord = ReadNextWord(ref pathedExpression);
+            bool indexedAccess = false;
             staticAccess = false;
+            string thisWord = ReadNextWord(ref pathedExpression, out indexedAccess);
             ScriptStruct foundType;
 
             if (thisWord == THIS_STRUCT)
             {
                 thisWord = FindTypeForThis(startAtPos);
-                foundType = FindGlobalVariableOrType(thisWord, ref staticAccess);
+                foundType = FindGlobalVariableOrType(thisWord, out staticAccess);
                 isThis = true;
                 // force this to false for the "this" variable
                 staticAccess = false;
             }
             else
             {
-                foundType = FindGlobalVariableOrType(thisWord, ref staticAccess);
+                foundType = FindGlobalVariableOrType(thisWord, out staticAccess);
+                if (staticAccess && indexedAccess)
+                    return null; // element access of type? bad syntax...
+
                 if ((foundType == null) && (thisWord.Length > 0))
                 {
                     ScriptVariable var = FindLocalVariableWithName(startAtPos, thisWord);
                     if (var != null)
                     {
-                        foundType = FindGlobalVariableOrType(var.Type);
+                        foundType = ProcessVariableAccess(var, indexedAccess);
                     }
                 }
             }
 
             while ((pathedExpression.Length > 0) && (foundType != null))
             {
-                thisWord = ReadNextWord(ref pathedExpression);
+                thisWord = ReadNextWord(ref pathedExpression, out indexedAccess);
                 ScriptVariable memberVar = foundType.FindMemberVariable(thisWord);
                 if (memberVar != null)
                 {
-                    foundType = FindGlobalVariableOrType(memberVar.Type);
+                    foundType = ProcessVariableAccess(memberVar, indexedAccess);
+                    if (foundType == null)
+                        return null;
                     staticAccess = false;
                 }
                 else
@@ -1536,6 +1709,22 @@ namespace AGS.Editor
                     foundType = null;
                 }
             }
+            return foundType;
+        }
+
+        private ScriptStruct ProcessVariableAccess(ScriptVariable var, bool indexedAccess)
+        {
+            if (!var.IsArray && indexedAccess)
+                return null; // accessing element of non-array, bad syntax...
+
+            if (var.IsArray && !var.IsDynamicArray && !indexedAccess)
+                return null; // accessing member of static array, no result
+
+            ScriptStruct foundType = FindGlobalType(var.Type);
+
+            if (var.IsDynamicArray && indexedAccess)
+                foundType = FindGlobalType(foundType.BaseType);
+
             return foundType;
         }
 
@@ -1681,6 +1870,22 @@ namespace AGS.Editor
             return ((style == Style.Cpp.CommentLine) || (style == Style.Cpp.Comment) ||
                 (style == Style.Cpp.CommentDoc) || (style == Style.Cpp.CommentLineDoc) ||
                 (style == Style.Cpp.String));
+        }
+
+        /// <summary>
+        /// Forces styling prior to testing whether this is inside comment or string literal.
+        /// WARNING: may take a long time, use with care only when strictly required for the
+        /// operation to work.
+        /// </summary>
+        public bool InsideStringOrCommentForceStyling(int position, int length)
+        {
+            int styledUpTo = scintillaControl1.GetEndStyled();
+            if (position > styledUpTo)
+            {
+                scintillaControl1.Colorize(styledUpTo, position + length);
+            }
+
+            return InsideStringOrCommentStyleOnly(position);
         }
 
         private bool IgnoringCurrentLine()
@@ -1916,7 +2121,12 @@ namespace AGS.Editor
 
         private string ConstructVariableCalltipText(ScriptVariable variable, ScriptStruct owningStruct)
         {
-            string callTip = variable.Type;
+            string callTip = "";
+            if (variable.IsReadOnly)
+            {
+                callTip += "readonly ";
+            }
+            callTip += variable.Type;
             if (variable.IsArray)
             {
                 callTip += "[ ]";
@@ -2070,23 +2280,6 @@ namespace AGS.Editor
                 if (v.HasValue && v < gameSettings.ScriptCompatLevelReal)
                     return false;
             }
-            // TODO: AutoComplete feature in AGS is implemented in confusing and messy way. Thus, it does not
-            // use same technique for knowing which parts of the script should be disabled (by ifdef/ifndef)
-            // as precompiler. Instead it makes its own parsing, and somewhat limits perfomance and capabilities.
-            // This is (one) reason why all those checks are made here explicitly, instead of relying on some
-            // prefetched macro list.
-            if (token.IfNDefOnly != null && token.IfNDefOnly.StartsWith("STRICT_IN_"))
-            {
-                ScriptAPIVersion? v = GetAPIVersionFromString(token.IfNDefOnly.Substring("STRICT_IN_".Length));
-                if (v.HasValue && (gameSettings.EnforceObjectBasedScript && v <= gameSettings.ScriptCompatLevelReal))
-                    return false;
-            }
-            if (token.IfDefOnly != null && token.IfDefOnly.StartsWith("STRICT_IN_"))
-            {
-                ScriptAPIVersion? v = GetAPIVersionFromString(token.IfDefOnly.Substring("STRICT_IN_".Length));
-                if (v.HasValue && !(gameSettings.EnforceObjectBasedScript && v <= gameSettings.ScriptCompatLevelReal))
-                    return false;
-            }
             return true;
         }
 
@@ -2189,41 +2382,6 @@ namespace AGS.Editor
             }
         }
 
-        private void AddFunctionParametersToVariableList(ScriptFunction func, List<ScriptVariable> variables)
-        {
-            if (func.ParamList.Length == 0)
-            {
-                return;
-            }
-            string[] parameters = func.ParamList.Split(',');
-            foreach (string thisParam in parameters)
-            {
-                string param = thisParam.Trim();
-                if (param.StartsWith("optional "))
-                {
-                    param = param.Substring(9).Trim();
-                }
-                int index = param.Length - 1;
-                while ((index >= 0) &&
-                       (Char.IsLetterOrDigit(param[index]) || param[index] == '_'))
-                {
-                    index--;
-                }
-                string paramName = param.Substring(index + 1);
-                string paramType = param.Substring(0, index + 1).Trim();
-                bool isPointer = false;
-                if (paramType.EndsWith("*"))
-                {
-                    isPointer = true;
-                    paramType = paramType.Substring(0, paramType.Length - 1).Trim();
-                }
-                if ((paramName.Length > 0) && (paramType.Length > 0))
-                {
-                    variables.Add(new ScriptVariable(paramName, paramType, false, isPointer, null, null, false, false, false, false, func.StartsAtCharacterIndex));
-                }
-            }
-        }
-
         private ScriptVariable FindLocalVariableWithName(int startAtPos, string nameToFind)
         {
             List<ScriptVariable> localVars = GetListOfLocalVariablesForCurrentPosition(false, startAtPos);
@@ -2299,8 +2457,9 @@ namespace AGS.Editor
                         startPos += openBracketOffset;
                         scriptExtract = scriptExtract.Substring(openBracketOffset);
                     }
-                    List<ScriptVariable> localVars = AutoComplete.GetLocalVariableDeclarationsFromScriptExtract(scriptExtract, startPos);
-                    AddFunctionParametersToVariableList(func, localVars);
+
+                    var localStructs = _autoCompleteForThis.AutoCompleteData.Structs;
+                    List<ScriptVariable> localVars = AutoComplete.GetLocalVariableDeclarations(func, localStructs, scriptExtract, startPos);
                     return localVars;
                 }
             }
@@ -2426,15 +2585,31 @@ namespace AGS.Editor
                 {
                     menu.Items.Add(new ToolStripSeparator());
                 }
-                menu.Items.Add(new ToolStripMenuItem("Cut", Factory.GUIController.ImageList.Images["CutIcon"], onClick, CONTEXT_MENU_CUT));
-                menu.Items[menu.Items.Count - 1].Enabled = this.CanCutAndCopy();
-                menu.Items.Add(new ToolStripMenuItem("Copy", Factory.GUIController.ImageList.Images["CopyIcon"], onClick, CONTEXT_MENU_COPY));
-                menu.Items[menu.Items.Count - 1].Enabled = this.CanCutAndCopy();
-                menu.Items.Add(new ToolStripMenuItem("Paste", Factory.GUIController.ImageList.Images["PasteIcon"], onClick, CONTEXT_MENU_PASTE));
-                menu.Items[menu.Items.Count - 1].Enabled = this.CanPaste();
+
+                ToolStripMenuItem menuItem;
+
+                menuItem = new ToolStripMenuItem("Cut", Factory.GUIController.ImageList.Images["CutIcon"], onClick, CONTEXT_MENU_CUT);
+                menuItem.ShortcutKeys = Keys.Control | Keys.X;
+                menuItem.Enabled = this.CanCutAndCopy();
+                menu.Items.Add(menuItem);
+
+                menuItem = new ToolStripMenuItem("Copy", Factory.GUIController.ImageList.Images["CopyIcon"], onClick, CONTEXT_MENU_COPY);
+                menuItem.ShortcutKeys = Keys.Control | Keys.C;
+                menuItem.Enabled = this.CanCutAndCopy();
+                menu.Items.Add(menuItem);
+
+                menuItem = new ToolStripMenuItem("Paste", Factory.GUIController.ImageList.Images["PasteIcon"], onClick, CONTEXT_MENU_PASTE);
+                menuItem.ShortcutKeys = Keys.Control | Keys.V;
+                menuItem.Enabled = this.CanPaste();
+                menu.Items.Add(menuItem);
 
                 menu.Show(this.scintillaControl1, e.X, e.Y);
             }
+        }
+
+        public int TextLength
+        {
+            get { return scintillaControl1.TextLength; }
         }
 
         public int LineCount
@@ -2464,6 +2639,12 @@ namespace AGS.Editor
         {
             set { _calltipFontSize = value; }
             get { return _calltipFontSize; }
+        }
+
+        public bool ToggleLineCommentAddsSpace
+        {
+            set { _toggleLineCommentAddsSpace = value; }
+            get { return _toggleLineCommentAddsSpace; }
         }
 
         void IScriptEditorControl.ShowLineNumbers()

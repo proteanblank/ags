@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -25,8 +25,7 @@ using namespace AGS; // FIXME later
 
 //=============================================================================
 
-// [IKM] 2012-09-13: this function is now defined in engine and editor separately
-extern void __my_setcolor(int *ctset, int newcol, int wantColDep);
+    extern void __my_setcolor(int *ctset, int newcol, int wantColDep);
     
     extern void wsetrgb(int coll, int r, int g, int b, RGB * pall);
     extern void wcolrotate(unsigned char start, unsigned char finish, int dir, RGB * pall);
@@ -39,9 +38,8 @@ extern void __my_setcolor(int *ctset, int newcol, int wantColDep);
     extern const int col_lookups[32];
 
     // TODO: these are used only in the Editor's agsnative.cpp
-    extern int __wremap_keep_transparent;
-    extern void wremap(RGB * pal1, Common::Bitmap *picc, RGB * pal2);
-    extern void wremapall(RGB * pal1, Common::Bitmap *picc, RGB * pal2);
+    extern void wremap(const RGB * pal1, Common::Bitmap *picc, const RGB * pal2, bool keep_transparent = true);
+    extern void wremapall(const RGB * pal1, Common::Bitmap *picc, const RGB * pal2);
 
 
 #endif // __WGT4_H

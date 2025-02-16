@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -25,6 +25,12 @@
 //
 // TODO: support data Priority, which tells which items may be disposed
 // when adding new item and surpassing the cache limit.
+//
+// TODO: as an option, consider to have Locked items separate from the normal
+// cache limit, and probably have their own limit setting as a safety measure.
+// (after reaching this limit ResourceCache would simply ignore any further
+// Lock commands until some items are unlocked.)
+// Rethink this when it's time to design a better resource handling in AGS.
 //
 // TODO: as an option, consider supporting a specialized container type that
 // has an associative container's interface, but is optimized for having most
@@ -264,6 +270,7 @@ private:
     {
         // Request item's size, and test if it's a valid item
         TSize size = CalcSize(value);
+        assert(size > 0u);
         if (size == 0u)
             return; // invalid item
         

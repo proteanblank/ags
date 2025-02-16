@@ -24,12 +24,13 @@ namespace AGS.Types
 
         static RoomRegion()
         {
-            _interactionSchema = new InteractionSchema(new string[] {
+            _interactionSchema = new InteractionSchema(string.Empty, true,
+                new string[] {
                 "While standing on region",
                 "Walks onto region", 
                 "Walks off region"},
                 new string[] { "Standing", "WalksOnto", "WalksOff" },
-                "Region *r");
+                "Region *theRegion");
         }
 
         [Description("The ID number of the region")]
@@ -110,7 +111,7 @@ namespace AGS.Types
         [Browsable(false)]
         public string PropertyGridTitle
         {
-            get { return "Region ID " + _id; }
+            get { return TypesHelper.MakePropertyGridTitle("Region", _id); }
         }
 
         [AGSNoSerialize()]
