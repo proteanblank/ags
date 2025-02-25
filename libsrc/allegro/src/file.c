@@ -78,10 +78,11 @@ static int filename_encoding = U_ASCII;
 
 /* Use strictly UTF-8 encoding for the file paths
 */
+#undef  U_CURRENT
 #define U_CURRENT U_UTF8
 #define ugetc     utf8_getc
-#define ugetx     utf8_getx
-#define ugetxc    utf8_getx
+#define ugetx     ((int (*)(char **))utf8_getx)
+#define ugetxc    ((int (*)(AL_CONST char **))utf8_getx)
 #define usetc     utf8_setc
 #define uwidth    utf8_width
 #define ucwidth   utf8_cwidth
@@ -657,7 +658,7 @@ PACKFILE *pack_fopen_vtable(AL_CONST PACKFILE_VTABLE *vtable, void *userdata)
    ASSERT(vtable->pf_feof);
    ASSERT(vtable->pf_ferror);
 
-   if ((f = create_packfile(FALSE)) == NULL)
+   if ((f = create_packfile()) == NULL)
       return NULL;
 
    f->vtable = vtable;

@@ -2,22 +2,23 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
-// SOUNDCLIP factory methods.
+// SoundClip factory methods.
 //
 //=============================================================================
 #ifndef __AC_SOUND_H
 #define __AC_SOUND_H
 
+#include <memory>
 #include "ac/asset_helper.h"
 #include "media/audio/soundclip.h"
 
@@ -31,7 +32,8 @@ const size_t DEFAULT_SOUNDCACHESIZE_KB = 1024u * 32; // 32 MB
 // * max_cachesize - sound cache limit, in bytes
 void soundcache_set_rules(size_t max_loadatonce, size_t max_cachesize);
 void soundcache_clear();
+void soundcache_precache(const AssetPath &apath);
 
-SOUNDCLIP *load_sound_clip(const AssetPath &apath, const char *extension_hint, bool loop);
+std::unique_ptr<SoundClip> load_sound_clip(const AssetPath &apath, const char *extension_hint, bool loop);
 
 #endif // __AC_SOUND_H

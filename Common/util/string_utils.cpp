@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/string_utils.h"
@@ -35,7 +35,7 @@ String StrUtil::IntToString(int d)
 
 int StrUtil::StringToInt(const String &s, int def_val)
 {
-    if (!s.GetCStr())
+    if (s.IsEmpty())
         return def_val;
     char *stop_ptr;
     int val = strtol(s.GetCStr(), &stop_ptr, 0);
@@ -45,7 +45,7 @@ int StrUtil::StringToInt(const String &s, int def_val)
 StrUtil::ConversionError StrUtil::StringToInt(const String &s, int &val, int def_val)
 {
     val = def_val;
-    if (!s.GetCStr())
+    if (s.IsEmpty())
         return StrUtil::kFailed;
     char *stop_ptr;
     errno = 0;
@@ -54,13 +54,13 @@ StrUtil::ConversionError StrUtil::StringToInt(const String &s, int &val, int def
         return StrUtil::kFailed;
     if (lval > INT_MAX || lval < INT_MIN || errno == ERANGE)
         return StrUtil::kOutOfRange;
-    val = (int)lval;
+    val = static_cast<int>(lval);
     return StrUtil::kNoError;
 }
 
 float StrUtil::StringToFloat(const String &s, float def_val)
 {
-    if (!s.GetCStr())
+    if (s.IsEmpty())
         return def_val;
     char *stop_ptr;
     float val = strtof(s.GetCStr(), &stop_ptr);
@@ -198,14 +198,16 @@ void StrUtil::ReadCStr(char *buf, Stream *in, size_t buf_limit)
     auto last = buf + buf_limit - 1;
     for (;;)
     {
-        if (ptr >= last) {
+        if (ptr >= last)
+        {
             *ptr = 0;
             while (in->ReadByte() > 0); // must still read until 0
             break;
         }
 
         auto ichar = in->ReadByte();
-        if (ichar <= 0) {
+        if (ichar <= 0)
+        {
             *ptr = 0;
             break;
         }
@@ -214,20 +216,24 @@ void StrUtil::ReadCStr(char *buf, Stream *in, size_t buf_limit)
     }
 }
 
+void StrUtil::ReadCStrCount(char *buf, Stream *in, size_t count)
+{
+    in->Read(buf, count);
+    buf[count - 1] = 0; // for safety
+}
+
 char *StrUtil::ReadMallocCStrOrNull(Stream *in)
 {
     char buf[1024];
-    for (auto ptr = buf; (ptr < buf + sizeof(buf)); ++ptr)
-    {
-        auto ichar = in->ReadByte();
-        if (ichar <= 0)
-        {
-            *ptr = 0;
-            break;
-        }
-        *ptr = static_cast<char>(ichar);
-    }
+    ReadCStr(buf, in, sizeof(buf));
     return buf[0] != 0 ? ags_strdup(buf) : nullptr;
+}
+
+std::string StrUtil::ReadCStrAsStdString(Stream *in)
+{
+    char buf[1024];
+    ReadCStr(buf, in, sizeof(buf));
+    return buf;
 }
 
 void StrUtil::SkipCStr(Stream *in)
@@ -271,11 +277,16 @@ void StrUtil::WriteStringMap(const StringMap &map, Stream *out)
 
 size_t StrUtil::ConvertUtf8ToAscii(const char *mbstr, const char *loc_name, char *out_cstr, size_t out_sz)
 {
+    if (out_sz == 0)
+        return 0; // no output space
     // TODO: later consider using alternative conversion methods
     // (e.g. see C++11 features), as setlocale is unreliable.
+    char old_locale[64];
+    snprintf(old_locale, sizeof(old_locale), "%s", setlocale(LC_CTYPE, nullptr));
     if (setlocale(LC_CTYPE, loc_name) == nullptr)
-    { // If failed setlocale, then resort to plain copy the mb string
-        return static_cast<size_t>(snprintf(out_cstr, out_sz, "%s", mbstr));
+    {
+        out_cstr[0] = 0;
+        return 0; // failed to set locale
     }
     // First convert utf-8 string into widestring;
     std::vector<wchar_t> wcsbuf; // widechar buffer
@@ -290,7 +301,12 @@ size_t StrUtil::ConvertUtf8ToAscii(const char *mbstr, const char *loc_name, char
     }
     // Then convert widestring to single-byte string using specified locale
     size_t res_sz = wcstombs(out_cstr, &wcsbuf[0], out_sz);
-    setlocale(LC_CTYPE, "");
+    setlocale(LC_CTYPE, old_locale);
+    if (res_sz == static_cast<std::size_t>(-1))
+    {
+        out_cstr[0] = 0;
+        return 0; // conversion failure
+    }
     return res_sz;
 }
 

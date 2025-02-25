@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -27,6 +27,7 @@
 #include "ac/gamestate.h"
 #include "ac/global_overlay.h"
 #include "ac/global_translation.h"
+#include "ac/gui.h"
 #include "ac/object.h"
 #include "ac/overlay.h"
 #include "ac/properties.h"
@@ -39,13 +40,13 @@
 #include "script/script.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 
 extern GameSetupStruct game;
 extern std::vector<ViewStruct> views;
 extern RoomObject*objs;
 extern RoomStruct thisroom;
-extern GameState play;
 extern ScriptObject scrObj[MAX_ROOM_OBJECTS];
 extern ScriptInvItem scrInv[MAX_INV];
 extern CCCharacter ccDynamicCharacter;
@@ -110,7 +111,8 @@ int GetCharacterWidth(int ww) {
             (char1->loop >= views[char1->view].numLoops) ||
             (char1->frame >= views[char1->view].loops[char1->loop].numFrames))
         {
-            debug_script_warn("GetCharacterWidth: Character %s has invalid frame: view %d, loop %d, frame %d", char1->scrname, char1->view + 1, char1->loop, char1->frame);
+            debug_script_warn("GetCharacterWidth: Character %s has invalid frame: view %d, loop %d, frame %d",
+                char1->scrname, char1->view + 1, char1->loop, char1->frame);
             return data_to_game_coord(4);
         }
 
@@ -129,7 +131,8 @@ int GetCharacterHeight(int charid) {
             (char1->loop >= views[char1->view].numLoops) ||
             (char1->frame >= views[char1->view].loops[char1->loop].numFrames))
         {
-            debug_script_warn("GetCharacterHeight: Character %s has invalid frame: view %d, loop %d, frame %d", char1->scrname, char1->view + 1, char1->loop, char1->frame);
+            debug_script_warn("GetCharacterHeight: Character %s has invalid frame: view %d, loop %d, frame %d",
+                char1->scrname, char1->view + 1, char1->loop, char1->frame);
             return data_to_game_coord(2);
         }
 
@@ -199,24 +202,36 @@ void SetCharacterIgnoreLight (int who, int yesorno) {
     Character_SetIgnoreLighting(&game.chars[who], yesorno);
 }
 
+void MoveCharacter(int cc,int x, int y)
+{
+    if (!is_valid_character(cc))
+        quit("!MoveCharacter: invalid character specified");
 
-
-
-void MoveCharacter(int cc,int xx,int yy) {
-    walk_character(cc,xx,yy,0, true);
+    Character_DoMove(&game.chars[cc], "MoveCharacter", x, y,
+                     false /* not straight */, IN_BACKGROUND, WALKABLE_AREAS, true /* animate */);
 }
-void MoveCharacterDirect(int cc,int xx, int yy) {
-    walk_character(cc,xx,yy,1, true);
+
+void MoveCharacterDirect(int cc, int x, int y)
+{
+    if (!is_valid_character(cc))
+        quit("!MoveCharacterDirect: invalid character specified");
+
+    Character_DoMove(&game.chars[cc], "MoveCharacterDirect", x, y,
+                     false /* not straight */, IN_BACKGROUND, ANYWHERE, true /* animate */);
 }
-void MoveCharacterStraight(int cc,int xx, int yy) {
+
+void MoveCharacterStraight(int cc,int x, int y)
+{
     if (!is_valid_character(cc))
         quit("!MoveCharacterStraight: invalid character specified");
 
-    Character_WalkStraight(&game.chars[cc], xx, yy, IN_BACKGROUND);
+    Character_DoMove(&game.chars[cc], "MoveCharacterStraight", x, y,
+                     true /* straight */, IN_BACKGROUND, WALKABLE_AREAS, true /* animate */);
 }
 
 // Append to character path
-void MoveCharacterPath (int chac, int tox, int toy) {
+void MoveCharacterPath(int chac, int tox, int toy)
+{
     if (!is_valid_character(chac))
         quit("!MoveCharacterPath: invalid character specified");
 
@@ -276,7 +291,7 @@ void SetCharacterFrame(int chaa, int view, int loop, int frame) {
 // similar to SetCharView, but aligns the frame to make it line up
 void SetCharacterViewEx (int chaa, int vii, int loop, int align) {
 
-    Character_LockViewAligned(&game.chars[chaa], vii, loop, align);
+    Character_LockViewAligned(&game.chars[chaa], vii, loop, ConvertLegacyScriptAlignment((LegacyScriptAlignment)align));
 }
 
 void SetCharacterViewOffset (int chaa, int vii, int xoffs, int yoffs) {
@@ -310,44 +325,37 @@ void SetCharacterIgnoreWalkbehinds (int cha, int clik) {
 }
 
 
-void MoveCharacterToObject(int chaa,int obbj) {
+void MoveCharacterToObject(int chaa,int obbj)
+{
     // invalid object, do nothing
     // this allows MoveCharacterToObject(EGO, GetObjectAt(...));
     if (!is_valid_object(obbj))
         return;
 
-    walk_character(chaa,objs[obbj].x+5,objs[obbj].y+6,0, true);
-
-    GameLoopUntilNotMoving(&game.chars[chaa].walking);
+    // NOTE: yep, it was using a hardcoded +5,+6 relative position...
+    Character_DoMove(&game.chars[chaa], "MoveCharacterToObject", objs[obbj].x + 5, objs[obbj].y + 6,
+                     false /* not straight */, BLOCKING, WALKABLE_AREAS, true /* animate */);
 }
 
-void MoveCharacterToHotspot(int chaa,int hotsp) {
+void MoveCharacterToHotspot(int chaa, int hotsp)
+{
     if ((hotsp<0) || (hotsp>=MAX_ROOM_HOTSPOTS))
         quit("!MovecharacterToHotspot: invalid hotspot");
-    if (thisroom.Hotspots[hotsp].WalkTo.X<1) return;
-    walk_character(chaa,thisroom.Hotspots[hotsp].WalkTo.X,thisroom.Hotspots[hotsp].WalkTo.Y,0, true);
+    if (thisroom.Hotspots[hotsp].WalkTo.X < 1)
+        return;
 
-    GameLoopUntilNotMoving(&game.chars[chaa].walking);
+    Character_DoMove(&game.chars[chaa], "MoveCharacterToObject", thisroom.Hotspots[hotsp].WalkTo.X, thisroom.Hotspots[hotsp].WalkTo.Y,
+                     false /* not straight */, BLOCKING, WALKABLE_AREAS, true /* animate */);
 }
 
-int MoveCharacterBlocking(int chaa,int xx,int yy,int direct) {
+int MoveCharacterBlocking(int chaa, int x, int y, int ignwal)
+{
     if (!is_valid_character (chaa))
         quit("!MoveCharacterBlocking: invalid character");
 
-    // check if they try to move the player when Hide Player Char is
-    // ticked -- otherwise this will hang the game
-    if (game.chars[chaa].on != 1)
-    {
-        debug_script_warn("MoveCharacterBlocking: character is turned off (is Hide Player Character selected?) and cannot be moved");
-        return 0;
-    }
+    Character_DoMove(&game.chars[chaa], "MoveCharacterBlocking", x, y,
+                     false /* not straight */, BLOCKING, ignwal, true /* animate */);
 
-    if (direct)
-        MoveCharacterDirect(chaa,xx,yy);
-    else
-        MoveCharacter(chaa,xx,yy);
-
-    GameLoopUntilNotMoving(&game.chars[chaa].walking);
     return -1; // replicates legacy engine effect
 }
 
@@ -390,7 +398,7 @@ void RunCharacterInteraction (int cc, int mood) {
         play.usedinv = playerchar->activeinv;
     }
 
-    const auto obj_evt = ObjectEvent("character%d", cc,
+    const auto obj_evt = ObjectEvent(kScTypeGame, "character%d", cc,
         RuntimeScriptValue().SetScriptObject(&game.chars[cc], &ccDynamicCharacter), mood);
     if (loaded_game_file_version > kGameVersion_272)
     {
@@ -483,7 +491,7 @@ void update_invorder() {
     }
     // backwards compatibility
     play.inv_numorder = charextra[game.playercharacter].invorder_count;
-    GUI::MarkInventoryForUpdate(game.playercharacter, true);
+    GUIE::MarkInventoryForUpdate(game.playercharacter, true);
 }
 
 void add_inventory(int inum) {
@@ -558,7 +566,7 @@ int DisplaySpeechBackground(int charid, const char*speel) {
     }
 
     int ovrl=CreateTextOverlay(OVR_AUTOPLACE,charid,play.GetUIViewport().GetWidth()/2,FONT_SPEECH,
-        -game.chars[charid].talkcolor, get_translation(speel), DISPLAYTEXT_NORMALOVERLAY);
+        game.chars[charid].talkcolor, get_translation(speel), kDisplayTextStyle_Overchar);
 
     auto *over = get_overlay(ovrl);
     over->bgSpeechForChar = charid;

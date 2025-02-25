@@ -2,16 +2,15 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-
 #include "ac/common.h" // update_polled_stuff
 #include "ac/common_defines.h"
 #include "ac/gamestructdefines.h"
@@ -37,22 +36,28 @@
 // Reserved room options (each is a byte)
 #define ROOM_OPTIONS_RESERVED 4
 #define LEGACY_TINT_IS_ENABLED 0x80000000
+// The sizes of the ancient FullAnimation struct,
+// used for skipping data chunk, because we currently don't know how
+// to handle these in game. See room_file_deprecated.cpp.
+#define LEGACY_ROOM_ANIMATION_SIZE (5 * sizeof(int) + 4 * sizeof(char)) /* 2 bytes of padding */
+#define LEGACY_ROOM_FULLANIMATION_SIZE (LEGACY_ROOM_ANIMATION_SIZE * 10 + sizeof(int))
+
 
 namespace AGS
 {
 namespace Common
 {
 
-HRoomFileError OpenRoomFileFromAsset(const String &filename, RoomDataSource &src)
+HRoomFileError OpenRoomFileFromAsset(const String &filename, RoomDataSource &src, AssetManager *mgr)
 {
     // Cleanup source struct
     src = RoomDataSource();
     // Try to find and open room file
-    Stream *in = AssetMgr->OpenAsset(filename);
+    auto in = mgr->OpenAsset(filename);
     if (in == nullptr)
         return new RoomFileError(kRoomFileErr_FileOpenFailed, String::FromFormat("Filename: %s.", filename.GetCStr()));
     src.Filename = filename;
-    src.InputStream.reset(in);
+    src.InputStream = std::move(in);
     return ReadRoomHeader(src);
 }
 
@@ -128,7 +133,7 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
             if (data_ver >= kRoomVersion_3415)
                 room->Hotspots[i].ScriptName = StrUtil::ReadString(in);
             else
-                room->Hotspots[i].ScriptName = String::FromStreamCount(in, MAX_SCRIPT_NAME_LEN);
+                room->Hotspots[i].ScriptName = String::FromStreamCount(in, LEGACY_MAX_SCRIPT_NAME_LEN);
         }
     }
 
@@ -171,10 +176,10 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
     if (data_ver >= kRoomVersion_241 && data_ver < kRoomVersion_300a)
     {
         for (size_t i = 0; i < room->HotspotCount; ++i)
-            room->Hotspots[i].Interaction.reset(Interaction::CreateFromStream(in));
+            room->Hotspots[i].Interaction = Interaction::CreateFromStream(in);
         for (auto &obj : room->Objects)
-            obj.Interaction.reset(Interaction::CreateFromStream(in));
-        room->Interaction.reset(Interaction::CreateFromStream(in));
+            obj.Interaction = Interaction::CreateFromStream(in);
+        room->Interaction = Interaction::CreateFromStream(in);
     }
 
     if (data_ver >= kRoomVersion_255b)
@@ -186,20 +191,21 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
         if (data_ver < kRoomVersion_300a)
         {
             for (size_t i = 0; i < room->RegionCount; ++i)
-                room->Regions[i].Interaction.reset(Interaction::CreateFromStream(in));
+                room->Regions[i].Interaction = Interaction::CreateFromStream(in);
         }
     }
 
     // Event script links
+    // NOTE: we keep pre-3.6.2 interaction format for now, room interactions don't need module selection
     if (data_ver >= kRoomVersion_300a)
     {
-        room->EventHandlers.reset(InteractionScripts::CreateFromStream(in));
+        room->EventHandlers = InteractionEvents::CreateFromStream_v361(in);
         for (size_t i = 0; i < room->HotspotCount; ++i)
-            room->Hotspots[i].EventHandlers.reset(InteractionScripts::CreateFromStream(in));
+            room->Hotspots[i].EventHandlers = InteractionEvents::CreateFromStream_v361(in);
         for (auto &obj : room->Objects)
-            obj.EventHandlers.reset(InteractionScripts::CreateFromStream(in));
+            obj.EventHandlers = InteractionEvents::CreateFromStream_v361(in);
         for (size_t i = 0; i < room->RegionCount; ++i)
-            room->Regions[i].EventHandlers.reset(InteractionScripts::CreateFromStream(in));
+            room->Regions[i].EventHandlers = InteractionEvents::CreateFromStream_v361(in);
     }
 
     if (data_ver >= kRoomVersion_200_alpha)
@@ -220,8 +226,8 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
     room->WalkAreaCount = MAX_WALK_AREAS;
     if (data_ver >= kRoomVersion_240)
         room->WalkAreaCount = in->ReadInt32();
-    if (room->WalkAreaCount > MAX_WALK_AREAS + 1)
-        return new RoomFileError(kRoomFileErr_IncompatibleEngine, String::FromFormat("Too many walkable areas (in room: %d, max: %d).", room->WalkAreaCount, MAX_WALK_AREAS + 1));
+    if (room->WalkAreaCount > MAX_WALK_AREAS)
+        return new RoomFileError(kRoomFileErr_IncompatibleEngine, String::FromFormat("Too many walkable areas (in room: %d, max: %d).", room->WalkAreaCount, MAX_WALK_AREAS));
 
     if (data_ver >= kRoomVersion_200_alpha7)
         for (size_t i = 0; i < room->WalkAreaCount; ++i)
@@ -280,7 +286,8 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
         // TODO: remove from format later
         size_t fullanim_count = in->ReadInt16();
         if (fullanim_count > 0)
-            return new RoomFileError(kRoomFileErr_IncompatibleEngine, "Room animations are no longer supported.");
+            Debug::Printf("WARNING: Legacy room animations not supported, data skipped.");
+        in->Seek(LEGACY_ROOM_FULLANIMATION_SIZE * fullanim_count);
         /* NOTE: implementation hidden in room_file_deprecated.cpp
             in->ReadArray(&fullanims[0], sizeof(FullAnimation), fullanim_count);
         */
@@ -298,7 +305,7 @@ HError ReadMainBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
 
     if (data_ver >= kRoomVersion_114)
     { // NOTE: this WA value was written for the second time here, for some weird reason
-        for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+        for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
             room->WalkAreas[i].PlayerView = in->ReadInt16();
     }
     if (data_ver >= kRoomVersion_255b)
@@ -379,7 +386,7 @@ HError ReadObjScNamesBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ve
         if (data_ver >= kRoomVersion_3415)
             obj.ScriptName = StrUtil::ReadString(in);
         else
-            obj.ScriptName.ReadCount(in, MAX_SCRIPT_NAME_LEN);
+            obj.ScriptName.ReadCount(in, LEGACY_MAX_SCRIPT_NAME_LEN);
     }
     return HError::None();
 }
@@ -387,11 +394,11 @@ HError ReadObjScNamesBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ve
 // Secondary backgrounds
 HError ReadAnimBgBlock(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
 {
-    room->BgFrameCount = in->ReadByte();
+    room->BgFrameCount = in->ReadInt8();
     if (room->BgFrameCount > MAX_ROOM_BGFRAMES)
         return new RoomFileError(kRoomFileErr_IncompatibleEngine, String::FromFormat("Too many room backgrounds (in room: %d, max: %d).", room->BgFrameCount, MAX_ROOM_BGFRAMES));
 
-    room->BgAnimSpeed = in->ReadByte();
+    room->BgAnimSpeed = in->ReadInt8();
     if (data_ver >= kRoomVersion_255a)
     {
         for (size_t i = 0; i < room->BgFrameCount; ++i)
@@ -475,8 +482,8 @@ HError ReadRoomBlock(RoomStruct *room, Stream *in, RoomFileBlock block, const St
 class RoomBlockReader : public DataExtReader
 {
 public:
-    RoomBlockReader(RoomStruct *room, RoomFileVersion data_ver, Stream *in)
-        : DataExtReader(in,
+    RoomBlockReader(RoomStruct *room, RoomFileVersion data_ver, std::unique_ptr<Stream> &&in)
+        : DataExtReader(std::move(in),
             kDataExt_NumID8 | ((data_ver < kRoomVersion_350) ? kDataExt_File32 : kDataExt_File64))
         , _room(room)
         , _dataVer(data_ver)
@@ -489,7 +496,7 @@ public:
         if (!err)
             return err;
         char *buf = nullptr;
-        err = ReadScriptBlock(buf, _in, _dataVer);
+        err = ReadScriptBlock(buf, _in.get(), _dataVer);
         script = buf;
         delete buf;
         return err;
@@ -498,11 +505,11 @@ public:
 private:
     String GetOldBlockName(int block_id) const override
     { return GetRoomBlockName((RoomFileBlock)block_id); }
-    HError ReadBlock(int block_id, const String &ext_id,
+    HError ReadBlock(Stream *in, int block_id, const String &ext_id,
         soff_t block_len, bool &read_next) override
     {
         read_next = true;
-        return ReadRoomBlock(_room, _in, (RoomFileBlock)block_id, ext_id, block_len, _dataVer);
+        return ReadRoomBlock(_room, in, (RoomFileBlock)block_id, ext_id, block_len, _dataVer);
     }
 
     RoomStruct *_room {};
@@ -510,10 +517,10 @@ private:
 };
 
 
-HRoomFileError ReadRoomData(RoomStruct *room, Stream *in, RoomFileVersion data_ver)
+HRoomFileError ReadRoomData(RoomStruct *room, std::unique_ptr<Stream> &&in, RoomFileVersion data_ver)
 {
     room->DataVersion = data_ver;
-    RoomBlockReader reader(room, data_ver, in);
+    RoomBlockReader reader(room, data_ver, std::move(in));
     HError err = reader.Read();
     return err ? HRoomFileError::None() : new RoomFileError(kRoomFileErr_BlockListFailed, err);
 }
@@ -669,20 +676,32 @@ HRoomFileError UpdateRoomData(RoomStruct *room, RoomFileVersion data_ver, bool g
     return HRoomFileError::None();
 }
 
-HRoomFileError ExtractScriptText(String &script, Stream *in, RoomFileVersion data_ver)
+HError LoadRoom(const String &filename, RoomStruct *room, AssetManager *mgr,
+    bool game_is_hires, const std::vector<SpriteInfo> &sprinfos)
 {
-    RoomBlockReader reader(nullptr, data_ver, in);
+    room->Free();
+    room->InitDefaults();
+
+    RoomDataSource src;
+    HRoomFileError err = OpenRoomFileFromAsset(filename, src, mgr);
+    if (err)
+    {
+        err = ReadRoomData(room, std::move(src.InputStream), src.DataVersion);
+        if (err)
+            err = UpdateRoomData(room, src.DataVersion, game_is_hires, sprinfos);
+    }
+    if (!err)
+        return new Error(String::FromFormat("Failed loading a room from file '%s'.", filename.GetCStr()), err);
+    return HError::None();
+}
+
+HRoomFileError ExtractScriptText(String &script, std::unique_ptr<Stream> &&in, RoomFileVersion data_ver)
+{
+    RoomBlockReader reader(nullptr, data_ver, std::move(in));
     HError err = reader.ReadRoomScript(script);
     if (!err)
         new RoomFileError(kRoomFileErr_BlockListFailed, err);
     return HRoomFileError::None();
-}
-
-void WriteInteractionScripts(const InteractionScripts *interactions, Stream *out)
-{
-    out->WriteInt32(interactions->ScriptFuncNames.size());
-    for (size_t i = 0; i < interactions->ScriptFuncNames.size(); ++i)
-        interactions->ScriptFuncNames[i].Write(out);
 }
 
 void WriteMainBlock(const RoomStruct *room, Stream *out)
@@ -719,13 +738,14 @@ void WriteMainBlock(const RoomStruct *room, Stream *out)
     out->WriteInt32(0); // legacy interaction vars
     out->WriteInt32(MAX_ROOM_REGIONS);
 
-    WriteInteractionScripts(room->EventHandlers.get(), out);
+    // NOTE: we keep pre-3.6.2 interaction format for now, room interactions don't need module selection
+    room->EventHandlers->Write_v361(out);
     for (size_t i = 0; i < room->HotspotCount; ++i)
-        WriteInteractionScripts(room->Hotspots[i].EventHandlers.get(), out);
+        room->Hotspots[i].EventHandlers->Write_v361(out);
     for (const auto &obj : room->Objects)
-        WriteInteractionScripts(obj.EventHandlers.get(), out);
+        obj.EventHandlers->Write_v361(out);
     for (size_t i = 0; i < room->RegionCount; ++i)
-        WriteInteractionScripts(room->Regions[i].EventHandlers.get(), out);
+        room->Regions[i].EventHandlers->Write_v361(out);
 
     for (const auto &obj : room->Objects)
         out->WriteInt32(obj.Baseline);
@@ -735,16 +755,16 @@ void WriteMainBlock(const RoomStruct *room, Stream *out)
         out->WriteInt16(obj.Flags);
     out->WriteInt16(room->MaskResolution);
 
-    out->WriteInt32(MAX_WALK_AREAS + 1);
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    out->WriteInt32(MAX_WALK_AREAS);
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].ScalingFar);
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].PlayerView);
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].ScalingNear);
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].Top);
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].Bottom);
 
     out->WriteByteCount(0, LEGACY_ROOM_PASSWORD_LENGTH);
@@ -768,7 +788,7 @@ void WriteMainBlock(const RoomStruct *room, Stream *out)
     out->WriteInt16(0); // legacy room animations
 
     // NOTE: this WA value was written for the second time here, for some weird reason
-    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS + 1; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         out->WriteInt16(room->WalkAreas[i].PlayerView);
     for (size_t i = 0; i < (size_t)MAX_ROOM_REGIONS; ++i)
         out->WriteInt16(room->Regions[i].Light);

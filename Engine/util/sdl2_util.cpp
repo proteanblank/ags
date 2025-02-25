@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/sdl2_util.h"
@@ -45,9 +45,7 @@ static StreamSeek RWopsSeekToAGS(int whence)
 static Sint64 rwops_seek(SDL_RWops *context, Sint64 offset, int whence)
 {
     auto *s = static_cast<Stream*>(context->hidden.unknown.data1);
-    if (s->Seek(offset, RWopsSeekToAGS(whence)))
-        return s->GetPosition();
-    return -1;
+    return s->Seek(offset, RWopsSeekToAGS(whence));
 }
 
 static size_t rwops_read(SDL_RWops *context, void *ptr, size_t size, size_t maxnum)

@@ -2,17 +2,18 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "gfx/ali3dsw.h"
 #include <algorithm>
+#include <array>
 #include <stack>
 #include "ac/sys_events.h"
 #include "gfx/ali3dexception.h"
@@ -20,7 +21,8 @@
 #include "gfx/gfx_util.h"
 #include "platform/base/agsplatformdriver.h"
 #include "platform/base/sys_main.h"
-#include "ac/timer.h"
+#include "util/string_compat.h"
+
 
 namespace AGS
 {
@@ -32,7 +34,6 @@ namespace ALSW
 using namespace Common;
 
 static uint32_t _trans_alpha_blender32(uint32_t x, uint32_t y, uint32_t n);
-RGB faded_out_palette[256];
 
 
 // ----------------------------------------------------------------------------
@@ -49,7 +50,7 @@ static auto fix_alpha_blender = SDL_ComposeCustomBlendMode(
     SDL_BLENDFACTOR_ZERO,
     SDL_BLENDOPERATION_ADD
 );
-#endif
+#endif // SDL_VERSION_ATLEAST(2, 0, 5)
 
 SDLRendererGraphicsDriver::SDLRendererGraphicsDriver()
 {
@@ -80,14 +81,14 @@ int SDLRendererGraphicsDriver::GetDisplayDepthForNativeDepth(int /*native_color_
     return 32;
 }
 
-IGfxModeList *SDLRendererGraphicsDriver::GetSupportedModeList(int color_depth)
+IGfxModeList *SDLRendererGraphicsDriver::GetSupportedModeList(int display_index, int color_depth)
 {
     std::vector<DisplayMode> modes;
-    sys_get_desktop_modes(modes, color_depth);
+    sys_get_desktop_modes(display_index, modes, color_depth);
     if ((modes.size() == 0) && color_depth == 32)
     {
         // Pretend that 24-bit are 32-bit
-        sys_get_desktop_modes(modes, 24);
+        sys_get_desktop_modes(display_index, modes, 24);
         for (auto &m : modes) { m.ColorDepth = 32; }
     }
     return new SDLRendererGfxModeList(modes);
@@ -131,7 +132,7 @@ bool SDLRendererGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
   SDL_Window *window = sys_get_window();
   if (!window)
   {
-    window = sys_window_create("", mode.Width, mode.Height, mode.Mode);
+    window = sys_window_create("", mode.DisplayIndex, mode.Width, mode.Height, mode.Mode);
 
     _hasGamma = SDL_GetWindowGammaRamp(window, _defaultGammaRed, _defaultGammaGreen, _defaultGammaBlue) == 0;
 
@@ -139,6 +140,10 @@ bool SDLRendererGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
     if (mode.Vsync) {
         rendererFlags |= SDL_RENDERER_PRESENTVSYNC;
     }
+    // Disable SDL_HINT_RENDER_BATCHING, causes issues with certain monitor setups
+    // See SDL2 issue https://github.com/libsdl-org/SDL/issues/7838
+    // (arguably we do not benefit from batching, because we only draw 1 final texture).
+    SDL_SetHint(SDL_HINT_RENDER_BATCHING, "0");
     _renderer = SDL_CreateRenderer(window, -1, rendererFlags);
 
     SDL_RendererInfo rinfo{};
@@ -155,21 +160,48 @@ bool SDLRendererGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
         if (!_capsVsync)
           Debug::Printf(kDbgMsg_Warn, "WARNING: Vertical sync is not supported. Setting will be kept at driver default.");
       }
+
+      // Record if SDL have created a DirectX renderer - we use this info for some checks
+      const std::array<const char *, 3> directx_renderers = { { "direct3d", "direct3d11", "direct3d12" } };
+      for (const char *name : directx_renderers)
+      {
+        if (ags_stricmp(rinfo.name, name) == 0)
+        {
+          _isDirectX = true;
+          break;
+        }
+      }
     } else {
       Debug::Printf("SDLRenderer: failed to query renderer info: %s", SDL_GetError());
     }
   }
   else
   {
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    // This is a bit of a hack, but certain drivers do not support changing
+    // display in exclusive fullscreen mode, and here we find out if it's the case.
+    // NOTE: we may in theory support this, but we'd have to release and recreate
+    // ALL the resources, including all textures currently in memory.
+    if (_isDirectX && mode.IsRealFullscreen() &&
+        (_fullscreenDisplay > 0) && (sys_get_window_display_index() != _fullscreenDisplay))
+    {
+      sys_window_fit_in_display(_fullscreenDisplay);
+    }
+#endif // AGS_SUPPORT_MULTIDISPLAY
     sys_window_set_style(mode.Mode, Size(mode.Width, mode.Height));
+    sys_window_bring_to_front();
   }
 
-#if AGS_PLATFORM_OS_ANDROID
+#if AGS_PLATFORM_MOBILE
   SDL_RenderSetLogicalSize(_renderer,mode.Width,mode.Height);
 #endif
 
   OnInit();
-  OnModeSet(mode);
+  DisplayMode set_mode = mode;
+  set_mode.DisplayIndex = sys_get_window_display_index();
+  if ((_fullscreenDisplay < 0) || set_mode.IsRealFullscreen())
+    _fullscreenDisplay = set_mode.DisplayIndex;
+  OnModeSet(set_mode);
   return true;
 }
 
@@ -177,7 +209,7 @@ void SDLRendererGraphicsDriver::UpdateDeviceScreen(const Size &screen_sz)
 {
   _mode.Width = screen_sz.Width;
   _mode.Height = screen_sz.Height;
-#if AGS_PLATFORM_OS_ANDROID
+#if AGS_PLATFORM_MOBILE
   SDL_RenderSetLogicalSize(_renderer, _mode.Width, _mode.Height);
 #endif
 }
@@ -197,23 +229,7 @@ void SDLRendererGraphicsDriver::CreateVirtualScreen()
   _screenTex = SDL_CreateTexture(_renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, vscreen_w, vscreen_h);
 
   // Fake bitmap that will wrap over texture pixels for simplier conversion
-  _fakeTexBitmap = reinterpret_cast<BITMAP*>(new char[sizeof(BITMAP) + (sizeof(char *) * vscreen_h)]);
-  _fakeTexBitmap->w = vscreen_w;
-  _fakeTexBitmap->cr = vscreen_w;
-  _fakeTexBitmap->h = vscreen_h;
-  _fakeTexBitmap->cb = vscreen_h;
-  _fakeTexBitmap->clip = true;
-  _fakeTexBitmap->cl = 0;
-  _fakeTexBitmap->ct = 0;
-  _fakeTexBitmap->id = 0;
-  _fakeTexBitmap->extra = nullptr;
-  _fakeTexBitmap->x_ofs = 0;
-  _fakeTexBitmap->y_ofs = 0;
-  _fakeTexBitmap->dat = nullptr;
-
-  auto tmpbitmap = create_bitmap_ex(32, 1, 1);
-  _fakeTexBitmap->vtable = tmpbitmap->vtable;
-  destroy_bitmap(tmpbitmap);
+  _fakeTexBitmap = create_bitmap_placeholder(32, vscreen_w, vscreen_h, nullptr);
 
   _lastTexPixels = nullptr;
   _lastTexPitch = -1;
@@ -221,7 +237,7 @@ void SDLRendererGraphicsDriver::CreateVirtualScreen()
 
 void SDLRendererGraphicsDriver::DestroyVirtualScreen()
 {
-  delete[] _fakeTexBitmap; // don't use destroy_bitmap(), because it's a fake structure
+  destroy_bitmap(_fakeTexBitmap);
   _fakeTexBitmap = nullptr;
   if(_screenTex != nullptr) {
       SDL_DestroyTexture(_screenTex);
@@ -314,9 +330,11 @@ IDriverDependantBitmap* SDLRendererGraphicsDriver::CreateDDB(int width, int heig
   return new ALSoftwareBitmap(width, height, color_depth, opaque);
 }
 
-IDriverDependantBitmap* SDLRendererGraphicsDriver::CreateDDBFromBitmap(Bitmap *bitmap, bool has_alpha, bool opaque)
+IDriverDependantBitmap* SDLRendererGraphicsDriver::CreateDDBFromBitmap(const Bitmap *bitmap, bool has_alpha, bool opaque)
 {
-  return new ALSoftwareBitmap(bitmap, has_alpha, opaque);
+  // FIXME: find a way to avoid const_cast here;
+  // note we cannot have const Bitmap in ALSoftwareBitmap, because it may be used as a render target...
+  return new ALSoftwareBitmap(const_cast<Bitmap*>(bitmap), has_alpha, opaque);
 }
 
 IDriverDependantBitmap* SDLRendererGraphicsDriver::CreateRenderTargetDDB(int width, int height, int color_depth, bool opaque)
@@ -325,10 +343,10 @@ IDriverDependantBitmap* SDLRendererGraphicsDriver::CreateRenderTargetDDB(int wid
     return new ALSoftwareBitmap(width, height, color_depth, opaque);
 }
 
-void SDLRendererGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap* bitmapToUpdate, Bitmap *bitmap, bool has_alpha)
+void SDLRendererGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap* bitmapToUpdate, const Bitmap *bitmap, bool has_alpha)
 {
   ALSoftwareBitmap* alSwBmp = (ALSoftwareBitmap*)bitmapToUpdate;
-  alSwBmp->_bmp = bitmap;
+  alSwBmp->_bmp = const_cast<Bitmap*>(bitmap);
   alSwBmp->_width = bitmap->GetWidth();
   alSwBmp->_height = bitmap->GetHeight();
   alSwBmp->_colDepth = bitmap->GetColorDepth();
@@ -423,7 +441,7 @@ void SDLRendererGraphicsDriver::InitSpriteBatch(size_t index, const SpriteBatchD
 void SDLRendererGraphicsDriver::ResetAllBatches()
 {
     // NOTE: we don't release batches themselves here, only sprite lists.
-    // This is because we cache batch surfaces, for perfomance reasons.
+    // This is because we cache batch surfaces, for performance reasons.
     _spriteList.clear();
 }
 
@@ -623,12 +641,7 @@ void SDLRendererGraphicsDriver::BlitToTexture()
     const int vwidth = virtualScreen->GetWidth();
     const int vheight = virtualScreen->GetHeight();
     if ((_lastTexPixels != pixels) || (_lastTexPitch != pitch)) {
-        _fakeTexBitmap->dat = pixels;
-        auto p = (unsigned char *)pixels;
-        for (int i = 0; i < vheight; i++) {
-            _fakeTexBitmap->line[i] = p;
-            p += pitch;
-        }
+        attach_bitmap_data(_fakeTexBitmap, pixels, pitch * vheight, pitch, nullptr);
         _lastTexPixels = (unsigned char *)pixels;
         _lastTexPitch = pitch;
     }
@@ -653,9 +666,8 @@ void SDLRendererGraphicsDriver::Present(int xoff, int yoff, GraphicFlip flip)
 
     BlitToTexture();
 
-    SDL_SetRenderDrawBlendMode(_renderer, SDL_BLENDMODE_NONE);
     SDL_SetRenderDrawColor(_renderer, 0, 0, 0, SDL_ALPHA_OPAQUE);
-    SDL_RenderFillRect(_renderer, nullptr);
+    SDL_RenderClear(_renderer);
 
     int xoff_final = _scaling.X.ScalePt(xoff);
     int yoff_final = _scaling.Y.ScalePt(yoff);
@@ -678,7 +690,14 @@ void SDLRendererGraphicsDriver::Render(int xoff, int yoff, GraphicFlip flip)
 
 void SDLRendererGraphicsDriver::Render()
 {
-  Render(0, 0, kFlip_None);
+    Render(0, 0, kFlip_None);
+}
+
+void SDLRendererGraphicsDriver::Render(IDriverDependantBitmap *target)
+{
+    SetMemoryBackBuffer(((ALSoftwareBitmap*)target)->_bmp);
+    RenderToBackBuffer();
+    SetMemoryBackBuffer(nullptr);
 }
 
 Bitmap *SDLRendererGraphicsDriver::GetMemoryBackBuffer()
@@ -730,10 +749,17 @@ void SDLRendererGraphicsDriver::SetStageBackBuffer(Bitmap *backBuffer)
         _stageVirtualScreen = cur_stage;
 }
 
-bool SDLRendererGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_native_res, GraphicResolution *want_fmt)
+void SDLRendererGraphicsDriver::GetCopyOfScreenIntoDDB(IDriverDependantBitmap *target, uint32_t /*batch_skip_filter*/)
+{
+    Bitmap *dst_bmp = ((ALSoftwareBitmap*)target)->_bmp;
+    dst_bmp->Blit(virtualScreen);
+}
+
+bool SDLRendererGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, const Rect *src_rect,
+    bool at_native_res, GraphicResolution *want_fmt, uint32_t /*batch_skip_filter*/)
 {
   (void)at_native_res; // software driver always renders at native resolution at the moment
-  // software filter is taught to copy to any size
+  // software filter is taught to copy to any size, so only check color depth
   if (destination->GetColorDepth() != _srcColorDepth)
   {
     if (want_fmt)
@@ -741,210 +767,17 @@ bool SDLRendererGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, b
     return false;
   }
 
-  if (destination->GetSize() == virtualScreen->GetSize())
+  Rect copy_from = src_rect ? *src_rect : _srcRect;
+  if (destination->GetSize() == copy_from.GetSize())
   {
-    destination->Blit(virtualScreen, 0, 0, 0, 0, virtualScreen->GetWidth(), virtualScreen->GetHeight());
+    destination->Blit(virtualScreen, copy_from.Left, copy_from.Top, 0, 0, copy_from.GetWidth(), copy_from.GetHeight());
   }
   else
   {
-    destination->StretchBlt(virtualScreen,
-          RectWH(0, 0, virtualScreen->GetWidth(), virtualScreen->GetHeight()),
-          RectWH(0, 0, destination->GetWidth(), destination->GetHeight()));
+    destination->StretchBlt(virtualScreen, copy_from, RectWH(destination->GetSize()));
   }
   return true;
 }
-
-/**
-	fade.c - High Color Fading Routines
-
-	Last Revision: 21 June, 2002
-
-	Author: Matthew Leverton
-**/
-void SDLRendererGraphicsDriver::highcolor_fade_in(Bitmap *vs, void(*draw_callback)(),
-    int speed, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-   Bitmap *bmp_orig = vs;
-   const int col_depth = bmp_orig->GetColorDepth();
-   const int clearColor = makecol_depth(col_depth, targetColourRed, targetColourGreen, targetColourBlue);
-   if (speed <= 0) speed = 16;
-
-   Bitmap *bmp_buff = new Bitmap(bmp_orig->GetWidth(), bmp_orig->GetHeight(), col_depth);
-   SetMemoryBackBuffer(bmp_buff);
-   for (int a = 0; a < 256; a+=speed)
-   {
-       bmp_buff->Fill(clearColor);
-       set_trans_blender(0,0,0,a);
-       bmp_buff->TransBlendBlt(bmp_orig, 0, 0);
-       
-       if (draw_callback)
-           draw_callback();
-       RenderToBackBuffer();
-       Present();
-
-       sys_evt_process_pending();
-       if (_pollingCallback)
-          _pollingCallback();
-
-       WaitForNextFrame();
-   }
-   delete bmp_buff;
-
-   SetMemoryBackBuffer(vs);
-   if (draw_callback)
-       draw_callback();
-   RenderToBackBuffer();
-   Present();
-}
-
-void SDLRendererGraphicsDriver::highcolor_fade_out(Bitmap *vs, void(*draw_callback)(),
-    int speed, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-    Bitmap *bmp_orig = vs;
-    const int col_depth = vs->GetColorDepth();
-    const int clearColor = makecol_depth(col_depth, targetColourRed, targetColourGreen, targetColourBlue);
-    if (speed <= 0) speed = 16;
-
-    Bitmap *bmp_buff = new Bitmap(bmp_orig->GetWidth(), bmp_orig->GetHeight(), col_depth);
-    SetMemoryBackBuffer(bmp_buff);
-    for (int a = 255 - speed; a > 0; a -= speed)
-    {
-        bmp_buff->Fill(clearColor);
-        set_trans_blender(0, 0, 0, a);
-        bmp_buff->TransBlendBlt(bmp_orig, 0, 0);
-
-        if (draw_callback)
-            draw_callback();
-        RenderToBackBuffer();
-        Present();
-
-        sys_evt_process_pending();
-        if (_pollingCallback)
-            _pollingCallback();
-
-        WaitForNextFrame();
-    }
-    delete bmp_buff;
-
-    SetMemoryBackBuffer(vs);
-    vs->Clear(clearColor);
-    if (draw_callback)
-        draw_callback();
-    RenderToBackBuffer();
-    Present();
-}
-/** END FADE.C **/
-
-// palette fading routiens
-// from allegro, modified for mp3
-void initialize_fade_256(int r, int g, int b) {
-  int a;
-  for (a = 0; a < 256; a++) {
-    faded_out_palette[a].r = r / 4;
-	  faded_out_palette[a].g = g / 4;
-	  faded_out_palette[a].b = b / 4;
-  }
-}
-
-void SDLRendererGraphicsDriver::__fade_from_range(PALETTE source, PALETTE dest, int speed, int from, int to) 
-{
-   PALETTE temp;
-   int c;
-
-   for (c=0; c<PAL_SIZE; c++)
-      temp[c] = source[c];
-
-   for (c=0; c<64; c+=speed) {
-      fade_interpolate(source, dest, temp, c, from, to);
-      set_palette_range(temp, from, to, TRUE);
-
-      RenderToBackBuffer();
-      Present();
-
-      sys_evt_process_pending();
-      if (_pollingCallback)
-          _pollingCallback();
-   }
-
-   set_palette_range(dest, from, to, TRUE);
-}
-
-void SDLRendererGraphicsDriver::__fade_out_range(int speed, int from, int to, int targetColourRed, int targetColourGreen, int targetColourBlue) 
-{
-   PALETTE temp;
-
-   initialize_fade_256(targetColourRed, targetColourGreen, targetColourBlue);
-   get_palette(temp);
-   __fade_from_range(temp, faded_out_palette, speed, from, to);
-}
-
-void SDLRendererGraphicsDriver::FadeOut(int speed, int targetColourRed, int targetColourGreen, int targetColourBlue) {
-  if (_srcColorDepth > 8)
-  {
-    highcolor_fade_out(virtualScreen, _drawPostScreenCallback, speed * 4, targetColourRed, targetColourGreen, targetColourBlue);
-  }
-  else
-  {
-    __fade_out_range(speed, 0, 255, targetColourRed, targetColourGreen, targetColourBlue);
-  }
-}
-
-void SDLRendererGraphicsDriver::FadeIn(int speed, PALETTE p, int targetColourRed, int targetColourGreen, int targetColourBlue) {
-  if (_drawScreenCallback)
-  {
-    _drawScreenCallback();
-    RenderToBackBuffer();
-  }
-  if (_srcColorDepth > 8)
-  {
-    highcolor_fade_in(virtualScreen, _drawPostScreenCallback, speed * 4, targetColourRed, targetColourGreen, targetColourBlue);
-  }
-  else
-  {
-	initialize_fade_256(targetColourRed, targetColourGreen, targetColourBlue);
-	__fade_from_range(faded_out_palette, p, speed, 0,255);
-  }
-}
-
-void SDLRendererGraphicsDriver::BoxOutEffect(bool blackingOut, int speed, int delay)
-{
-  if (blackingOut)
-  {
-    int yspeed = _srcRect.GetHeight() / (_srcRect.GetWidth() / speed);
-    int boxwid = speed, boxhit = yspeed;
-    Bitmap *bmp_orig = virtualScreen;
-    Bitmap *bmp_buff = new Bitmap(bmp_orig->GetWidth(), bmp_orig->GetHeight(), bmp_orig->GetColorDepth());
-    SetMemoryBackBuffer(bmp_buff);
-
-    while (boxwid < _srcRect.GetWidth()) {
-      boxwid += speed;
-      boxhit += yspeed;
-      int vcentre = _srcRect.GetHeight() / 2;
-      bmp_orig->FillRect(Rect(_srcRect.GetWidth() / 2 - boxwid / 2, vcentre - boxhit / 2,
-          _srcRect.GetWidth() / 2 + boxwid / 2, vcentre + boxhit / 2), 0);
-      bmp_buff->Fill(0);
-      bmp_buff->Blit(bmp_orig);
-
-      if (_drawPostScreenCallback)
-          _drawPostScreenCallback();
-      RenderToBackBuffer();
-      Present();
-
-      sys_evt_process_pending();
-      if (_pollingCallback)
-          _pollingCallback();
-
-      platform->Delay(delay);
-    }
-    delete bmp_buff;
-    SetMemoryBackBuffer(bmp_orig);
-  }
-  else
-  {
-    throw Ali3DException("BoxOut fade-in not implemented in sw gfx driver");
-  }
-}
-// end fading routines
 
 // add the alpha values together, used for compositing alpha images
 // TODO: why is this here, move to gfx/blender? check if there's already similar function there
@@ -970,7 +803,7 @@ static uint32_t _trans_alpha_blender32(uint32_t x, uint32_t y, uint32_t n)
 
 bool SDLRendererGraphicsDriver::SetVsyncImpl(bool enabled, bool &vsync_res)
 {
-    #if SDL_VERSION_ATLEAST(2, 0, 18)
+#if SDL_VERSION_ATLEAST(2, 0, 18)
     if (SDL_RenderSetVSync(_renderer, enabled) == 0) // 0 on success
     {
         // gamma might be lost after changing vsync mode at fullscreen
@@ -981,7 +814,7 @@ bool SDLRendererGraphicsDriver::SetVsyncImpl(bool enabled, bool &vsync_res)
         return true;
     }
     Debug::Printf(kDbgMsg_Warn, "SDLRenderer: SetVsync (%d) failed: %s", enabled, SDL_GetError());
-    #endif
+#endif // SDL_VERSION_ATLEAST(2, 0, 18)
     return false;
 }
 

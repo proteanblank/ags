@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -31,8 +31,7 @@
 #include "platform/base/agsplatformdriver.h"
 #include "util/filestream.h"
 
-using AGS::Common::String;
-using AGS::Common::FileStream;
+using namespace AGS::Common;
 
 extern AGS::Engine::IGraphicsDriver *gfxDriver;
 
@@ -84,7 +83,6 @@ extern "C"
 struct AGSEmscripten : AGSPlatformDriver {
 
   int  CDPlayerCommand(int cmdd, int datt) override;
-  void DisplayAlert(const char*, ...) override;
   void Delay(int millis) override;
   void YieldCPU() override;
   FSLocation GetAllUsersDataDirectory() override;
@@ -92,7 +90,7 @@ struct AGSEmscripten : AGSPlatformDriver {
   FSLocation GetUserConfigDirectory() override;
   FSLocation GetUserGlobalConfigDirectory() override;
   FSLocation GetAppOutputDirectory() override;
-  unsigned long GetDiskFreeSpaceMB() override;
+  uint64_t GetDiskFreeSpaceMB(const String &path) override;
   const char* GetBackendFailUserHint() override;
   eScriptSystemOSID GetSystemOSID() override;
   int  InitializeCDPlayer() override;
@@ -111,25 +109,6 @@ struct AGSEmscripten : AGSPlatformDriver {
 int AGSEmscripten::CDPlayerCommand(int cmdd, int datt) 
 {
     return 0;
-}
-
-void AGSEmscripten::DisplayAlert(const char *text, ...) 
-{
-    char displbuf[2000];
-    va_list ap;
-    va_start(ap, text);
-    vsprintf(displbuf, text, ap);
-    va_end(ap);
-    if (_logToStdErr)
-    {
-        fprintf(stderr, "%s\n", displbuf);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "AGS Error", displbuf, nullptr);
-    }
-    else
-    {
-        fprintf(stdout, "%s\n", displbuf);
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, "AGS Alert", displbuf, nullptr);
-    }
 }
 
 void AGSEmscripten::SyncEmscriptenFS()
@@ -180,8 +159,11 @@ void AGSEmscripten::MainInit()
     ags_syncfs_running = false;
 
     FileStream::FileCloseNotify = [this](const FileStream::CloseNotifyArgs &args){
-        if(args.WorkMode == Common::FileWorkMode::kFile_Read) return;
-        if(!Common::Path::IsSameOrSubDir(SavedGamesDirectory.FullDir,args.Filepath)) return;
+        // Only sync if file stream was in write mode
+        if ((args.WorkMode & StreamMode::kStream_ReadWrite) == StreamMode::kStream_Read)
+            return;
+        if (!Path::IsSameOrSubDir(SavedGamesDirectory.FullDir,args.Filepath))
+            return;
         ScheduleSyncFS();
     };
 }
@@ -243,7 +225,7 @@ FSLocation AGSEmscripten::GetAppOutputDirectory()
     return UserDataDirectory;
 }
 
-unsigned long AGSEmscripten::GetDiskFreeSpaceMB() 
+uint64_t AGSEmscripten::GetDiskFreeSpaceMB(const String &path) 
 {
     // placeholder
     return 100;

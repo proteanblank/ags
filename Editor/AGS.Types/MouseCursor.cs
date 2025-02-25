@@ -136,6 +136,12 @@ namespace AGS.Types
             get { return "Cursor: " + this.Name; }
         }
 
+        [Browsable(false)]
+        public string PropertyGridTitle
+        {
+            get { return TypesHelper.MakePropertyGridTitle("Character", _name, _id); }
+        }
+
         [Description("The script ID of the cursor")]
         [Category("Design")]
         public string ScriptID
@@ -145,7 +151,7 @@ namespace AGS.Types
 				string cursorName = string.Empty;
 				for (int i = 0; i < _name.Length; i++)
 				{
-					if (Char.IsLetterOrDigit(_name[i]))
+					if (_name[i].IsScriptWordChar())
 					{
 						cursorName += _name[i];
 					}

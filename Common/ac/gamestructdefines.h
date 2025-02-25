@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -48,7 +48,7 @@
 #define OPT_NOLOSEINV       15
 #define OPT_HIRES_FONTS     16
 #define OPT_SPLITRESOURCES  17
-#define OPT_ROTATECHARS     18
+#define OPT_CHARTURNWHENWALK 18 // characters turn step-by-step when changing walking direction
 #define OPT_FADETYPE        19
 #define OPT_HANDLEINVCLICKS 20
 #define OPT_MOUSEWHEEL      21
@@ -57,22 +57,22 @@
 #define OPT_CROSSFADEMUSIC  24
 #define OPT_ANTIALIASFONTS  25
 #define OPT_THOUGHTGUI      26
-#define OPT_TURNTOFACELOC   27
+#define OPT_CHARTURNWHENFACE 27  // characters turn step-by-step when facing new standing direction
 #define OPT_RIGHTLEFTWRITE  28  // right-to-left text writing
 #define OPT_DUPLICATEINV    29  // if they have 2 of the item, draw it twice
-#define OPT_SAVESCREENSHOT  30
+#define OPT_SAVESCREENSHOT  30  // write screenshots into savegame (on/off)
 #define OPT_PORTRAITSIDE    31
 #define OPT_STRICTSCRIPTING 32  // don't allow MoveCharacter-style commands
 #define OPT_LEFTTORIGHTEVAL 33  // left-to-right operator evaluation
-#define OPT_COMPRESSSPRITES 34  // [DEPRECATED]
+#define OPT_COMPRESSSPRITES 34  // sprite compression type (None, RLE, LZW, Deflate)
 #define OPT_STRICTSTRINGS   35  // don't allow old-style strings, for reference only
-#define OPT_NEWGUIALPHA     36
+#define OPT_NEWGUIALPHA     36  // alpha blending method when drawing GUI and controls
 #define OPT_RUNGAMEDLGOPTS  37
 #define OPT_NATIVECOORDINATES 38 // defines coordinate relation between game logic and game screen
 #define OPT_GLOBALTALKANIMSPD 39
 #define OPT_HIGHESTOPTION_321 39
-#define OPT_SPRITEALPHA     40
-#define OPT_SAFEFILEPATHS   41
+#define OPT_SPRITEALPHA     40  // alpha blending method when drawing images on DrawingSurface
+#define OPT_SAFEFILEPATHS   41  // restricted file path in script (not writing to the game dir, etc)
 #define OPT_DIALOGOPTIONSAPI 42 // version of dialog options API (-1 for pre-3.4.0 API)
 #define OPT_BASESCRIPTAPI   43 // version of the Script API (ScriptAPIVersion) used to compile game script
 #define OPT_SCRIPTCOMPATLEV 44 // level of API compatibility (ScriptAPIVersion) used to compile game script
@@ -83,7 +83,12 @@
 #define OPT_GAMETEXTENCODING 49 // how the text in the game data should be interpreted
 #define OPT_KEYHANDLEAPI    50 // key handling mode (old/new)
 #define OPT_CUSTOMENGINETAG 51 // custom engine tag (for overriding behavior)
-#define OPT_HIGHESTOPTION   OPT_CUSTOMENGINETAG
+#define OPT_SCALECHAROFFSETS 52 // apply character scaling to the sprite offsets (z, locked offs)
+#define OPT_SAVESCREENSHOTLAYER 53 // which render layers to include into savegame screenshot
+#define OPT_VOICECLIPNAMERULE 54 // which rule to use for a voice clip name based on character's name (old/new)
+#define OPT_SAVECOMPONENTSIGNORE 55 // ignore these savegame components (flag mask)
+#define OPT_GAMEFPS         56
+#define OPT_HIGHESTOPTION   OPT_GAMEFPS
 #define OPT_NOMODMUSIC      98 // [DEPRECATED]
 #define OPT_LIPSYNCTEXT     99
 
@@ -98,12 +103,15 @@
 #define PORTRAIT_XPOSITION  3
 
 // Room transition style
-#define FADE_NORMAL         0
-#define FADE_INSTANT        1
-#define FADE_DISSOLVE       2
-#define FADE_BOXOUT         3
-#define FADE_CROSSFADE      4
-#define FADE_LAST           4   // this should equal the last one
+enum ScreenTransitionStyle
+{
+    kScrTran_Fade = 0,
+    kScrTran_Instant = 1,
+    kScrTran_Dissolve = 2,
+    kScrTran_Boxout = 3,
+    kScrTran_Crossfade = 4,
+    kNumScrTransitions
+};
 
 // Legacy font flags
 //#define FFLG_LEGACY_NOSCALE 0x01 // TODO: is this from legacy format, ever used?
@@ -129,11 +137,12 @@
 
 #define DIALOG_OPTIONS_HIGHLIGHT_COLOR_DEFAULT  14 // Yellow
 
-#define MAXVIEWNAMELENGTH 15
+// MAXVIEWNAMELENGTH comes from unknown old engine version
+#define LEGACY_MAXVIEWNAMELENGTH 15
 #define MAXLIPSYNCFRAMES  20
 #define MAX_GUID_LENGTH   40
 #define MAX_SG_EXT_LENGTH 20
-#define MAX_SG_FOLDER_LEN 50
+#define LEGACY_MAX_SG_FOLDER_LEN 50
 
 enum GameResolutionType
 {
@@ -190,7 +199,8 @@ enum ScriptAPIVersion
     kScriptAPI_v360 = 3060000,
     kScriptAPI_v36026 = 3060026,
     kScriptAPI_v361 = 3060100,
-    kScriptAPI_Current = kScriptAPI_v361
+    kScriptAPI_v362 = 3060200,
+    kScriptAPI_Current = kScriptAPI_v362
 };
 
 const char *GetScriptAPIName(ScriptAPIVersion v);
@@ -220,14 +230,19 @@ enum GameGuiAlphaRenderingStyle
 };
 
 
-// Sprite flags (serialized as 8-bit)
+// Sprite flags
+// SERIALIZATION NOTE: serialized as 8-bit in game data and legacy saves
+//                     serialized as 32-bit in new saves (for dynamic sprites only).
 #define SPF_HIRES           0x01  // sized for high native resolution (legacy option)
 #define SPF_HICOLOR         0x02  // is 16-bit (UNUSED)
 #define SPF_DYNAMICALLOC    0x04  // created by runtime script
 #define SPF_TRUECOLOR       0x08  // is 32-bit (UNUSED)
 #define SPF_ALPHACHANNEL    0x10  // has alpha-channel
 #define SPF_VAR_RESOLUTION  0x20  // variable resolution (refer to SPF_HIRES)
-#define SPF_HADALPHACHANNEL 0x80  // the saved sprite on disk has one
+// Runtime sprite flags follow
+#define SPF_OBJECTOWNED     0x0100 // owned by a game object (not created in user script)
+#define SPF_HADALPHACHANNEL 0x0200 // sprite in spritefile has alpha channel
+                                   // (marked in case we remove alpha when loading a sprite)
 
 // General information about sprite (properties, size)
 struct SpriteInfo
@@ -241,7 +256,8 @@ struct SpriteInfo
         : Width(w), Height(h), Flags(flags) {}
 
     inline Size GetResolution() const { return Size(Width, Height); }
-
+    // Gets if sprite is created at runtime (by engine, or a script command)
+    inline bool IsDynamicSprite() const { return (Flags & SPF_DYNAMICALLOC) != 0; }
     //
     // Legacy game support
     //
@@ -278,10 +294,10 @@ struct FontInfo
     int           YOffset;
     // Custom line spacing between two lines of text (0 = use font height)
     int           LineSpacing;
-    // When automatic outlining, thickness of the outline (0 = no auto outline)
-    int           AutoOutlineThickness;
     // When automatic outlining, style of the outline
     AutoOutlineStyle AutoOutlineStyle;
+    // When automatic outlining, thickness of the outline (0 = no auto outline)
+    int           AutoOutlineThickness;
 
     FontInfo();
 };

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -83,10 +83,11 @@ public:
 
 
     SpriteCache(std::vector<SpriteInfo> &sprInfos, const Callbacks &callbacks);
-    ~SpriteCache();
+    ~SpriteCache() = default;
 
     // Loads sprite reference information and inits sprite stream
-    HError      InitFile(const String &filename, const String &sprindex_filename);
+    HError      InitFile(std::unique_ptr<Stream> &&sprite_file,
+                         std::unique_ptr<Stream> &&index_file);
     // Saves current cache contents to the file
     int         SaveToFile(const String &filename, int store_flags, SpriteCompression compress, SpriteFileIndex &index);
     // Closes an active sprite file stream
@@ -120,10 +121,36 @@ public:
     // Tells if the given slot is reserved for the asset sprite, that is a "static"
     // sprite cached from the game assets
     bool        IsAssetSprite(sprkey_t index) const;
-    // Loads sprite and and locks in memory (so it cannot get removed implicitly)
-    void        Precache(sprkey_t index);
+    // Tells if the sprite is loaded into the memory (either from asset file, or assigned directly)
+    bool        IsSpriteLoaded(sprkey_t index) const;
+    // Tells if the given slot represents an "asset sprite", which is currently unloaded.
+    // This is a helper method that lets distinguish an asset missing from memory,
+    // because IsSpriteLoaded() also reports true for external sprites, and false for
+    // any non-occupied sprite slots.
+    bool        IsAssetUnloaded(sprkey_t index) const;
+    // Loads sprite using SpriteFile if such index is known,
+    // frees the space if cache size reaches the limit
+    void        PrecacheSprite(sprkey_t index);
+    // Loads the sprite if necessary and returns a *copy* of bitmap, passing
+    // ownership to the caller. Skips storing the sprite in the cache
+    // (unless it was already there).
+    // TODO: consider redesigning this function later; maybe there should be
+    // separate sprite loader and sprite cache classes; also maybe use shared_ptrs?
+    std::unique_ptr<Bitmap> LoadSpriteNoCache(sprkey_t index);
+    // Locks sprite, preventing it from getting removed by the normal cache limit.
+    // If this is a registered sprite from the game assets, then loads it first.
+    // If this is a sprite with SPRCACHEFLAG_EXTERNAL flag, then does nothing,
+    // as these are always "locked".
+    // If such sprite does not exist, then fails silently.
+    void        LockSprite(sprkey_t index);
+    // Unlocks sprite, putting it back into the cache logic,
+    // where it counts towards normal limit may be deleted to free space.
+    // NOTE: sprites with SPRCACHEFLAG_EXTERNAL flag cannot be unlocked,
+    // only explicitly removed.
+    // If such sprite was not present in memory, then fails silently.
+    void        UnlockSprite(sprkey_t index);
     // Unregisters sprite from the bank and returns the bitmap
-    Bitmap*     RemoveSprite(sprkey_t index);
+    std::unique_ptr<Bitmap> RemoveSprite(sprkey_t index);
     // Deletes particular sprite, marks slot as unused
     void        DisposeSprite(sprkey_t index);
     // Deletes all loaded asset (non-locked, non-external) images from the cache;
@@ -135,7 +162,7 @@ public:
     // *Deletes* the previous sprite if one was found at the same index.
     // "flags" are optional SPF_* constants that define sprite's behavior in game.
     bool        SetSprite(sprkey_t index, std::unique_ptr<Bitmap> image, int flags = 0);
-    // Assigns new dummy sprite for the given index, silently remapping it to sprite 0;
+    // Assigns new dummy sprite for the given index, silently remapping it to placeholder;
     // optionally marks it as an asset placeholder.
     // *Deletes* the previous sprite if one was found at the same index.
     void        SetEmptySprite(sprkey_t index, bool as_asset);
@@ -152,12 +179,9 @@ protected:
 
 private:
     // Load sprite from game resource and put into the cache
-    Bitmap *    LoadSprite(sprkey_t index);
+    Bitmap *    LoadSprite(sprkey_t index, bool lock = false);
     // Remap the given index to the sprite 0
-    void        RemapSpriteToSprite0(sprkey_t index);
-    // Gets the index of a sprite which data is used for the given slot;
-    // in case of remapped sprite this will return the one given sprite is remapped to
-    sprkey_t    GetDataIndex(sprkey_t index);
+    void        RemapSpriteToPlaceholder(sprkey_t index);
     // Initialize the empty sprite slot
     void        InitNullSprite(sprkey_t index);
     //
@@ -180,8 +204,8 @@ private:
         bool IsValid() const { return Flags != 0u; }
         // Tells if there's a game resource corresponding to this slot
         bool IsAssetSprite() const;
-        // Tells if a sprite is remapped to placeholder (e.g. failed to load)
-        bool IsRemapped() const;
+        // Tells if a sprite failed to load from assets, and should not be used
+        bool IsError() const;
         // Tells if sprite was added externally, not loaded from game resources
         bool IsExternalSprite() const;
         // Tells if sprite is locked and should not be disposed by cache logic
@@ -192,16 +216,14 @@ private:
     std::vector<SpriteInfo> &_sprInfos;
     // Array of sprite references
     std::vector<SpriteData> _spriteData;
+    // Placeholder sprite, returned from operator[] for a non-existing sprite
+    std::unique_ptr<Bitmap> _placeholder;
 
     Callbacks  _callbacks;
     SpriteFile _file;
-
 };
 
 } // namespace Common
 } // namespace AGS
-
-// Main global spritecache object
-extern AGS::Common::SpriteCache spriteset;
 
 #endif // __AGS_CN_AC__SPRCACHE_H

@@ -2,32 +2,27 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "core/assetmanager.h"
 #include <algorithm>
 #include <regex>
-#include "util/directory.h"
+#include "util/file.h"
 #include "util/multifilelib.h"
 #include "util/path.h"
-#include "util/string_utils.h" // cbuf_to_string_and_free
 
 
 namespace AGS
 {
 namespace Common
 {
-
-// TODO: move elsewhere later
-std::unique_ptr<AssetManager> AssetMgr;
-
 
 inline static bool IsAssetLibDir(const AssetLibInfo *lib) { return lib->BaseFileName.IsEmpty(); }
 inline static bool IsAssetLibFile(const AssetLibInfo *lib) { return !lib->BaseFileName.IsEmpty(); }
@@ -39,28 +34,31 @@ bool AssetManager::AssetLibEx::TestFilter(const String &filter) const
         (std::find(Filters.begin(), Filters.end(), filter) != Filters.end());
 }
 
-
-bool AssetManager::LibsByPriority::operator()(const AssetLibInfo *lib1, const AssetLibInfo *lib2) const
+// Asset library sorting function, directories have priority
+bool SortLibsPriorityDir(const AssetLibInfo *lib1, const AssetLibInfo *lib2)
 {
-    const bool lib1dir = IsAssetLibDir(lib1);
-    const bool lib2dir = IsAssetLibDir(lib2);
-    if (lib1dir == lib2dir)
-        return false; // both are equal, none is less
-    if (Priority == kAssetPriorityLib)
-        return !lib1dir; // first element is less if it's library file
-    if (Priority == kAssetPriorityDir)
-        return lib1dir; // first element is less if it's directory
-    return false; // unknown priority, just fail
+    // first element is less if it's a directory while second is a lib
+    return IsAssetLibDir(lib1) && !IsAssetLibDir(lib2);
 }
 
+// Asset library sorting function, packages have priority
+bool SortLibsPriorityLib(const AssetLibInfo *lib1, const AssetLibInfo *lib2)
+{
+    // first element is less if it's a lib while second is a directory
+    return !IsAssetLibDir(lib1) && IsAssetLibDir(lib2);
+}
+
+AssetManager::AssetManager()
+{
+    SetSearchPriority(kAssetPriorityDir); // ensure lib sorter is initialized
+}
 
 /* static */ bool AssetManager::IsDataFile(const String &data_file)
 {
-    Stream *in = File::OpenFileCI(data_file, Common::kFile_Open, Common::kFile_Read);
+    std::unique_ptr<Stream> in = File::OpenFileCI(data_file, kFile_Open, kStream_Read);
     if (in)
     {
-        MFLUtil::MFLError err = MFLUtil::TestIsMFL(in, true);
-        delete in;
+        MFLUtil::MFLError err = MFLUtil::TestIsMFL(in.get(), true);
         return err == MFLUtil::kMFLNoError;
     }
     return false;
@@ -68,30 +66,25 @@ bool AssetManager::LibsByPriority::operator()(const AssetLibInfo *lib1, const As
 
 /* static */ AssetError AssetManager::ReadDataFileTOC(const String &data_file, AssetLibInfo &lib)
 {
-    Stream *in = File::OpenFileCI(data_file, Common::kFile_Open, Common::kFile_Read);
+    std::unique_ptr<Stream> in = File::OpenFileCI(data_file, kFile_Open, kStream_Read);
     if (in)
     {
-        MFLUtil::MFLError err = MFLUtil::ReadHeader(lib, in);
-        delete in;
+        MFLUtil::MFLError err = MFLUtil::ReadHeader(lib, in.get());
         return (err != MFLUtil::kMFLNoError) ? kAssetErrLibParse : kAssetNoError;
     }
     return kAssetErrNoLibFile;
 }
 
-AssetManager::AssetManager()
-{
-    _libsByPriority.Priority = kAssetPriorityDir;
-}
-
 void AssetManager::SetSearchPriority(AssetSearchPriority priority)
 {
-    _libsByPriority.Priority = priority;
-    std::sort(_activeLibs.begin(), _activeLibs.end(), _libsByPriority);
+    _libsPriority = priority;
+    _libsSorter = _libsPriority == kAssetPriorityDir ? SortLibsPriorityDir : SortLibsPriorityLib;
+    std::sort(_activeLibs.begin(), _activeLibs.end(), _libsSorter);
 }
 
 AssetSearchPriority AssetManager::GetSearchPriority() const
 {
-    return _libsByPriority.Priority;
+    return _libsPriority;
 }
 
 AssetError AssetManager::AddLibrary(const String &path, const AssetLibInfo **out_lib)
@@ -109,6 +102,7 @@ AssetError AssetManager::AddLibrary(const String &path, const String &filters, c
         if (Path::ComparePaths(lib->BasePath, path) == 0)
         {
             // already present, only assign new filters
+            lib->FilterString = filters;
             lib->Filters = filters.Split(',');
             if (out_lib)
                 *out_lib = lib.get();
@@ -120,8 +114,9 @@ AssetError AssetManager::AddLibrary(const String &path, const String &filters, c
     AssetError err = RegisterAssetLib(path, lib);
     if (err != kAssetNoError)
         return err;
+    lib->FilterString = filters;
     lib->Filters = filters.Split(',');
-    auto place = std::upper_bound(_activeLibs.begin(), _activeLibs.end(), lib, _libsByPriority);
+    auto place = std::upper_bound(_activeLibs.begin(), _activeLibs.end(), lib, _libsSorter);
     _activeLibs.insert(place, lib);
     if (out_lib)
         *out_lib = lib;
@@ -153,6 +148,13 @@ size_t AssetManager::GetLibraryCount() const
     return _libs.size();
 }
 
+AssetLibEntry AssetManager::GetLibraryEntry(size_t index) const
+{
+    if (index >= _libs.size())
+        return {};
+    return AssetLibEntry(IsAssetLibDir(_libs[index].get()), _libs[index]->BasePath, _libs[index]->RealLibFiles, _libs[index]->FilterString);
+}
+
 const AssetLibInfo *AssetManager::GetLibraryInfo(size_t index) const
 {
     return index < _libs.size() ? _libs[index].get() : nullptr;
@@ -173,11 +175,31 @@ bool AssetManager::DoesAssetExist(const String &asset_name, const String &filter
         }
         else
         {
-            for (const auto &a : lib->AssetInfos)
+            return lib->Lookup.count(asset_name) > 0;
+        }
+    }
+    return false;
+}
+
+bool AssetManager::GetAssetTime(const String &asset_name, time_t &ft, const String &filter) const
+{
+    for (const auto *lib : _activeLibs)
+    {
+        if (!lib->TestFilter(filter)) continue; // filter does not match
+
+        if (IsAssetLibDir(lib))
+        {
+            String filename = File::FindFileCI(lib->BaseDir, asset_name);
+            if (!filename.IsEmpty())
             {
-                if (a.FileName.CompareNoCase(asset_name) == 0)
-                    return true;
+                ft = File::GetFileTime(filename);
+                return true;
             }
+        }
+        else
+        {
+            ft = File::GetFileTime(lib->RealLibFiles[0]);
+            return true;
         }
     }
     return false;
@@ -213,8 +235,60 @@ void AssetManager::FindAssets(std::vector<String> &assets, const String &wildcar
     }
 
     // Sort and remove duplicates
-    std::sort(assets.begin(), assets.end());
-    assets.erase(std::unique(assets.begin(), assets.end()), assets.end());
+    std::sort(assets.begin(), assets.end(), StrLessNoCase());
+    assets.erase(std::unique(assets.begin(), assets.end(), StrEqNoCase()), assets.end());
+}
+
+void AssetManager::FindAssets(std::vector<FileEntry> &assets, const String &wildcard,
+    const String &filter) const
+{
+    // TODO: consider refactoring and merging this with FindAssets(std::vector<String> &assets);
+    // there are two separate methods now, because retrieving filename only is faster than
+    // full FileEntry (may require extra system calls on certain platforms).
+
+    String pattern = StrUtil::WildcardToRegex(wildcard);
+    const std::regex regex(pattern.GetCStr(), std::regex_constants::icase);
+    std::cmatch mr;
+
+    std::vector<FileEntry> lib_fileents;
+    for (const auto *lib : _activeLibs)
+    {
+        if (!lib->TestFilter(filter)) continue; // filter does not match
+
+        lib_fileents.clear();
+        if (IsAssetLibDir(lib))
+        {
+            // FIXME: do basedir/getparent(wildcard), getfilename(wildcard) instead?
+            // because FindFile does not support subdirs in wildcard!!
+            for (FindFile ff = FindFile::OpenFiles(lib->BaseDir, wildcard);
+                 !ff.AtEnd(); ff.Next())
+                lib_fileents.push_back(ff.GetEntry());
+        }
+        else
+        {
+            time_t lib_time = File::GetFileTime(lib->RealLibFiles[0]);
+            for (const auto &a : lib->AssetInfos)
+            {
+                if (std::regex_match(a.FileName.GetCStr(), mr, regex))
+                    lib_fileents.push_back(FileEntry(a.FileName, true, false, lib_time));
+            }
+        }
+
+        // We have to filter out matching entries and keep only ones that were found first by lib priority
+        if (assets.empty())
+        {
+            assets = std::move(lib_fileents);
+        }
+        else
+        {
+            for (const auto &fe : lib_fileents)
+            {
+                auto it_place = std::upper_bound(assets.begin(), assets.end(), fe, FileEntryCmpByNameCI());
+                if (it_place != assets.begin() && (it_place - 1)->Name.CompareNoCase(fe.Name) != 0)
+                    assets.insert(it_place, fe);
+            }
+        }
+    }
 }
 
 AssetError AssetManager::RegisterAssetLib(const String &path, AssetLibEx *&out_lib)
@@ -233,13 +307,12 @@ AssetError AssetManager::RegisterAssetLib(const String &path, AssetLibEx *&out_l
     // ...else try open a data library
     else
     {
-        Stream *in = File::OpenFileCI(path, Common::kFile_Open, Common::kFile_Read);
+        std::unique_ptr<Stream> in = File::OpenFileCI(path, kFile_Open, kStream_Read);
         if (!in)
             return kAssetErrNoLibFile; // can't be opened, return error code
 
         lib.reset(new AssetLibEx());
-        MFLUtil::MFLError mfl_err = MFLUtil::ReadHeader(*lib, in);
-        delete in;
+        MFLUtil::MFLError mfl_err = MFLUtil::ReadHeader(*lib, in.get());
 
         if (mfl_err != MFLUtil::kMFLNoError)
             return kAssetErrLibParse;
@@ -254,6 +327,12 @@ AssetError AssetManager::RegisterAssetLib(const String &path, AssetLibEx *&out_l
         {
             lib->RealLibFiles.push_back(File::FindFileCI(lib->BaseDir, lib->LibFileNames[i]));
         }
+
+        // Create lookup table
+        for (size_t i = 0; i < lib->AssetInfos.size(); ++i)
+        {
+            lib->Lookup[lib->AssetInfos[i].FileName] = i;
+        }
     }
 
     out_lib = lib.get();
@@ -261,13 +340,13 @@ AssetError AssetManager::RegisterAssetLib(const String &path, AssetLibEx *&out_l
     return kAssetNoError;
 }
 
-Stream *AssetManager::OpenAsset(const String &asset_name, const String &filter) const
+std::unique_ptr<Stream> AssetManager::OpenAsset(const String &asset_name, const String &filter) const
 {
     for (const auto *lib : _activeLibs)
     {
         if (!lib->TestFilter(filter)) continue; // filter does not match
 
-        Stream *s = nullptr;
+        std::unique_ptr<Stream> s;
         if (IsAssetLibDir(lib))
             s = OpenAssetFromDir(lib, asset_name);
         else
@@ -278,22 +357,20 @@ Stream *AssetManager::OpenAsset(const String &asset_name, const String &filter) 
     return nullptr;
 }
 
-Stream *AssetManager::OpenAssetFromLib(const AssetLibEx *lib, const String &asset_name) const
+std::unique_ptr<Stream> AssetManager::OpenAssetFromLib(const AssetLibEx *lib, const String &asset_name) const
 {
-    for (const auto &a : lib->AssetInfos)
-    {
-        if (a.FileName.CompareNoCase(asset_name) == 0)
-        {
-            String libfile = lib->RealLibFiles[a.LibUid];
-            if (libfile.IsEmpty())
-                return nullptr;
-            return File::OpenFile(libfile, a.Offset, a.Offset + a.Size);
-        }
-    }
-    return nullptr;
+    auto it_found = lib->Lookup.find(asset_name);
+    if (it_found == lib->Lookup.end())
+        return nullptr;
+
+    const AssetInfo &a = lib->AssetInfos[it_found->second];
+    String libfile = lib->RealLibFiles[a.LibUid];
+    if (libfile.IsEmpty())
+        return nullptr;
+    return File::OpenFile(libfile, a.Offset, a.Offset + a.Size);
 }
 
-Stream *AssetManager::OpenAssetFromDir(const AssetLibEx *lib, const String &file_name) const
+std::unique_ptr<Stream> AssetManager::OpenAssetFromDir(const AssetLibEx *lib, const String &file_name) const
 {
     String found_file = File::FindFileCI(lib->BaseDir, file_name);
     if (found_file.IsEmpty())
@@ -301,7 +378,7 @@ Stream *AssetManager::OpenAssetFromDir(const AssetLibEx *lib, const String &file
     return File::OpenFileRead(found_file);
 }
 
-Stream *AssetManager::OpenAsset(const String &asset_name) const
+std::unique_ptr<Stream> AssetManager::OpenAsset(const String &asset_name) const
 {
     return OpenAsset(asset_name, "");
 }

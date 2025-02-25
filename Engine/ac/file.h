@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -19,9 +19,11 @@
 #define __AGS_EE_AC__FILE_H
 
 #include <memory>
+#include <vector>
 #include "ac/dynobj/scriptfile.h"
 #include "ac/runtime_defines.h"
-using AGS::Common::Stream;
+#include "util/stream.h"
+#include "util/string.h"
 
 int		File_Exists(const char *fnmm);
 int		File_Delete(const char *fnmm);
@@ -44,17 +46,16 @@ int     File_Seek(sc_File *fil, int offset, int origin);
 int		File_GetEOF(sc_File *fil);
 int		File_GetError(sc_File *fil);
 int     File_GetPosition(sc_File *fil);
+// Fills a list of filenames found using given pattern; sorts the resulting list
+void    FillDirList(std::vector<AGS::Common::String> &files, const AGS::Common::String &pattern, ScriptFileSortStyle file_sort, ScriptSortDirection sort_dir);
 
-struct ScriptFileHandle
-{
-    std::unique_ptr<Stream> stream;
-    int32_t  handle = 0;
-};
-extern ScriptFileHandle valid_handles[MAX_OPEN_SCRIPT_FILES + 1];
-extern int num_open_script_files;
+//=============================================================================
 
-ScriptFileHandle *check_valid_file_handle_ptr(Stream *stream_ptr, const char *operation_name);
-ScriptFileHandle *check_valid_file_handle_int32(int32_t handle, const char *operation_name);
-Stream *get_valid_file_stream_from_handle(int32_t handle, const char *operation_name);
+// Managed file streams: for script and plugin use
+int32_t add_file_stream(std::unique_ptr<AGS::Common::Stream> &&stream, const char *operation_name);
+void    close_file_stream(int32_t fhandle, const char *operation_name);
+AGS::Common::Stream *get_file_stream(int32_t fhandle, const char *operation_name);
+AGS::Common::IStreamBase *get_file_stream_iface(int32_t fhandle, const char *operation_name);
+void    close_all_file_streams();
 
 #endif // __AGS_EE_AC__FILE_H

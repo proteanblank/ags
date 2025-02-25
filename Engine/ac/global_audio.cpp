@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -32,7 +32,6 @@
 
 using namespace AGS::Common;
 
-extern GameState play;
 extern GameSetupStruct game;
 extern RoomStruct thisroom;
 extern std::vector<SpeechLipSyncLine> splipsync;
@@ -69,7 +68,7 @@ void PlayAmbientSound (int channel, int sndnum, int vol, int x, int y) {
             // in case a normal non-ambient sound was playing, stop it too
             stop_and_destroy_channel(channel);
 
-            SOUNDCLIP *asound = aclip ? load_sound_and_play(aclip, true) : nullptr;
+            std::unique_ptr<SoundClip> asound = aclip ? load_sound_and_play(aclip, true) : nullptr;
             if (asound == nullptr) {
                 debug_script_warn ("Cannot load ambient sound %d", sndnum);
                 debug_script_log("FAILED to load ambient sound %d", sndnum);
@@ -79,7 +78,7 @@ void PlayAmbientSound (int channel, int sndnum, int vol, int x, int y) {
             debug_script_log("Playing ambient sound %d on channel %d", sndnum, channel);
             ambient[channel].channel = channel;
             asound->priority = 15;  // ambient sound higher priority than normal sfx
-            AudioChans::SetChannel(channel, std::unique_ptr<SOUNDCLIP>(asound));
+            AudioChans::SetChannel(channel, std::move(asound));
     }
     // calculate the maximum distance away the player can be, using X
     // only (since X centred is still more-or-less total Y)
@@ -145,7 +144,7 @@ int PlaySoundEx(int val1, int channel) {
     stop_and_destroy_channel (channel);
     debug_script_log("Playing sound %d on channel %d", val1, channel);
 
-    SOUNDCLIP *soundfx = aclip ? load_sound_and_play(aclip, false) : nullptr;
+    std::unique_ptr<SoundClip> soundfx = aclip ? load_sound_and_play(aclip, false) : nullptr;
     if (soundfx == nullptr) {
         debug_script_warn("Sound sample load failure: cannot load sound %d", val1);
         debug_script_log("FAILED to load sound %d", val1);
@@ -154,7 +153,7 @@ int PlaySoundEx(int val1, int channel) {
 
     soundfx->priority = 10;
     soundfx->set_volume255(play.sound_volume);
-    AudioChans::SetChannel(channel, std::unique_ptr<SOUNDCLIP>(soundfx));
+    AudioChans::SetChannel(channel, std::move(soundfx));
     return channel;
 }
 
@@ -363,35 +362,26 @@ void SetMusicRepeat(int loopflag) {
     play.music_repeat=loopflag;
 }
 
-void PlayMP3File (const char *filename) {
-    if (strlen(filename) >= PLAYMP3FILE_MAX_FILENAME_LEN)
-        quit("!PlayMP3File: filename too long");
-
+void PlayMP3File (const char *filename)
+{
     debug_script_log("PlayMP3File %s", filename);
 
     AssetPath asset_name(filename, "audio");
-
-    int useChan = prepare_for_new_music ();
-    bool doLoop = (play.music_repeat > 0);
-
-    std::unique_ptr<SOUNDCLIP> clip(load_sound_clip(asset_name, "", doLoop));
-    if (clip) {
-        if (clip->play()) {
-            clip->set_volume255(150);
-            AudioChans::SetChannel(useChan, std::move(clip));
-            current_music_type = clip->soundType;
-            play.cur_music_number = 1000;
-            // save the filename (if it's not what we were supplied with)
-            if (filename != &play.playmp3file_name[0])
-                snprintf(play.playmp3file_name, sizeof(play.playmp3file_name), "%s", filename);
-        }
+    const bool do_loop = (play.music_repeat > 0);
+    std::unique_ptr<SoundClip> clip(load_sound_clip(asset_name, "", do_loop));
+    if (!clip)
+    {
+        debug_script_warn("PlayMP3File: music file '%s' not found or cannot be read", filename);
+        return;
     }
 
-    if (!clip) {
-        AudioChans::SetChannel(useChan, nullptr);
-        debug_script_warn ("PlayMP3File: file '%s' not found or cannot play", filename);
-    }
-
+    const int use_chan = prepare_for_new_music();
+    current_music_type = clip->soundType;
+    play.cur_music_number = 1000;
+    play.playmp3file_name = filename;
+    clip->set_volume255(150); // CHECKME: why 150?...
+    clip->play();
+    AudioChans::SetChannel(use_chan, std::move(clip));
     post_new_music_check();
     update_music_volume();
 }
@@ -408,16 +398,18 @@ void PlaySilentMIDI (int mnum) {
     if (play.IsNonBlockingVoiceSpeech())
         stop_voice_nonblocking();
 
-    SOUNDCLIP *clip = load_sound_clip_from_old_style_number(true, mnum, false);
+    std::unique_ptr<SoundClip> clip = load_sound_clip_from_old_style_number(true, mnum, false);
     if (clip == nullptr)
     {
         quitprintf("!PlaySilentMIDI: failed to load aMusic%d", mnum);
     }
-    if (clip->play()) {
-        AudioChans::SetChannel(play.silent_midi_channel, std::unique_ptr<SOUNDCLIP>(clip));
+    if (clip->play())
+    {
         clip->set_volume100(0);
-    } else {
-        delete clip;
+        AudioChans::SetChannel(play.silent_midi_channel, std::move(clip));
+    }
+    else
+    {
         quitprintf("!PlaySilentMIDI: failed to play aMusic%d", mnum);
     }
 }
@@ -462,23 +454,27 @@ ScriptAudioChannel *PlayVoiceClip(CharacterInfo *ch, int sndid, bool as_speech)
 }
 
 // Construct an asset name for the voice-over clip for the given character and cue id
-String get_cue_filename(int charid, int sndid)
+static String get_cue_filename(int charid, int sndid, bool old_style)
 {
-    String asset_path = get_voice_assetpath();
-    String script_name;
-    if (charid >= 0)
-    {
-        // append the first 4 characters of the script name to the filename
-        if (game.chars[charid].scrname[0] == 'c')
-            script_name.SetString(&game.chars[charid].scrname[1], 4);
-        else
-            script_name.SetString(game.chars[charid].scrname, 4);
-    }
-    else
-    {
-        script_name = "NARR";
-    }
-    return String::FromFormat("%s%s%d", asset_path.GetCStr(), script_name.GetCStr(), sndid);
+    // Clip name generation rule:
+    // Cut a small case 'c' prefix from the character's script name,
+    // this is a ugly hack, but is still done, because in AGS
+    // characters were traditionally named as 'cEgo'.
+    // New-style: use full script name (past the prefix),
+    //            clip number (X) is separated by a dot:
+    //            "CHARNAME.X"
+    // Old-style: use only first 4 characters (past the prefix).
+    //            clip number (X) is not separated:
+    //            "CHARX"
+    const char *charname = (charid >= 0) ? game.chars2[charid].scrname_new.GetCStr()
+        : "narrator";
+    size_t from = (charname[0] == 'c') ? 1 : 0u;
+    size_t len = old_style ? 4 : SIZE_MAX;
+    String charname_fix(charname + from, len);
+    
+    const char *fmt_str = old_style ? "%s%d" : "%s.%d";
+    String asset_filename = String::FromFormat(fmt_str, charname_fix.GetCStr(), sndid);
+    return Path::ConcatPaths(get_voice_assetpath(), asset_filename);
 }
 
 // Play voice-over clip on the common channel;
@@ -505,7 +501,7 @@ static bool play_voice_clip_on_channel(const String &voice_name)
         return false;
     }
 
-    std::unique_ptr<SOUNDCLIP> voice_clip(load_sound_clip(apath, "", false));
+    std::unique_ptr<SoundClip> voice_clip(load_sound_clip(apath, "", false));
     if (voice_clip != nullptr) {
         voice_clip->set_volume255(play.speech_volume);
         if (!voice_clip->play())
@@ -562,7 +558,7 @@ bool play_voice_speech(int charid, int sndid)
     if (!play.ShouldPlayVoiceSpeech())
         return false;
 
-    String voice_file = get_cue_filename(charid, sndid);
+    String voice_file = get_cue_filename(charid, sndid, !game.options[OPT_VOICECLIPNAMERULE]);
     if (!play_voice_clip_impl(voice_file, true, true))
         return false;
 
@@ -598,7 +594,7 @@ bool play_voice_nonblocking(int charid, int sndid, bool as_speech)
     if (play.IsBlockingVoiceSpeech())
         return false;
 
-    String voice_file = get_cue_filename(charid, sndid);
+    String voice_file = get_cue_filename(charid, sndid, !game.options[OPT_VOICECLIPNAMERULE]);
     return play_voice_clip_impl(voice_file, as_speech, false);
 }
 

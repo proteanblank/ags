@@ -1,13 +1,10 @@
+using AGS.Types;
 using System;
 using System.Collections.Generic;
-using System.ComponentModel;
 using System.Drawing;
-using System.Data;
+using System.Linq;
 using System.Reflection;
-using System.Text;
 using System.Windows.Forms;
-using System.Xml;
-using AGS.Types;
 
 namespace AGS.Editor
 {
@@ -36,10 +33,10 @@ namespace AGS.Editor
         private Pen _drawSelectedPen = new Pen(Color.Red, 2);
         private Pen _drawSnapPen = new Pen(Color.Yellow, 2);
         private bool fromCombo = true; // Hack to show how the the property object changed, need to change the delegate.
-        private GUIControl _selectedControl = null;
+        private GUIControl _selectedControl = null; // last selected control
+        private List<GUIControl> _selected; // all the selected controls
         private GUIAddType _controlAddMode = GUIAddType.None;
         private List<MenuCommand> _toolbarIcons;
-        private List<GUIControl> _selected;
         private List<GUIControlGroup> _groups;
 
         private int ZOOM_STEP_VALUE = 25;
@@ -64,7 +61,7 @@ namespace AGS.Editor
             
             _drawSnapPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dot;
 
-            SetZoomSliderToDefault();
+            SetSlidersToDefault();
             UpdateScrollableWindowSize();
         }
 
@@ -116,6 +113,9 @@ namespace AGS.Editor
 
         void GUIController_OnPropertyObjectChanged(object newPropertyObject)
         {
+            if (GUIController.Instance.ActivePane != ContentDocument)
+                return; // not this pane
+
             if (newPropertyObject is GUIControl)
             {
                 _selectedControl = (GUIControl)newPropertyObject;
@@ -141,6 +141,7 @@ namespace AGS.Editor
 
         protected override void OnPropertyChanged(string propertyName, object oldValue)
         {
+            // FIXME: this does not distinguish GUI and GUIControl properties!
             if (propertyName == "Name")
             {
                 object objectBeingChanged = _gui;
@@ -173,13 +174,15 @@ namespace AGS.Editor
                 {
                     RaiseOnGuiNameChanged();
                 }
+
+                RefreshProperties();
             }
 			else if (propertyName == "Image")
 			{
 				if ((_selectedControl != null) && (_selectedControl is GUIButton))
 				{
 					GUIButton selectedButton = (GUIButton)_selectedControl;
-					if (selectedButton.Image > 0)
+					if (selectedButton.Image > 0 && (selectedButton.Image != (int)oldValue))
 					{
                         int newWidth, newHeight;
                         Utilities.GetSizeSpriteWillBeRenderedInGame(selectedButton.Image, out newWidth, out newHeight);
@@ -262,11 +265,13 @@ namespace AGS.Editor
             Factory.ToolBarManager.RefreshCurrentPane();
         }
 
-        private void SetZoomSliderToDefault()
+        private void SetSlidersToDefault()
         {
             // For low res games, set larger default zoom (x2)
             sldZoomLevel.Value = (100 * Factory.AGSEditor.CurrentGame.GUIScaleFactor) / ZOOM_STEP_VALUE;
             sldZoomLevel_Scroll(null, null);
+            sldTransparency.Value = 0;
+            sldTransparency_Scroll(null, null);
         }
 
         private void UpdateScrollableWindowSize()
@@ -286,8 +291,8 @@ namespace AGS.Editor
                 int drawOffsY = _state.GUIYToWindow(0);
 
                 IntPtr hdc = e.Graphics.GetHdc();
-                //Factory.NativeProxy.DrawGUI(hdc, 0, 0, _gui, _state.ScaleFactor, (_selectedControl == null) ? -1 : _selectedControl.ID);
-                Factory.NativeProxy.DrawGUI(hdc, drawOffsX, drawOffsY, _gui, Factory.AGSEditor.CurrentGame.GUIScaleFactor, _state.Scale, -1);
+                Factory.NativeProxy.DrawGUI(hdc, drawOffsX, drawOffsY, _gui,
+                    Factory.AGSEditor.CurrentGame.GUIScaleFactor, _state.Scale, _state.ControlTransparency, -1);
                 e.Graphics.ReleaseHdc(hdc);
                 
                 if (_addingControl)
@@ -413,7 +418,6 @@ namespace AGS.Editor
                     _selectionBoxY = mouseY;
             }
         }
-
         }
 
         private void MoveControlWithMouse(int mouseX, int mouseY)
@@ -431,8 +435,6 @@ namespace AGS.Editor
 
             _selectedControl.Left = mouseX - _mouseXOffset;
             _selectedControl.Top = mouseY - _mouseYOffset;
-
-
 
             if (_selectedControl.Left >= normalGui.Width)
             {
@@ -681,9 +683,7 @@ namespace AGS.Editor
                 _groups[i].Update();
                 if (_groups[i].Count == 0) _groups.RemoveAt(i);
             }
-            
         }
-
       
         private void LockControl(object sender, EventArgs e)
         {
@@ -692,6 +692,59 @@ namespace AGS.Editor
                 _gc.Locked = true;
             }
             RaiseOnControlsChanged();
+            bgPanel.Invalidate();
+        }
+
+        private bool HasTextProperty(GUIControl control)
+        {
+            return control.ControlType == GUILabel.CONTROL_DISPLAY_NAME ||
+                control.ControlType == GUIButton.CONTROL_DISPLAY_NAME;
+        }
+
+        private void EditTextClick(object sender, EventArgs e)
+        {
+            if (_selected.Count == 0 || !_selected.Any(gc => HasTextProperty(gc)))
+                return;
+
+            if(_selected.Count == 1)
+            {
+                Type controlType = _selectedControl.GetType();
+                var textProperty = controlType.GetProperty("Text");
+                string title = "Edit " + _selectedControl.Name + " text...";
+
+                String currentText = (String)textProperty.GetValue(_selectedControl);
+                String newText = MultilineStringEditorDialog.ShowEditor(title, currentText);
+
+                if (newText == null)
+                    return;
+
+                textProperty.SetValue(_selectedControl, newText);
+            } 
+            else
+            {
+                List<GUIControl> ctrls = _selected.Where(gc => HasTextProperty(gc)).ToList();
+
+                var textProperty = _selected[0].GetType().GetProperty("Text");
+                string text = (string)textProperty.GetValue(_selected[0]);
+
+                bool allSame = ctrls.All(ctrl =>
+                    (string)ctrl.GetType().GetProperty("Text")?.GetValue(ctrl, null) == text);
+
+                text = allSame ? text : String.Empty;
+                string title = "Edit " + ctrls.Count.ToString() + " controls text...";
+                String newText = MultilineStringEditorDialog.ShowEditor(title, text);
+
+                if (newText == null)
+                    return;
+
+                foreach (var ctrl in ctrls)
+                {
+                    Type controlType = ctrl.GetType();
+                    var prop = controlType.GetProperty("Text");
+                    prop.SetValue(ctrl, newText);
+                }
+            }
+            Factory.GUIController.RefreshPropertyGrid();
             bgPanel.Invalidate();
         }
 
@@ -725,8 +778,6 @@ namespace AGS.Editor
             for (int i = 0; i < _selected.Count; i++)
             {
                 if (!_selected[i].Locked) _selected[i].Top = _selected[0].Top + (spacing * i);
-
-
             }
             RaiseOnControlsChanged();
             bgPanel.Invalidate();
@@ -743,12 +794,9 @@ namespace AGS.Editor
             for (int i = 0; i < _selected.Count; i++)
             {
                 if (!_selected[i].Locked) _selected[i].Left = _selected[0].Left + (spacing * i);
-
-
             }
             RaiseOnControlsChanged();
             bgPanel.Invalidate();
-
         }
 
         private void RemoveLockedFromSelected()
@@ -756,7 +804,6 @@ namespace AGS.Editor
             foreach (GUIControl _gc in _selected)
             {
                 if (_gc.Locked) _selected.Remove(_gc);
-
             }
             RaiseOnControlsChanged();
             bgPanel.Invalidate();
@@ -776,7 +823,6 @@ namespace AGS.Editor
 
             RaiseOnControlsChanged();
             bgPanel.Invalidate();
-
         }
 
         private void AlignLeftClick(object sender, EventArgs e)
@@ -792,80 +838,128 @@ namespace AGS.Editor
 
             RaiseOnControlsChanged();
             bgPanel.Invalidate();
+        }
 
+        private string _guiControlsClipboardFormat = string.Format($"{typeof(GUIControl).FullName}List");
+
+        private void SaveControlsToClipboard(List<GUIControl> controls)
+        {
+            DataFormats.Format format = DataFormats.GetFormat(_guiControlsClipboardFormat);
+
+            IDataObject dataObj = new DataObject();
+            dataObj.SetData(format.Name, false, controls);
+            Clipboard.SetDataObject(dataObj, true);
+        }
+
+        private bool AvailableControlsOnClipboard()
+        {
+            IDataObject dataObj = Clipboard.GetDataObject();
+            if (dataObj != null)
+                return dataObj.GetDataPresent(_guiControlsClipboardFormat);
+            return false;
+        }
+
+        private List<GUIControl> GetControlsFromClipBoard()
+        {
+            List<GUIControl> controls = null;
+            IDataObject dataObj = Clipboard.GetDataObject();
+            if (dataObj.GetDataPresent(_guiControlsClipboardFormat))
+            {
+                controls = dataObj.GetData(_guiControlsClipboardFormat) as List<GUIControl>;
+            }
+            return controls;
         }
 
         private void CopyControlClick(object sender, EventArgs e)
         {
             if (_selectedControl != null)
             {
-
-                GUIControl _copyBuffer;
-                _copyBuffer = (GUIControl)_selectedControl.Clone();
-                _copyBuffer.SaveToClipboard();
+                List<GUIControl> _copyBuffer = new List<GUIControl>();
+                foreach (var control in _selected)
+                    _copyBuffer.Add((GUIControl)control.Clone());
+                SaveControlsToClipboard(_copyBuffer);
             }
         }
 
-
-
         private void PasteControlClick(object sender, EventArgs e)
         {
-            GUIControl newControl = GUIControl.GetFromClipBoard();
-            if (newControl != null)
-            {
+            List<GUIControl> newControls = GetControlsFromClipBoard();
+            if (newControls == null)
+                return;
 
+            _selected.Clear();
+            _selectedControl = null;
+            // Paste all the new controls, and add them to the selected list.
+            // Relative control positions in the group must be kept.
+            int pasteAtX = _state.WindowXToGUI(_currentMouseX);
+            int pasteAtY = _state.WindowYToGUI(_currentMouseY);
+            int refControlX = 0, refControlY = 0;
+            foreach (var newControl in newControls)
+            {
                 newControl.Name = Factory.AGSEditor.GetFirstAvailableScriptName(newControl.ControlType);
                 newControl.ZOrder = _gui.Controls.Count;
                 newControl.ID = _gui.Controls.Count;
                 newControl.MemberOf = null;
+                newControl.Locked = false;
 
-                newControl.Left = _state.WindowXToGUI(_currentMouseX);
-                newControl.Top = _state.WindowYToGUI(_currentMouseY);
+                if (_selectedControl == null)
+                {
+                    refControlX = newControl.Left;
+                    refControlY = newControl.Top;
+                }
+                newControl.Left = pasteAtX + (newControl.Left - refControlX);
+                newControl.Top = pasteAtY + (newControl.Top - refControlY); ;
                 _gui.Controls.Add(newControl);
-                _selected.Clear();
-                _selectedControl = newControl;
                 _selected.Add(newControl);
+                _selectedControl = newControl;
 
-
-                RaiseOnControlsChanged();
+                // This event is repeated for each control
                 Factory.AGSEditor.CurrentGame.NotifyClientsGUIControlAddedOrRemoved(_gui, newControl);
-
-                Factory.GUIController.SetPropertyGridObject(newControl);
-
-                bgPanel.Invalidate();
-                UpdateCursorImage();
-                // Revert back to Select cursor
-                OnCommandClick(Components.GuiComponent.MODE_SELECT_CONTROLS);
             }
+
+            RaiseOnControlsChanged();
+            RefreshProperties();
+            bgPanel.Invalidate();
+            UpdateCursorImage();
+            // Revert back to Select cursor
+            OnCommandClick(Components.GuiComponent.MODE_SELECT_CONTROLS);
         }
 
         private void DeleteControlClick(object sender, EventArgs e)
         {
-            if (_gui is NormalGUI && _selectedControl != null && !_selectedControl.Locked)
+            if (!(_gui is NormalGUI) || _selectedControl == null)
+                return;
+
+            for (int i = _selected.Count - 1; i >= 0; --i)
             {
-                Factory.AGSEditor.CurrentGame.NotifyClientsGUIControlAddedOrRemoved(_gui, _selectedControl);
-                _selected.Remove(_selectedControl);
-                _gui.DeleteControl(_selectedControl);
-                if (_selectedControl.MemberOf != null)
+                var control = _selected[i];
+                if (control.Locked)
+                    continue;
+
+                // This event is repeated for each control
+                Factory.AGSEditor.CurrentGame.NotifyClientsGUIControlAddedOrRemoved(_gui, control);
+                _selected.RemoveAt(i);
+                _gui.DeleteControl(control);
+                if (control.MemberOf != null)
                 {
-                    _selectedControl.MemberOf.RemoveFromGroup(_selectedControl);
+                    control.MemberOf.RemoveFromGroup(control);
                 }
-                if (_selected.Count > 0)
+                if (control == _selectedControl)
                 {
-                    _selectedControl = _selected[_selected.Count - 1];
+                    if (_selected.Count > 0)
+                    {
+                        _selectedControl = _selected[_selected.Count - 1];
+                    }
+                    else
+                    {
+                        _selectedControl = null;
+                    }
                 }
-                else _selectedControl = null;
-                RaiseOnControlsChanged();
-                if (_selectedControl != null)
-                {
-                    Factory.GUIController.SetPropertyGridObject(_selectedControl);
-                }
-                else
-                {
-                    Factory.GUIController.SetPropertyGridObject(_gui);
-                }
-                bgPanel.Invalidate();
             }
+
+            RaiseOnControlsChanged();
+            RefreshProperties();
+            bgPanel.Invalidate();
         }
 
         private void ShowContextMenu(int x, int y, GUIControl control)
@@ -876,8 +970,10 @@ namespace AGS.Editor
                 ContextMenuStrip menu = new ContextMenuStrip();
                 if (control != null)
                 {
-                menu.Items.Add(new ToolStripMenuItem("Bring to Front", null, new EventHandler(BringToFrontClick), "BringToFront"));
-                menu.Items.Add(new ToolStripMenuItem("Send to Back", null, new EventHandler(SendToBackClick), "SendToBack"));
+                    if (HasTextProperty(control))
+                        menu.Items.Add(new ToolStripMenuItem("Edit text...", null, new EventHandler(EditTextClick), Keys.Control | Keys.E));
+                    menu.Items.Add(new ToolStripMenuItem("Bring to Front", null, new EventHandler(BringToFrontClick), "BringToFront"));
+                    menu.Items.Add(new ToolStripMenuItem("Send to Back", null, new EventHandler(SendToBackClick), "SendToBack"));
 
 
 
@@ -911,28 +1007,52 @@ namespace AGS.Editor
                 menu.Items.Add(new ToolStripSeparator());
 
 
-                    menu.Items.Add(new ToolStripMenuItem("Copy", null, new EventHandler(CopyControlClick), Keys.Control & Keys.C));
+                menu.Items.Add(new ToolStripMenuItem("Copy", null, new EventHandler(CopyControlClick), Keys.Control | Keys.C));
                 menu.Items.Add(new ToolStripMenuItem("Delete", null, new EventHandler(DeleteControlClick), Keys.Delete));
                 }
 
-                if (GUIControl.AvailableOnClipboard()) menu.Items.Add(new ToolStripMenuItem("Paste", null, new EventHandler(PasteControlClick), Keys.Control & Keys.V));
+                if (AvailableControlsOnClipboard())
+                {
+                    menu.Items.Add(new ToolStripMenuItem("Paste", null, new EventHandler(PasteControlClick), Keys.Control | Keys.V));
+                }
 
                 if (menu.Items.Count > 0) menu.Show(bgPanel, x, y);
             }
         }
 
-        private void refreshProperties()
+        // TODO: this is made public static member of GUIEditor as a quick solution for both GUIEditor
+        // and GuiComponent needing to regenerate this list (GuiComponent needs this when handling
+        // a change of GUI's ID and/or name from the project tree). But I'm not certain if this
+        // is a "elegant" solution. Review this later, and try to devise a uniform and consistent
+        // method for all components and editors.
+        public static Dictionary<string, object> ConstructPropertyObjectList(GUI forGui)
         {
-            if (_selectedControl != null)
+            Dictionary<string, object> list = new Dictionary<string, object>();
+            list.Add(forGui.PropertyGridTitle, forGui);
+            foreach (GUIControl control in forGui.Controls)
             {
+                list.Add(control.PropertyGridTitle, control);
+            }
+            return list;
+        }
 
+        private void RefreshProperties()
+        {
+            if (_selected.Count > 1)
+            {
+                Factory.GUIController.SetPropertyGridObjectList(null);
+                Factory.GUIController.SetPropertyGridObjects(_selected.ToArray());
+            }
+            else if (_selectedControl != null)
+            {
+                Factory.GUIController.SetPropertyGridObjectList(ConstructPropertyObjectList(_gui));
                 Factory.GUIController.SetPropertyGridObject(_selectedControl);
             }
             else
             {
+                Factory.GUIController.SetPropertyGridObjectList(ConstructPropertyObjectList(_gui));
                 Factory.GUIController.SetPropertyGridObject(_gui);
             }
-            bgPanel.Invalidate();
         }
 
         private void bgPanel_MouseUp(object sender, MouseEventArgs e)
@@ -940,7 +1060,10 @@ namespace AGS.Editor
             _snappedx = -1;
             _snappedy = -1;
 
-            if ((_drawingSelectionBox) && (e.X == _selectionBoxX) && (e.Y == _selectionBoxY))
+            int mouseX = _state.WindowXToGUI(e.X);
+            int mouseY = _state.WindowYToGUI(e.Y);
+
+            if ((_drawingSelectionBox) && (mouseX == _selectionBoxX) && (mouseY == _selectionBoxY))
             {
                 _drawingSelectionBox = false;
             }
@@ -953,7 +1076,8 @@ namespace AGS.Editor
             else if (_resizingControl)
             {
                 _resizingControl = false;
-                refreshProperties();
+                RefreshProperties();
+                bgPanel.Invalidate();
             }
             else if (_drawingSelectionBox)
             {
@@ -963,12 +1087,14 @@ namespace AGS.Editor
                    if (_selectionRect.Contains(_gc.GetRectangle()) && !_selected.Contains(_gc)) _selected.Add(_gc);
                }
                if (_selected.Count > 0) _selectedControl = _selected[_selected.Count - 1];
-               bgPanel.Invalidate();
+                RefreshProperties();
+                bgPanel.Invalidate();
             }
             else
             {
                 _movingControl = false;
-                refreshProperties();
+                RefreshProperties();
+                bgPanel.Invalidate();
 
                 if ((e.Button == MouseButtons.Right))
                 {
@@ -1057,6 +1183,7 @@ namespace AGS.Editor
 
             newControl.Name = Factory.AGSEditor.GetFirstAvailableScriptName(newControl.ControlType);
             newControl.ZOrder = _gui.Controls.Count;
+            newControl.Parent = _gui;
             newControl.ID = _gui.Controls.Count;
             _gui.Controls.Add(newControl);
             _selectedControl = newControl;
@@ -1066,8 +1193,7 @@ namespace AGS.Editor
             RaiseOnControlsChanged();
             Factory.AGSEditor.CurrentGame.NotifyClientsGUIControlAddedOrRemoved(_gui, newControl);
 
-            Factory.GUIController.SetPropertyGridObject(newControl);
-
+            RefreshProperties();
             bgPanel.Invalidate();
             UpdateCursorImage();
             // Revert back to Select cursor
@@ -1107,56 +1233,105 @@ namespace AGS.Editor
             return ProcessGUIEditControl(keyData);
         }
 
+        /// <summary>
+        /// Handles key commands not related to selected controls.
+        /// </summary>
+        private bool HandleGUIEditOperation(Keys keyData)
+        {
+            if (keyData.HasFlag(Keys.Control))
+            {
+                switch (keyData & ~Keys.Modifiers)
+                {
+                    case Keys.V:
+                        PasteControlClick(null, null);
+                        return true;
+                    default:
+                        return false;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Handles key commands over selected control(s).
+        /// </summary>
+        private bool HandleControlEditOperation(Keys keyData)
+        {
+            if (_selectedControl == null)
+                return false;
+
+            // First test combinations with modifiers
+            if (keyData.HasFlag(Keys.Control))
+            {
+                switch (keyData & ~Keys.Modifiers)
+                {
+                    case Keys.C:
+                        CopyControlClick(null, null);
+                        return true;
+                    case Keys.V:
+                        PasteControlClick(null, null);
+                        return true;
+                    default:
+                        break; // continue to general keys
+                }
+            }
+
+            // General keys that work without modifiers
+            switch (keyData)
+            {
+                case Keys.Delete:
+                    DeleteControlClick(null, null);
+                    return true;
+                case Keys.Left:
+                    foreach (GUIControl _gc in _selected)
+                    {
+                        _gc.Left--;
+                    }
+                    return true;
+                case Keys.Right:
+                    foreach (GUIControl _gc in _selected)
+                    {
+                        _gc.Left++;
+                    }
+                    return true;
+                case Keys.Up:
+                    foreach (GUIControl _gc in _selected)
+                    {
+                        _gc.Top--;
+                    }
+                    return true;
+                case Keys.Down:
+                    foreach (GUIControl _gc in _selected)
+                    {
+                        _gc.Top++;
+                    }
+                    return true;
+                case Keys.E | Keys.Control:
+                    if (_selected.Count > 0)
+                    {
+                        EditTextClick(null, null);
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false; // no applicable command
+            }
+        }
+
         protected bool ProcessGUIEditControl(Keys keyData)
         {        
             // TODO: normally this should be done using class/method overriding
             if (_gui is TextWindowGUI)
                 return false; // do not let users move or delete TextWindow elements
 
-            if (_selectedControl != null)
+            if (HandleGUIEditOperation(keyData) ||
+                ((_selectedControl != null) && HandleControlEditOperation(keyData)))
             {
-                switch (keyData)
-            {
-                    case Keys.Delete:
-                DeleteControlClick(null, null);
-                        break;
-
-                    case Keys.Left:
-                        foreach (GUIControl _gc in _selected)
-                        {
-                            _gc.Left--;
-                        }
-                        break;
-
-                    case Keys.Right:
-                        foreach (GUIControl _gc in _selected)
-                        {
-                            _gc.Left++;
-            }
-                        break;
-
-
-                    case Keys.Up:
-                        foreach (GUIControl _gc in _selected)
-                        {
-                            _gc.Top--;
-                        }
-                        break;
-
-
-                    case Keys.Down:
-                        foreach (GUIControl _gc in _selected)
-                        {
-                            _gc.Top++;
-                        }
-                        break;
-                    default:
-                        return false;
-                }
                 bgPanel.Invalidate();
                 RaiseOnControlsChanged();
                 return true;
             }
+
             return false;
         }
 
@@ -1178,12 +1353,12 @@ namespace AGS.Editor
 
             foreach (PropertyInfo property in objectToCheck.GetType().GetProperties())
             {
-                if (property.GetCustomAttributes(typeof(AGSEventPropertyAttribute), true).Length > 0)
+                if (property.GetCustomAttributes(typeof(AGSDefaultEventPropertyAttribute), true).Length > 0)
                 {
                     string eventHandler = (string)property.GetValue(objectToCheck, null);
 					if (eventHandler.Length > 0)
 					{
-						Factory.GUIController.ZoomToFile(Script.GLOBAL_SCRIPT_FILE_NAME, eventHandler);
+						Factory.GUIController.ZoomToFile(_gui.ScriptModule, eventHandler);
 					}
 					else 
 					{
@@ -1211,14 +1386,16 @@ namespace AGS.Editor
 			object[] paramsAttribute = property.GetCustomAttributes(typeof(ScriptFunctionParametersAttribute), true);
 			if (paramsAttribute.Length > 0)
 			{
-				property.SetValue(objectToCheck, ScriptFunctionUIEditor.CreateOrOpenScriptFunction(eventHandler, itemName, property.Name, (ScriptFunctionParametersAttribute)paramsAttribute[0], true, 0), null);
+				property.SetValue(objectToCheck, ScriptFunctionUIEditor.CreateOrOpenScriptFunction(
+                    eventHandler, itemName, property.Name, (ScriptFunctionParametersAttribute)paramsAttribute[0], _gui.ScriptModule), null);
 			}
 		}
-		
-	private void LoadColorTheme(ColorTheme t)
+
+        private void LoadColorTheme(ColorTheme t)
         {
             t.ControlHelper(this, "gui-editor");
         }
+
         private void sldZoomLevel_Scroll(object sender, EventArgs e)
         {
             lblZoomInfo.Text = String.Format("{0}%", sldZoomLevel.Value * ZOOM_STEP_VALUE);
@@ -1234,20 +1411,26 @@ namespace AGS.Editor
             bgPanel.Invalidate();
         }
 
+        private void sldTransparency_Scroll(object sender, EventArgs e)
+        {
+            lblTransparency.Text = String.Format("{0}%", sldTransparency.Value);
+            _state.ControlTransparency = sldTransparency.Value;
+            bgPanel.Invalidate();
+        }
     }
 
     // TODO: perhaps we need a shared editor class (at least for GUI and rooms) that supports scaling and coordinate conversions.
     public class GUIEditorState
     {
         // Multiplier, defining convertion between GUI and editor coords.
-        private float _scale;
+        private float _scale = 1f;
         // Offsets, in window coordinates.
-        private int _scrollOffsetX;
-        private int _scrollOffsetY;
+        private int _scrollOffsetX = 0;
+        private int _scrollOffsetY = 0;
+        private int _controlTransparency = 0;
 
         internal GUIEditorState()
         {
-            Scale = 1f;
         }
 
         internal int WindowXToGUI(int x)
@@ -1293,6 +1476,12 @@ namespace AGS.Editor
                 _scrollOffsetX = (int)((_scrollOffsetX / oldScale) * _scale);
                 _scrollOffsetY = (int)((_scrollOffsetY / oldScale) * _scale);
             }
+        }
+
+        public int ControlTransparency
+        {
+            get { return _controlTransparency; }
+            set { _controlTransparency = value; }
         }
 
         /// <summary>

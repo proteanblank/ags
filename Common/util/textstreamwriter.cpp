@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <stdarg.h>
@@ -28,36 +28,14 @@ static const char Endl[2] = {'\r', '\n'};
 static const char Endl[1] = {'\n'};
 #endif
 
-
-TextStreamWriter::TextStreamWriter(Stream *stream)
-    : _stream(stream)
-{
-}
-
-TextStreamWriter::~TextStreamWriter()
-{
-    // TODO use shared ptr
-    delete _stream;
-}
-
 bool TextStreamWriter::IsValid() const
 {
     return _stream && _stream->CanWrite();
 }
 
-const Stream *TextStreamWriter::GetStream() const
-{
-    return _stream;
-}
-
-void TextStreamWriter::ReleaseStream()
-{
-    _stream = nullptr;
-}
-
 bool TextStreamWriter::EOS() const
 {
-    return _stream->EOS();
+    return _stream ? _stream->EOS() : true;
 }
 
 void TextStreamWriter::WriteChar(char c)

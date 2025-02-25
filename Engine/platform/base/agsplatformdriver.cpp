@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -21,11 +21,13 @@
 #include <SDL.h>
 #include "ac/common.h"
 #include "ac/runtime_defines.h"
+#include "ac/timer.h"
+#include "gfx/bitmap.h"
+#include "media/audio/audio_system.h"
+#include "platform/base/sys_main.h"
+#include "util/memory_compat.h"
 #include "util/string_utils.h"
 #include "util/stream.h"
-#include "gfx/bitmap.h"
-#include "ac/timer.h"
-#include "media/audio/audio_system.h"
 
 using namespace AGS::Common;
 using namespace AGS::Engine;
@@ -44,11 +46,16 @@ AGSPlatformDriver *platform = nullptr;
 
 // ******** DEFAULT IMPLEMENTATIONS *******
 
+AGSPlatformDriver::AGSPlatformDriver()
+{
+    _writeStdOut = &AGSPlatformDriver::WriteStdOut;
+}
+
 void AGSPlatformDriver::AttachToParentConsole() { }
 void AGSPlatformDriver::PauseApplication() { }
 void AGSPlatformDriver::ResumeApplication() { }
 
-Size AGSPlatformDriver::ValidateWindowSize(const Size &sz, bool borderless) const
+Size AGSPlatformDriver::ValidateWindowSize(int display_index, const Size &sz, bool borderless) const
 {
     // TODO: Ideally we should also test for the minimal / maximal
     // allowed size of the window in current system here;
@@ -57,7 +64,7 @@ Size AGSPlatformDriver::ValidateWindowSize(const Size &sz, bool borderless) cons
     // without creating a window first. But this potentially may be
     // acquired, at least on some platforms (e.g. Windows).
     SDL_Rect rc;
-    SDL_GetDisplayUsableBounds(0, &rc);
+    SDL_GetDisplayUsableBounds(display_index, &rc);
     return Size::Clamp(sz, Size(1, 1), Size(rc.w, rc.h));
 }
 
@@ -71,27 +78,35 @@ const char *AGSPlatformDriver::GetDiskWriteAccessTroubleshootingText()
     return "Make sure you have write permissions, and also check the disk's free space.";
 }
 
-void AGSPlatformDriver::GetSystemTime(ScriptDateTime *sdt) {
-    time_t t = time(nullptr);
+void AGSPlatformDriver::DisplayAlert(const char *text, ...)
+{
+    char displbuf[2048];
+    va_list ap;
+    va_start(ap, text);
+    vsnprintf(displbuf, sizeof(displbuf), text, ap);
+    va_end(ap);
 
-    //note: subject to year 2038 problem due to shoving time_t in an integer
-    sdt->rawUnixTime = static_cast<int>(t);
+    // Print alert to the log system, to let other outputs receive it;
+    // but use a dirty method to avoid duplicate message in stdout/stderr
+    auto old_stdout = _writeStdOut;
+    _writeStdOut = nullptr;
+    Debug::Printf(kDbgMsg_Alert, "%s", displbuf);
+    _writeStdOut = old_stdout;
 
-    struct tm *newtime = localtime(&t);
-    sdt->hour = newtime->tm_hour;
-    sdt->minute = newtime->tm_min;
-    sdt->second = newtime->tm_sec;
-    sdt->day = newtime->tm_mday;
-    sdt->month = newtime->tm_mon + 1;
-    sdt->year = newtime->tm_year + 1900;
+    // Always write to either stderr or stdout, even if message boxes are enabled.
+    (this->*_writeStdOut)("%s", displbuf);
+
+    if (_guiMode)
+        DisplayMessageBox(displbuf);
 }
 
-void AGSPlatformDriver::WriteStdOut(const char *fmt, ...) {
+void AGSPlatformDriver::WriteStdOut(const char *fmt, ...)
+{
     va_list args;
     va_start(args, fmt);
-    vprintf(fmt, args);
+    vfprintf(stdout, fmt, args);
     va_end(args);
-    printf("\n");
+    fprintf(stdout, "\n");
     fflush(stdout);
 }
 
@@ -102,7 +117,13 @@ void AGSPlatformDriver::WriteStdErr(const char *fmt, ...)
     vfprintf(stderr, fmt, args);
     va_end(args);
     fprintf(stderr, "\n");
-    fflush(stdout);
+    fflush(stderr);
+}
+
+void AGSPlatformDriver::DisplayMessageBox(const char *text)
+{
+    if (_guiMode)
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "Adventure Game Studio", text, sys_get_window());
 }
 
 void AGSPlatformDriver::YieldCPU() {
@@ -112,7 +133,7 @@ void AGSPlatformDriver::YieldCPU() {
     //std::this_thread::yield();
 }
 
-SetupReturnValue AGSPlatformDriver::RunSetup(const ConfigTree &/*cfg_in*/, ConfigTree &/*cfg_out*/)
+SetupReturnValue AGSPlatformDriver::RunSetup(const ConfigTree &/*cfg_in*/, const ConfigTree &/*def_cfg_in*/, ConfigTree &/*cfg_out*/)
 {
     return kSetup_Cancel;
 }
@@ -123,30 +144,56 @@ void AGSPlatformDriver::SetCommandArgs(const char *const argv[], size_t argc)
     _cmdArgCount = argc;
 }
 
+void AGSPlatformDriver::SetOutputToErr(bool on)
+{
+    _logToStdErr = on;
+    _writeStdOut = _logToStdErr ? &AGSPlatformDriver::WriteStdErr : &AGSPlatformDriver::WriteStdOut;
+}
+
 String AGSPlatformDriver::GetCommandArg(size_t arg_index)
 {
     return arg_index < _cmdArgCount ? _cmdArgs[arg_index] : nullptr;
 }
 
-//-----------------------------------------------
+//-----------------------------------------------------------------------------
 // IOutputHandler implementation
-//-----------------------------------------------
-void AGSPlatformDriver::PrintMessage(const Common::DebugMessage &msg)
+// Writes to the standard platform's output using provided method(s).
+//-----------------------------------------------------------------------------
+class StdOutLogger : public IOutputHandler
 {
-    if (_logToStdErr)
+public:
+    typedef void (AGSPlatformDriver::*PfnWriteStdOut)(const char *fmt, ...);
+
+    StdOutLogger(AGSPlatformDriver *platform, PfnWriteStdOut write_stdout)
+        : _platform(platform)
+        , _writeStdOut(write_stdout)
+    {}
+
+    void OnRegister() override
     {
-        if (msg.GroupName.IsEmpty())
-            WriteStdErr("%s", msg.Text.GetCStr());
-        else
-            WriteStdErr("%s : %s", msg.GroupName.GetCStr(), msg.Text.GetCStr());
+        // do nothing
     }
-    else
+
+    void PrintMessage(const Common::DebugMessage &msg) override
     {
-        if (msg.GroupName.IsEmpty())
-            WriteStdOut("%s", msg.Text.GetCStr());
-        else
-            WriteStdOut("%s : %s", msg.GroupName.GetCStr(), msg.Text.GetCStr());
+        if (_writeStdOut)
+        {
+            if (msg.GroupName.IsEmpty())
+                (_platform->*_writeStdOut)("%s", msg.Text.GetCStr());
+            else
+                (_platform->*_writeStdOut)("%s : %s", msg.GroupName.GetCStr(), msg.Text.GetCStr());
+        }
     }
+
+private:
+    AGSPlatformDriver * const _platform = nullptr;
+    PfnWriteStdOut const _writeStdOut = nullptr;
+};
+
+std::unique_ptr<IOutputHandler> AGSPlatformDriver::GetStdOut()
+{
+    std::unique_ptr<IOutputHandler> out(new StdOutLogger(this, _writeStdOut));
+    return out;
 }
 
 AGSPlatformDriver* AGSPlatformDriver::GetDriver()

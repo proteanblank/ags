@@ -18,10 +18,6 @@ namespace AGS.Editor
         public static extern bool FreeLibrary(IntPtr hModule);
         [DllImport("user32.dll")]
         public static extern bool SetForegroundWindow(IntPtr hWnd);
-		[DllImport("kernel32.dll")]
-		public static extern long WritePrivateProfileString(string section, string key, string val, string filePath);
-		[DllImport("kernel32.dll")]
-		public static extern int GetPrivateProfileString(string section, string key, string def, System.Text.StringBuilder retVal, int size, string filePath);
 
         public const uint WM_MOUSEACTIVATE = 0x21;
         public const uint MA_ACTIVATE = 1;
@@ -93,9 +89,9 @@ namespace AGS.Editor
             }
         }
 
-        public void DrawGUI(IntPtr hdc, int x, int y, GUI gui, int resolutionFactor, float scale, int selectedControl)
+        public void DrawGUI(IntPtr hdc, int x, int y, GUI gui, int resolutionFactor, float scale, int ctrlTransparency, int selectedControl)
         {
-            _native.DrawGUI((int)hdc, x, y, gui, resolutionFactor, scale, selectedControl);
+            _native.DrawGUI((int)hdc, x, y, gui, resolutionFactor, scale, ctrlTransparency, selectedControl);
         }
 
         public void DrawSprite(IntPtr hdc, int x, int y, int spriteNum)
@@ -132,28 +128,37 @@ namespace AGS.Editor
             _native.DrawBlockOfColour((int)hdc, x, y, width, height, colourNum);
         }
 
-        public void DrawViewLoop(IntPtr hdc, ViewLoop loop, int x, int y, int sizeInPixels, int selectedFrame)
+        public void DrawViewLoop(IntPtr hdc, ViewLoop loop, int x, int y, int sizeInPixels, List<int> selectedFrames)
         {
 			lock (_spriteSetLock)
 			{
-				_native.DrawViewLoop((int)hdc, loop, x, y, sizeInPixels, selectedFrame);
+				_native.DrawViewLoop((int)hdc, loop, x, y, sizeInPixels, selectedFrames);
 			}
         }
 
         public Sprite CreateSpriteFromBitmap(Bitmap bmp, SpriteImportTransparency transparency, bool remapColours, bool useRoomBackgroundColours, bool alphaChannel)
         {
             int spriteSlot = _native.GetFreeSpriteSlot();
-            return _native.SetSpriteFromBitmap(spriteSlot, bmp, (int)transparency, remapColours, useRoomBackgroundColours, alphaChannel);
+            lock (_spriteSetLock)
+            {
+                return _native.SetSpriteFromBitmap(spriteSlot, bmp, (int)transparency, remapColours, useRoomBackgroundColours, alphaChannel);
+            }
         }
 
         public void ReplaceSpriteWithBitmap(Sprite spr, Bitmap bmp, SpriteImportTransparency transparency, bool remapColours, bool useRoomBackgroundColours, bool alphaChannel)
         {
-            _native.ReplaceSpriteWithBitmap(spr, bmp, (int)transparency, remapColours, useRoomBackgroundColours, alphaChannel);
+            lock (_spriteSetLock)
+            {
+                _native.ReplaceSpriteWithBitmap(spr, bmp, (int)transparency, remapColours, useRoomBackgroundColours, alphaChannel);
+            }
         }
 
         public bool CropSpriteEdges(IList<Sprite> sprites, bool symettric)
         {
-            return _native.CropSpriteEdges(sprites, symettric);
+            lock (_spriteSetLock)
+            {
+                return _native.CropSpriteEdges(sprites, symettric);
+            }
         }
 
         public bool DoesSpriteExist(int spriteNumber)
@@ -166,7 +171,10 @@ namespace AGS.Editor
 
         public void ChangeSpriteNumber(Sprite sprite, int newNumber)
         {
-            _native.ChangeSpriteNumber(sprite, newNumber);
+            lock (_spriteSetLock)
+            {
+                _native.ChangeSpriteNumber(sprite, newNumber);
+            }
         }
 
         public void SpriteResolutionsChanged(Sprite[] sprites)
@@ -174,20 +182,20 @@ namespace AGS.Editor
             _native.SpriteResolutionsChanged(sprites);
         }
 
-        public Bitmap GetBitmapForSprite(int spriteSlot, int width, int height)
+        public Bitmap GetSpriteBitmap(int spriteSlot)
         {
 			lock (_spriteSetLock)
 			{
-				return _native.GetBitmapForSprite(spriteSlot, width, height);
+				return _native.GetSpriteBitmap(spriteSlot);
 			}
         }
 
-        public Bitmap GetBitmapForSprite(int spriteSlot)
+        public Bitmap GetSpriteBitmapAs32Bit(int spriteSlot, int width, int height)
         {
-			lock (_spriteSetLock)
-			{
-				return _native.GetBitmapForSpritePreserveColDepth(spriteSlot);
-			}
+            lock (_spriteSetLock)
+            {
+                return _native.GetSpriteBitmapAs32Bit(spriteSlot, width, height);
+            }
         }
 
         public void DeleteSprite(Sprite sprite)
@@ -220,6 +228,16 @@ namespace AGS.Editor
         public int FindTTFSizeForHeight(string fileName, int size)
         {
             return _native.FindTTFSizeForHeight(fileName, size);
+        }
+
+        public void OnFontAdded(Game game, int fontSlot)
+        {
+            _native.OnGameFontAdded(game, fontSlot);
+        }
+
+        public void OnFontDeleted(Game game, int fontSlot)
+        {
+            _native.OnGameFontDeleted(game, fontSlot);
         }
 
         public void OnFontUpdated(Game game, int fontSlot, bool forceUpdate)
@@ -310,9 +328,21 @@ namespace AGS.Editor
             _native.DeleteBackground(room, backgroundNumber);
         }
 
-        public Bitmap GetBitmapForBackground(Room room, int backgroundNumber)
+        /// <summary>
+        /// Gets current Room's background for preview.
+        /// Bitmap is always returned as a 32-bit image.
+        /// </summary>
+        public Bitmap GetRoomBackgroundForPreview(Room room, int backgroundNumber)
         {
-            return _native.GetBitmapForBackground(room, backgroundNumber);
+            return _native.GetRoomBackgroundForPreview(room, backgroundNumber);
+        }
+
+        /// <summary>
+        /// Gets current Room's background in its native colour depth.
+        /// </summary>
+        public Bitmap ExportRoomBackground(Room room, int backgroundNumber)
+        {
+            return _native.ExportRoomBackground(room, backgroundNumber);
         }
 
         public void AdjustRoomResolution(Room room)
@@ -353,11 +383,6 @@ namespace AGS.Editor
         public void DrawFillOntoMask(Room room, RoomAreaMaskType mask, int x1, int y1, int color)
         {
             _native.DrawFillOntoMask(room, mask, x1, y1, color);
-        }
-
-        public void CopyWalkableAreaMaskToRegions(Room room)
-        {
-            _native.CopyWalkableMaskToRegions(room);
         }
 
 		public bool GreyOutNonSelectedMasks
@@ -411,9 +436,9 @@ namespace AGS.Editor
             return _native.LoadRoomScript(roomFileName);
         }
 
-        public void CompileScript(Script script, string[] preProcessedData, Game game)
+        public List<IScriptCompiler> GetEmbeddedScriptCompilers()
         {
-            _native.CompileScript(script, preProcessedData, game);
+            return _native.GetEmbeddedScriptCompilers();
         }
 
         public void CreateDebugMiniEXE(string[] fileList, string exeFileName)
@@ -475,13 +500,27 @@ namespace AGS.Editor
             return _native.GetNativeConstant(name);
         }
 
-        // Following helper method is required, because Editor is using WinAPI functions for reading
-        // and writing values in INI files. Hopefully this will be reimplemented at some point.
-        static StringBuilder IniBuf = new StringBuilder(1024);
-        public static string GetIniString(string section, string key, string def, string filePath)
+        /// <summary>
+        /// Reads the ini file and stores found options in the provided dictionary.
+        /// The dictionary has 2 levels:
+        /// * sections
+        /// * key-value pairs
+        /// </summary>
+        public void ReadIniFile(string fileName, Dictionary<string, Dictionary<string, string>> sections)
         {
-            NativeProxy.GetPrivateProfileString(section, key, def.ToString(), IniBuf, 4096, filePath);
-            return IniBuf.ToString();
+            _native.ReadIniFile(fileName, sections);
+        }
+
+        /// <summary>
+        /// Writes "sections" dictionary into the ini file, optionally either merging or
+        /// completely replacing any existing contents.
+        /// The dictionary has 2 levels:
+        /// * sections
+        /// * key-value pairs
+        /// </summary>
+        public void WriteIniFile(string fileName, Dictionary<string, Dictionary<string, string>> sections, bool mergeExisting)
+        {
+            _native.WriteIniFile(fileName, sections, mergeExisting);
         }
 
         public void Dispose()

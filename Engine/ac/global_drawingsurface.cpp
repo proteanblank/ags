@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -33,7 +33,6 @@ using namespace AGS::Common;
 using namespace AGS::Engine;
 
 extern RoomStruct thisroom;
-extern GameState play;
 extern SpriteCache spriteset;
 extern GameSetupStruct game;
 
@@ -148,11 +147,13 @@ void RawPrintMessageWrapped (int xx, int yy, int wid, int font, int msgm) {
     data_to_game_coords(&xx, &yy);
     wid = data_to_game_coord(wid);
 
+    // FIXME: wth, this is unsafe!!
     get_message_text (msgm, displbuf);
     // it's probably too late but check anyway
     if (strlen(displbuf) > 2899)
         quit("!RawPrintMessageWrapped: message too long");
-    if (break_up_text_into_lines(displbuf, Lines, wid, font) == 0)
+    const char *draw_text = skip_voiceover_token(displbuf);
+    if (break_up_text_into_lines(draw_text, Lines, wid, font) == 0)
         return;
 
     RAW_START();

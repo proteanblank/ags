@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "media/audio/openalsource.h"
@@ -152,7 +152,7 @@ float OpenAlSource::GetPositionMs() const
     return _predictTs;
 }
 
-size_t OpenAlSource::PutData(const SoundBuffer data)
+size_t OpenAlSource::PutData(const SoundBuffer &data)
 {
     Unqueue();
     // If queue is full, bail out
@@ -160,7 +160,7 @@ size_t OpenAlSource::PutData(const SoundBuffer data)
     // Input buffer is empty?
     if (!data.Data || (data.Size == 0)) { return 0u; }
     // Check for free buffers, generate more if necessary
-    if (g_oalint.freeBuffers.size() == 0)
+    if (g_oalint.freeBuffers.empty())
     {
         ALuint buf_id = 0;
         alGenBuffers(1, &buf_id);

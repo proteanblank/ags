@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AGS_EE_AC__DRAW_H
@@ -32,7 +32,16 @@ namespace AGS
 }
 using namespace AGS; // FIXME later
 
-#define IS_ANTIALIAS_SPRITES usetup.enable_antialiasing && (play.disable_antialiasing == 0)
+// Render stage flags, for filtering out certain elements
+// during room transitions, capturing screenshots, etc.
+// NOTE: these values are matched by ones in a script API,
+// if you require a change, make sure the script parameters are converted on function call.
+#define RENDER_BATCH_ENGINE_OVERLAY  0x00000001
+#define RENDER_BATCH_MOUSE_CURSOR    0x00000002
+#define RENDER_BATCH_UI_LAYER        0x00000004
+#define RENDER_BATCH_ROOM_LAYER      0x00000008
+#define RENDER_BATCH_ALL             0xFFFFFFFF
+#define RENDER_SHOT_SKIP_ON_FADE     (RENDER_BATCH_ENGINE_OVERLAY | RENDER_BATCH_MOUSE_CURSOR)
 
 // Converts AGS color index to the actual bitmap color using game's color depth
 int MakeColor(int color_index);
@@ -71,22 +80,29 @@ void detect_roomviewport_overlaps(size_t z_index);
 void on_roomcamera_changed(Camera *cam);
 // Marks particular object as need to update the texture
 void mark_object_changed(int objid);
-// Resets all object caches which reference this sprite
-void reset_objcache_for_sprite(int sprnum, bool deleted);
 // TODO: write a generic drawable/objcache system where each object
 // allocates a drawable for itself, and disposes one if being removed.
+// Resets drawing index for dynamic objects
+void reset_drawobj_dynamic_index();
+// Resets drawable object for this overlay
 void reset_drawobj_for_overlay(int objnum);
+// Marks all game objects which reference this sprite for redraw
+void notify_sprite_changed(int sprnum, bool deleted);
 
 // Get current texture cache's stats: max size, current normal items size,
 // size of locked items (included into cur_size),
 // size of external items (excluded from cur_size)
 void texturecache_get_state(size_t &max_size, size_t &cur_size, size_t &locked_size, size_t &ext_size);
+// Returns current cache size
+size_t texturecache_get_size();
 // Completely resets texture cache
 void texturecache_clear();
 // Update shared and cached texture from the sprite's pixels
 void update_shared_texture(uint32_t sprite_id);
 // Remove a texture from cache
 void clear_shared_texture(uint32_t sprite_id);
+// Prepares a texture for the given sprite and stores in the cache
+void texturecache_precache(uint32_t sprite_id);
 
 // whether there are currently remnants of a DisplaySpeech
 void mark_screen_dirty();
@@ -109,6 +125,8 @@ Engine::IDriverDependantBitmap* recycle_ddb_bitmap(Engine::IDriverDependantBitma
 Engine::IDriverDependantBitmap* recycle_ddb_sprite(Engine::IDriverDependantBitmap *ddb, uint32_t sprite_id,
     Common::Bitmap *source, bool has_alpha = false, bool opaque = false);
 Engine::IDriverDependantBitmap* recycle_render_target(Engine::IDriverDependantBitmap *ddb, int width, int height, int col_depth, bool opaque = false);
+// Updates shakescreen render offset
+void update_shakescreen();
 // Draw everything 
 void render_graphics(Engine::IDriverDependantBitmap *extraBitmap = nullptr, int extraX = 0, int extraY = 0);
 // Construct game scene, scheduling drawing list for the renderer
@@ -133,14 +151,14 @@ void draw_gui_sprite(Common::Bitmap *ds, int pic, int x, int y, bool use_alpha, 
 void draw_gui_sprite_v330(Common::Bitmap *ds, int pic, int x, int y, bool use_alpha = true, Common::BlendMode blend_mode = Common::kBlendMode_Alpha);
 void draw_gui_sprite(Common::Bitmap *ds, bool use_alpha, int xpos, int ypos,
     Common::Bitmap *image, bool src_has_alpha, Common::BlendMode blend_mode = Common::kBlendMode_Alpha, int alpha = 0xFF);
+// Puts a pixel of certain color, scales it if running in upscaled resolution (legacy feature)
+void putpixel_scaled(Common::Bitmap *ds, int x, int y, int col);
 
 // Render game on screen
 void render_to_screen();
-// Callbacks for the graphics driver
-void draw_game_screen_callback();
 void GfxDriverOnInitCallback(void *data);
-bool GfxDriverSpriteEvtCallback(int evt, int data);
-void putpixel_compensate (Common::Bitmap *g, int xx,int yy, int col);
+bool GfxDriverSpriteEvtCallback(int evt, intptr_t data);
+
 // Create the actsps[objid] image with the object drawn correctly.
 // Returns true if nothing at all has changed and actsps is still
 // intact from last time; false otherwise.
@@ -190,19 +208,21 @@ void defgame_to_finalgame_coords(int &x, int &y);
 // Creates bitmap of a format compatible with the gfxdriver;
 // if col_depth is 0, uses game's native color depth.
 Common::Bitmap *CreateCompatBitmap(int width, int height, int col_depth = 0);
-// Checks if the bitmap is compatible with the gfxdriver;
-// returns same bitmap or its copy of a compatible format.
-Common::Bitmap *ReplaceBitmapWithSupportedFormat(Common::Bitmap *bitmap);
-// Checks if the bitmap needs any kind of adjustments before it may be used
-// in AGS sprite operations. Also handles number of certain special cases
-// (old systems or uncommon gfx modes, and similar stuff).
+// Peforms any kind of conversions over bitmap if they are necessary for it
+// to be be used in AGS sprite operations. Returns either old or new bitmap.
 // Original bitmap **gets deleted** if a new bitmap had to be created.
-Common::Bitmap *PrepareSpriteForUse(Common::Bitmap *bitmap, bool has_alpha);
+// * has_alpha - for sprites with alpha channel (ARGB) tells whether their
+//   alpha channel should be kept, otherwise it's filled with opaqueness.
+// * keep_mask - tells whether to keep mask pixels when converting from another
+//   color depth. May be useful to disable mask when the source is a 8-bit
+//   palette-based image and the opaque sprite is intended.
+Common::Bitmap *PrepareSpriteForUse(Common::Bitmap *bitmap, bool has_alpha, bool keep_mask = true);
 // Same as above, but compatible for std::shared_ptr.
-Common::PBitmap PrepareSpriteForUse(Common::PBitmap bitmap, bool has_alpha);
+Common::PBitmap PrepareSpriteForUse(Common::PBitmap bitmap, bool has_alpha, bool keep_mask = true);
 // Makes a screenshot corresponding to the last screen render and returns it as a bitmap
 // of the requested width and height and game's native color depth.
-Common::Bitmap *CopyScreenIntoBitmap(int width, int height, bool at_native_res = false);
+Common::Bitmap *CopyScreenIntoBitmap(int width, int height, const Rect *src_rect = nullptr,
+    bool at_native_res = false, uint32_t batch_skip_filter = 0u);
 
 
 // TODO: hide these behind some kind of an interface

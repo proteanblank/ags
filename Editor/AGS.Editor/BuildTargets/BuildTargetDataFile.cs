@@ -20,16 +20,7 @@ namespace AGS.Editor
 
         public override void DeleteMainGameData(string name)
         {
-            string filename = Path.Combine(OutputDirectoryFullPath, name + ".ags");
-            Utilities.TryDeleteFile(filename);
-        }
-
-        private void DeleteAnyExistingSplitResourceFiles()
-        {
-            foreach (string fileName in Utilities.GetDirectoryFileList(GetCompiledPath(), Factory.AGSEditor.BaseGameFileName + ".0*"))
-            {
-                Utilities.TryDeleteFile(fileName);
-            }
+            DeleteCommonGameFiles(OutputDirectoryFullPath, name);
         }
 
         /// <summary>
@@ -166,8 +157,6 @@ namespace AGS.Editor
         public override bool Build(CompileMessages errors, bool forceRebuild)
         {
             if (!base.Build(errors, forceRebuild)) return false;
-            Factory.AGSEditor.SetMODMusicFlag();
-            DeleteAnyExistingSplitResourceFiles();
             if (!DataFileWriter.SaveThisGameToFile(AGSEditor.COMPILED_DTA_FILE_NAME, Factory.AGSEditor.CurrentGame, errors))
             {
                 return false;

@@ -35,14 +35,15 @@ get https://github.com/xiph/vorbis/archive/${LIBVORBIS_VERSION}.tar.gz vorbis.ta
 LIBTHEORA_VERSION=7180717276af1ebc7da15c83162d6c5d6203aabf
 get https://github.com/xiph/theora/archive/${LIBTHEORA_VERSION}.tar.gz theora.tar.gz
 
-SDLSOUND_VERSION=8d96d4cc0e1df35835a222ee51a7c32f273ec63e
+SDLSOUND_VERSION=474dbf755a1b67ebe7a55467b4f65e033f268aff
 get https://github.com/icculus/SDL_sound/archive/${SDLSOUND_VERSION}.tar.gz SDL_sound.tar.gz
 
-SDL_VERSION=2.28.2
+SDL_VERSION=release-2.30.11
+SDL_VERSION_NUMBER=2.30.11
 # Framework for macOS
-get https://github.com/libsdl-org/SDL/releases/download/release-${SDL_VERSION}/SDL2-${SDL_VERSION}.dmg SDL2-Framework.dmg
+get https://github.com/libsdl-org/SDL/releases/download/${SDL_VERSION}/SDL2-${SDL_VERSION_NUMBER}.dmg SDL2-Framework.dmg
 # Full code for iOS
-get https://github.com/libsdl-org/SDL/archive/refs/tags/release-${SDL_VERSION}.tar.gz SDL.tar.gz
+get https://github.com/libsdl-org/SDL/archive/refs/tags/${SDL_VERSION}.tar.gz SDL.tar.gz
 
 if ! shasum --check sha1sums; then
     echo "Checksum failed, are downloads ok?" >&2

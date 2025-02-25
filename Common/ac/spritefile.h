@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -130,8 +130,9 @@ public:
 
     SpriteFile();
     // Loads sprite reference information and inits sprite stream
-    HError      OpenFile(const String &filename, const String &sprindex_filename,
-        std::vector<Size> &metrics);
+    HError      OpenFile(std::unique_ptr<Stream> &&sprite_file,
+                         std::unique_ptr<Stream> &&index_file,
+                         std::vector<Size> &metrics);
     // Closes stream; no reading will be possible unless opened again
     void        Close();
 
@@ -142,10 +143,9 @@ public:
     sprkey_t    GetTopmostSprite() const;
 
     // Loads sprite index file
-    bool        LoadSpriteIndexFile(const String &filename, int expectedFileID,
-        soff_t spr_initial_offs, sprkey_t topmost, std::vector<Size> &metrics);
-    // Rebuilds sprite index from the main sprite file
-    HError      RebuildSpriteIndex(Stream *in, sprkey_t topmost, std::vector<Size> &metrics);
+    bool        LoadSpriteIndexFile(std::unique_ptr<Stream> &&index_file,
+                                    int expectedFileID, soff_t spr_initial_offs,
+                                    sprkey_t topmost, std::vector<Size> &metrics);
 
     // Loads an image data and creates a ready bitmap
     HError      LoadSprite(sprkey_t index, Bitmap *&sprite);
@@ -153,6 +153,8 @@ public:
     HError      LoadRawData(sprkey_t index, SpriteDatHeader &hdr, std::vector<uint8_t> &data);
 
 private:
+    // Rebuilds sprite index from the main sprite file
+    HError      RebuildSpriteIndex(Stream *in, sprkey_t topmost, std::vector<Size> &metrics);
     // Seek stream to sprite
     void        SeekToSprite(sprkey_t index);
 
@@ -192,7 +194,7 @@ public:
     // optionally hint how many sprites will be written.
     void Begin(int store_flags, SpriteCompression compress, sprkey_t last_slot = -1);
     // Writes a bitmap into file, compressing if necessary
-    void WriteBitmap(Bitmap *image);
+    void WriteBitmap(const Bitmap *image);
     // Writes an empty slot marker
     void WriteEmptySlot();
     // Writes a raw sprite data without any additional processing

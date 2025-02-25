@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "data/scriptgen.h"
@@ -66,7 +66,6 @@ static String DeclareEntitiesAsMacros(const std::vector<EntityRef> &ents,
         return "";
 
     String header;
-    String name;
     String buf;
     size_t len_prefix = 0;
     if(check_prefix) len_prefix = strlen(check_prefix);
@@ -150,16 +149,16 @@ static String DeclareGUI(const std::vector<GUIRef> &guis)
     String macro_name;
     for (const auto &gui : guis)
     {
-        String name = gui.ScriptName;
-        if (name.IsEmpty())
+        const String &gui_name = gui.ScriptName;
+        if (gui_name.IsEmpty())
             continue;
 
-        buf.Format("import GUI %s;\n", name.GetCStr());
+        buf.Format("import GUI %s;\n", gui_name.GetCStr());
         header.Append(buf);
 
-        if (name.GetAt(0) == 'g')
+        if (gui_name.GetAt(0) == 'g')
         {
-            macro_name = name.Mid(1);
+            macro_name = gui_name.Mid(1);
             macro_name.MakeUpper();
             buf.Format("#define %s FindGUIID(\"%s\")\n", macro_name.GetCStr(), macro_name.GetCStr());
             header.Append(buf);
@@ -167,11 +166,11 @@ static String DeclareGUI(const std::vector<GUIRef> &guis)
 
         for (const auto &ent : gui.Controls)
         {
-            String name = ent.ScriptName;
-            if (name.IsEmpty())
+            const String &obj_name = ent.ScriptName;
+            if (obj_name.IsEmpty())
                 continue;
-            String class_name = ent.TypeName;
-            buf.Format("import %s %s;\n", class_name.GetCStr(), name.GetCStr());
+            const String &class_name = ent.TypeName;
+            buf.Format("import %s %s;\n", class_name.GetCStr(), obj_name.GetCStr());
             header.Append(buf);
         }
     }

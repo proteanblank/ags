@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/audiocliptype.h"
@@ -16,50 +16,15 @@
 #include "ac/oldgamesetupstruct.h"
 #include "ac/wordsdictionary.h"
 #include "ac/dynobj/scriptaudioclip.h"
-#include "game/interactions.h"
-#include "util/alignedstream.h"
+#include "util/string_utils.h"
 
 using namespace AGS::Common;
 
 GameSetupStruct::GameSetupStruct()
-    : filever(0)
-    , roomCount(0)
-    , scoreClipID(0)
 {
-    memset(invinfo, 0, sizeof(invinfo));
-    memset(lipSyncFrameLetters, 0, sizeof(lipSyncFrameLetters));
-    memset(guid, 0, sizeof(guid));
-    memset(saveGameFileExtension, 0, sizeof(saveGameFileExtension));
-    memset(saveGameFolderName, 0, sizeof(saveGameFolderName));
-}
-
-GameSetupStruct::~GameSetupStruct()
-{
-    Free();
-}
-
-void GameSetupStruct::Free()
-{
-    GameSetupStructBase::Free();
-
-    intrChar.clear();
-    charScripts.clear();
-
-    // TODO: find out if it really needs to begin with 1 here?
-    for (size_t i = 1; i < (size_t)MAX_INV; i++)
-        intrInv[i].reset();
-    invScripts.clear();
-    numinvitems = 0;
-
-    roomNames.clear();
-    roomNumbers.clear();
-    roomCount = 0;
-
-    audioClips.clear();
-    audioClipTypes.clear();
-
-    charProps.clear();
-    viewNames.clear();
+    // CHECKME: not sure if this is needed, as likely will be rewritten by loading game data
+    intrVars[0] = InteractionVariable("Global 1", 0, 0);
+    numIntrVars = 1;
 }
 
 // Assigns font info parameters using legacy flags value read from the game data
@@ -102,9 +67,9 @@ void GameSetupStruct::read_savegame_info(Common::Stream *in, GameDataVersion dat
 {
     if (data_ver > kGameVersion_272) // only 3.x
     {
-        in->Read(&guid[0], MAX_GUID_LENGTH);
-        in->Read(&saveGameFileExtension[0], MAX_SG_EXT_LENGTH);
-        in->Read(&saveGameFolderName[0], MAX_SG_FOLDER_LEN);
+        StrUtil::ReadCStrCount(guid, in, MAX_GUID_LENGTH);
+        StrUtil::ReadCStrCount(saveGameFileExtension, in, MAX_SG_EXT_LENGTH);
+        saveGameFolderName.ReadCount(in, LEGACY_MAX_SG_FOLDER_LEN);
     }
 }
 
@@ -140,58 +105,54 @@ void GameSetupStruct::read_font_infos(Common::Stream *in, GameDataVersion data_v
     }
 }
 
-void GameSetupStruct::ReadInvInfo_Aligned(Stream *in)
+void GameSetupStruct::ReadInvInfo(Stream *in)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
-    for (int iteratorCount = 0; iteratorCount < numinvitems; ++iteratorCount)
+    for (int i = 0; i < numinvitems; ++i)
     {
-        invinfo[iteratorCount].ReadFromFile(&align_s);
-        align_s.Reset();
+        invinfo[i].ReadFromFile(in);
     }
 }
 
-void GameSetupStruct::WriteInvInfo_Aligned(Stream *out)
+void GameSetupStruct::WriteInvInfo(Stream *out)
 {
-    AlignedStream align_s(out, Common::kAligned_Write);
-    for (int iteratorCount = 0; iteratorCount < numinvitems; ++iteratorCount)
+    for (int i = 0; i < numinvitems; ++i)
     {
-        invinfo[iteratorCount].WriteToFile(&align_s);
-        align_s.Reset();
+        invinfo[i].WriteToFile(out);
     }
 }
 
 HGameFileError GameSetupStruct::read_cursors(Common::Stream *in)
 {
     mcurs.resize(numcursors);
-    ReadMouseCursors_Aligned(in);
+    ReadMouseCursors(in);
     return HGameFileError::None();
 }
 
 void GameSetupStruct::read_interaction_scripts(Common::Stream *in, GameDataVersion data_ver)
 {
-    numGlobalVars = 0;
+    numIntrVars = 0;
 
     if (data_ver > kGameVersion_272) // 3.x
     {
         charScripts.resize(numcharacters);
         invScripts.resize(numinvitems);
         for (size_t i = 0; i < (size_t)numcharacters; ++i)
-            charScripts[i].reset(InteractionScripts::CreateFromStream(in));
+            charScripts[i] = InteractionEvents::CreateFromStream_v361(in);
         // NOTE: new inventory items' events are loaded starting from 1 for some reason
         for (size_t i = 1; i < (size_t)numinvitems; ++i)
-            invScripts[i].reset(InteractionScripts::CreateFromStream(in));
+            invScripts[i] = InteractionEvents::CreateFromStream_v361(in);
     }
     else // 2.x
     {
         intrChar.resize(numcharacters);
         for (size_t i = 0; i < (size_t)numcharacters; ++i)
-            intrChar[i].reset(Interaction::CreateFromStream(in));
+            intrChar[i] = Interaction::CreateFromStream(in);
         for (size_t i = 0; i < (size_t)numinvitems; ++i)
-            intrInv[i].reset(Interaction::CreateFromStream(in));
+            intrInv[i] = Interaction::CreateFromStream(in);
 
-        numGlobalVars = in->ReadInt32();
-        for (size_t i = 0; i < (size_t)numGlobalVars; ++i)
-            globalvars[i].Read(in);
+        numIntrVars = in->ReadInt32();
+        for (size_t i = 0; i < (size_t)numIntrVars; ++i)
+            intrVars[i].Read(in);
     }
 }
 
@@ -201,23 +162,19 @@ void GameSetupStruct::read_words_dictionary(Common::Stream *in)
     read_dictionary(dict.get(), in);
 }
 
-void GameSetupStruct::ReadMouseCursors_Aligned(Stream *in)
+void GameSetupStruct::ReadMouseCursors(Stream *in)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
-    for (int iteratorCount = 0; iteratorCount < numcursors; ++iteratorCount)
+    for (int i = 0; i < numcursors; ++i)
     {
-        mcurs[iteratorCount].ReadFromFile(&align_s);
-        align_s.Reset();
+        mcurs[i].ReadFromFile(in);
     }
 }
 
-void GameSetupStruct::WriteMouseCursors_Aligned(Stream *out)
+void GameSetupStruct::WriteMouseCursors(Stream *out)
 {
-    AlignedStream align_s(out, Common::kAligned_Write);
-    for (int iteratorCount = 0; iteratorCount < numcursors; ++iteratorCount)
+    for (int i = 0; i < numcursors; ++i)
     {
-        mcurs[iteratorCount].WriteToFile(&align_s);
-        align_s.Reset();
+        mcurs[i].WriteToFile(out);
     }
 }
 
@@ -227,7 +184,8 @@ void GameSetupStruct::WriteMouseCursors_Aligned(Stream *out)
 void GameSetupStruct::read_characters(Common::Stream *in)
 {
     chars.resize(numcharacters);
-    ReadCharacters_Aligned(in, false);
+    chars2.resize(numcharacters);
+    ReadCharacters(in);
 }
 
 void GameSetupStruct::read_lipsync(Common::Stream *in, GameDataVersion data_ver)
@@ -264,25 +222,19 @@ void GameSetupStruct::read_messages(Common::Stream *in,
     }
 }
 
-void GameSetupStruct::ReadCharacters_Aligned(Stream *in, bool is_save)
+void GameSetupStruct::ReadCharacters(Stream *in)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
-    const GameDataVersion data_ver = is_save ? kGameVersion_Undefined : loaded_game_file_version;
-    const int save_ver = is_save ? 0 : -1;
-    for (int iteratorCount = 0; iteratorCount < numcharacters; ++iteratorCount)
+    for (int i = 0; i < numcharacters; ++i)
     {
-        chars[iteratorCount].ReadFromFile(&align_s, data_ver, save_ver);
-        align_s.Reset();
+        chars[i].ReadFromFile(in, chars2[i], loaded_game_file_version);
     }
 }
 
-void GameSetupStruct::WriteCharacters_Aligned(Stream *out)
+void GameSetupStruct::WriteCharacters(Stream *out)
 {
-    AlignedStream align_s(out, Common::kAligned_Write);
-    for (int iteratorCount = 0; iteratorCount < numcharacters; ++iteratorCount)
+    for (int i = 0; i < numcharacters; ++i)
     {
-        chars[iteratorCount].WriteToFile(&align_s);
-        align_s.Reset();
+        chars[i].WriteToFile(out);
     }
 }
 
@@ -344,16 +296,12 @@ HGameFileError GameSetupStruct::read_audio(Common::Stream *in, GameDataVersion d
 
         size_t audioclip_count = in->ReadInt32();
         audioClips.resize(audioclip_count);
-        ReadAudioClips_Aligned(in, audioclip_count);
-        
+        ReadAudioClips(in, audioclip_count);
+
         scoreClipID = in->ReadInt32();
     }
     return HGameFileError::None();
 }
-
-// Temporarily copied this from acruntim.h;
-// it is unknown if this should be defined for all solution, or only runtime
-#define STD_BUFFER_SIZE 3000
 
 void GameSetupStruct::read_room_names(Stream *in, GameDataVersion data_ver)
 {
@@ -374,33 +322,12 @@ void GameSetupStruct::read_room_names(Stream *in, GameDataVersion data_ver)
     }
 }
 
-void GameSetupStruct::ReadAudioClips_Aligned(Common::Stream *in, size_t count)
+void GameSetupStruct::ReadAudioClips(Common::Stream *in, size_t count)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
     for (size_t i = 0; i < count; ++i)
     {
-        audioClips[i].ReadFromFile(&align_s);
-        align_s.Reset();
+        audioClips[i].ReadFromFile(in);
     }
-}
-
-void GameSetupStruct::ReadFromSaveGame_v321(Stream *in, GameDataVersion data_ver)
-{
-    ReadInvInfo_Aligned(in);
-    ReadMouseCursors_Aligned(in);
-
-    if (data_ver <= kGameVersion_272)
-    {
-        for (int i = 0; i < numinvitems; ++i)
-            intrInv[i]->ReadTimesRunFromSave_v321(in);
-        for (int i = 0; i < numcharacters; ++i)
-            intrChar[i]->ReadTimesRunFromSave_v321(in);
-    }
-
-    in->ReadArrayOfInt32(&options[0], OPT_HIGHESTOPTION_321 + 1);
-    options[OPT_LIPSYNCTEXT] = in->ReadByte();
-
-    ReadCharacters_Aligned(in, true);
 }
 
 //=============================================================================
@@ -460,8 +387,8 @@ void GameSetupStruct::ReadFromSavegame(Stream *in)
     // of GameSetupStructBase
     playercharacter = in->ReadInt32();
     dialog_bullet = in->ReadInt32();
-    hotdot = in->ReadInt16();
-    hotdotouter = in->ReadInt16();
+    hotdot = static_cast<uint16_t>(in->ReadInt16());
+    hotdotouter = static_cast<uint16_t>(in->ReadInt16());
     invhotdotsprite = in->ReadInt32();
     default_lipsync_frame = in->ReadInt32();
 }
@@ -474,8 +401,8 @@ void GameSetupStruct::WriteForSavegame(Stream *out)
     // of GameSetupStructBase
     out->WriteInt32(playercharacter);
     out->WriteInt32(dialog_bullet);
-    out->WriteInt16(hotdot);
-    out->WriteInt16(hotdotouter);
+    out->WriteInt16(static_cast<uint16_t>(hotdot));
+    out->WriteInt16(static_cast<uint16_t>(hotdotouter));
     out->WriteInt32(invhotdotsprite);
     out->WriteInt32(default_lipsync_frame);
 }

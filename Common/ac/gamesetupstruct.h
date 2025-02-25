@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -26,22 +26,13 @@
 #include "ac/mousecursor.h"
 #include "ac/dynobj/scriptaudioclip.h"
 #include "game/customproperties.h"
+#include "game/interactions.h"
 #include "game/main_game_file.h" // TODO: constants to separate header or split out reading functions
 
-namespace AGS
-{
-    namespace Common
-    {
-        struct AssetLibInfo;
-        struct Interaction;
-        struct InteractionScripts;
-        typedef std::shared_ptr<Interaction> PInteraction;
-        typedef std::shared_ptr<InteractionScripts> PInteractionScripts;
-    }
-}
 
-using AGS::Common::PInteraction;
-using AGS::Common::PInteractionScripts;
+using AGS::Common::UInteraction;
+using AGS::Common::UInteractionEvents;
+using AGS::Common::InteractionVariable;
 using AGS::Common::HGameFileError;
 
 
@@ -52,17 +43,20 @@ struct GameSetupStruct : public GameSetupStructBase
     // font parameters are then put and queried in the fonts module
     // TODO: split into installation params (used only when reading) and runtime params
     std::vector<FontInfo> fonts;
-    InventoryItemInfo invinfo[MAX_INV];
+    InventoryItemInfo invinfo[MAX_INV]{};
     std::vector<MouseCursor> mcurs;
-    std::vector<PInteraction> intrChar;
-    PInteraction intrInv[MAX_INV];
-    std::vector<PInteractionScripts> charScripts;
-    std::vector<PInteractionScripts> invScripts;
+    // These are old-style interaction variables created by the Interaction editor
+    InteractionVariable intrVars[MAX_INTERACTION_VARIABLES]{};
+    int numIntrVars = 0;
+    std::vector<UInteraction> intrChar;
+    UInteraction intrInv[MAX_INV];
+    std::vector<UInteractionEvents> charScripts;
+    std::vector<UInteractionEvents> invScripts;
     // TODO: why we do not use this in the engine instead of
     // loaded_game_file_version?
-    int               filever;  // just used by editor
+    int               filever = 0;  // just used by editor
     Common::String    compiled_with; // version of AGS this data was created by
-    char              lipSyncFrameLetters[MAXLIPSYNCFRAMES][50];
+    char              lipSyncFrameLetters[MAXLIPSYNCFRAMES][50] = {{ 0 }};
     AGS::Common::PropertySchema propSchema;
     std::vector<AGS::Common::StringIMap> charProps;
     AGS::Common::StringIMap invProps[MAX_INV];
@@ -72,18 +66,19 @@ struct GameSetupStruct : public GameSetupStructBase
     std::vector<Common::String> viewNames;
     Common::String    invScriptNames[MAX_INV];
     std::vector<Common::String> dialogScriptNames;
-    char              guid[MAX_GUID_LENGTH];
-    char              saveGameFileExtension[MAX_SG_EXT_LENGTH];
+    char              guid[MAX_GUID_LENGTH] = { 0 };
+    char              saveGameFileExtension[MAX_SG_EXT_LENGTH] = { 0 };
     // NOTE: saveGameFolderName is generally used to create game subdirs in common user directories
-    char              saveGameFolderName[MAX_SG_FOLDER_LEN];
-    int               roomCount;
+    Common::String    saveGameFolderName;
+    int               roomCount = 0;
     std::vector<int>  roomNumbers;
     std::vector<Common::String> roomNames;
     std::vector<ScriptAudioClip> audioClips;
     std::vector<AudioClipType> audioClipTypes;
     // A clip to play when player gains score in game
-    // TODO: find out why OPT_SCORESOUND option cannot be used to store this in >=3.2 games
-    int               scoreClipID;
+    // NOTE: this stores an internal audio clip index, which may or not correspond
+    // to the OPT_SCORESOUND, and also depends on whether the game was upgraded from <3.2 data.
+    int               scoreClipID = -1;
     // number of accessible game audio channels (the ones under direct user control)
     int               numGameChannels = 0;
     // backward-compatible channel limit that may be exported to script and reserved by audiotypes
@@ -107,11 +102,9 @@ struct GameSetupStruct : public GameSetupStructBase
 
     GameSetupStruct();
     GameSetupStruct(GameSetupStruct &&gss) = default;
-    ~GameSetupStruct();
+    ~GameSetupStruct() = default;
 
     GameSetupStruct &operator =(GameSetupStruct &&gss) = default;
-
-    void Free();
 
     // [IKM] Game struct loading code is moved here from Engine's load_game_file
     // function; for now it is not supposed to be called by Editor; although it
@@ -122,8 +115,6 @@ struct GameSetupStruct : public GameSetupStructBase
     // being read between them;
     // b) use a helper struct to pass some arguments
     //
-    // I also had to move BuildAudioClipArray from the engine and make it
-    // GameSetupStruct member.
 
     //--------------------------------------------------------------------
     // Do not call these directly
@@ -135,30 +126,28 @@ struct GameSetupStruct : public GameSetupStructBase
     void read_interaction_scripts(Common::Stream *in, GameDataVersion data_ver);
     void read_words_dictionary(Common::Stream *in);
 
-    void ReadInvInfo_Aligned(Common::Stream *in);
-    void WriteInvInfo_Aligned(Common::Stream *out);
-    void ReadMouseCursors_Aligned(Common::Stream *in);
-    void WriteMouseCursors_Aligned(Common::Stream *out);
+    void ReadInvInfo(Common::Stream *in);
+    void WriteInvInfo(Common::Stream *out);
+    void ReadMouseCursors(Common::Stream *in);
+    void WriteMouseCursors(Common::Stream *out);
     //------------------------------
     // Part 2
     void read_characters(Common::Stream *in);
     void read_lipsync(Common::Stream *in, GameDataVersion data_ver);
     void read_messages(Common::Stream *in, const std::array<int, MAXGLOBALMES> &load_messages, GameDataVersion data_ver);
 
-    void ReadCharacters_Aligned(Common::Stream *in, bool is_save);
-    void WriteCharacters_Aligned(Common::Stream *out);
+    void ReadCharacters(Common::Stream *in);
+    void WriteCharacters(Common::Stream *out);
     //------------------------------
     // Part 3
     HGameFileError read_customprops(Common::Stream *in, GameDataVersion data_ver);
     HGameFileError read_audio(Common::Stream *in, GameDataVersion data_ver);
     void read_room_names(Common::Stream *in, GameDataVersion data_ver);
 
-    void ReadAudioClips_Aligned(Common::Stream *in, size_t count);
+    void ReadAudioClips(Common::Stream *in, size_t count);
     //--------------------------------------------------------------------
 
     // Functions for reading and writing appropriate data from/to save game
-    void ReadFromSaveGame_v321(Common::Stream *in, GameDataVersion data_ver);
-
     void ReadFromSavegame(Common::Stream *in);
     void WriteForSavegame(Common::Stream *out);
 };

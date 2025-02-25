@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AGS_CN_UTIL__STRINGTYPES_H
@@ -49,22 +49,15 @@ inline size_t Hash_LowerCase(const char *data, const size_t len)
 // A std::hash specialization for AGS String
 namespace std
 {
-#ifdef AGS_NEEDS_TR1
-namespace tr1
-{
-#endif
 // std::hash for String object
 template<>
-struct hash<AGS::Common::String> : public unary_function<AGS::Common::String, size_t>
+struct hash<AGS::Common::String>
 {
     size_t operator ()(const AGS::Common::String &key) const
     {
         return FNV::Hash(key.GetCStr(), key.GetLength());
     }
 };
-#ifdef AGS_NEEDS_TR1
-}
-#endif
 }
 
 
@@ -77,8 +70,17 @@ namespace Common
 // Various comparison functors
 //
 
+// Test case-sensitive String equality
+struct StrEq
+{
+    bool operator()(const String &s1, const String &s2) const
+    {
+        return s1 == s2;
+    }
+};
+
 // Test case-insensitive String equality
-struct StrEqNoCase : public std::binary_function<String, String, bool>
+struct StrEqNoCase
 {
     bool operator()(const String &s1, const String &s2) const
     {
@@ -86,8 +88,23 @@ struct StrEqNoCase : public std::binary_function<String, String, bool>
     }
 };
 
+// Test case-insensitive String equality as a pre-defined unary predicate
+struct StrEqNoCasePred
+{
+    StrEqNoCasePred(const String &look_for)
+        : _lookFor(look_for) {}
+
+    bool operator()(const String &s) const
+    {
+        return _lookFor.CompareNoCase(s) == 0;
+    }
+
+private:
+    String _lookFor;
+};
+
 // Case-insensitive String less
-struct StrLessNoCase : public std::binary_function<String, String, bool>
+struct StrLessNoCase
 {
     bool operator()(const String &s1, const String &s2) const
     {
@@ -96,7 +113,7 @@ struct StrLessNoCase : public std::binary_function<String, String, bool>
 };
 
 // Compute case-insensitive hash for a String object
-struct HashStrNoCase : public std::unary_function<String, size_t>
+struct HashStrNoCase
 {
     size_t operator ()(const String &key) const
     {

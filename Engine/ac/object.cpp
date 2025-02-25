@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/object.h"
@@ -20,6 +20,8 @@
 #include "ac/gamestate.h"
 #include "ac/global_object.h"
 #include "ac/global_translation.h"
+#include "ac/gui.h"
+#include "ac/movelist.h"
 #include "ac/properties.h"
 #include "ac/room.h"
 #include "ac/roomstatus.h"
@@ -29,18 +31,17 @@
 #include "ac/view.h"
 #include "ac/viewframe.h"
 #include "ac/walkablearea.h"
+#include "ac/dynobj/cc_object.h"
 #include "debug/debug_log.h"
-#include "gui/guimain.h"
 #include "main/game_run.h"
 #include "ac/route_finder.h"
 #include "gfx/graphicsdriver.h"
 #include "gfx/bitmap.h"
 #include "gfx/gfx_def.h"
 #include "script/runtimescriptvalue.h"
-#include "ac/dynobj/cc_object.h"
-#include "ac/movelist.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 
 extern ScriptObject scrObj[MAX_ROOM_OBJECTS];
@@ -293,7 +294,7 @@ void Object_SetName(ScriptObject *objj, const char *newName) {
     if (!is_valid_object(objj->id))
         quit("!Object.Name: invalid object number");
     croom->obj[objj->id].name = newName;
-    GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+    GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
 }
 
 bool Object_IsInteractionAvailable(ScriptObject *oobj, int mood) {
@@ -305,20 +306,14 @@ bool Object_IsInteractionAvailable(ScriptObject *oobj, int mood) {
     return (ciwas == 2);
 }
 
-void Object_Move(ScriptObject *objj, int x, int y, int speed, int blocking, int direct) {
-    if ((direct == ANYWHERE) || (direct == 1))
-        direct = 1;
-    else if ((direct == WALKABLE_AREAS) || (direct == 0))
-        direct = 0;
-    else
-        quit("Object.Move: invalid DIRECT parameter");
+void Object_Move(ScriptObject *objj, int x, int y, int speed, int blocking, int ignwal)
+{
+    ValidateMoveParams("Object.Move", blocking, ignwal);
 
-    move_object(objj->id, x, y, speed, direct);
+    move_object(objj->id, x, y, speed, ignwal);
 
-    if ((blocking == BLOCKING) || (blocking == 1))
+    if (blocking)
         GameLoopUntilNotMoving(&objs[objj->id].moving);
-    else if ((blocking != IN_BACKGROUND) && (blocking != 0))
-        quit("Object.Move: invalid BLOCKING paramter");
 }
 
 void Object_SetClickable(ScriptObject *objj, int clik) {
@@ -332,6 +327,32 @@ int Object_GetClickable(ScriptObject *objj) {
     if (objs[objj->id].flags & OBJF_NOINTERACT)
         return 0;
     return 1;
+}
+
+int Object_GetDestinationX(ScriptObject *objj)
+{
+    if (!is_valid_object(objj->id))
+        quit("!Object.DestionationX: Invalid object specified");
+
+    if (objs[objj->id].moving)
+    {
+        MoveList *cmls = &mls[objs[objj->id].moving];
+        return cmls->pos.back().X;
+    }
+    return objs[objj->id].x;
+}
+
+int Object_GetDestinationY(ScriptObject *objj)
+{
+    if (!is_valid_object(objj->id))
+        quit("!Object.DestionationX: Invalid object specified");
+
+    if (objs[objj->id].moving)
+    {
+        MoveList *cmls = &mls[objs[objj->id].moving];
+        return cmls->pos.back().Y;
+    }
+    return objs[objj->id].y;
 }
 
 void Object_SetManualScaling(ScriptObject *objj, bool on)
@@ -426,35 +447,37 @@ int Object_GetIgnoreWalkbehinds(ScriptObject *chaa) {
     return 0;
 }
 
-void move_object(int objj,int tox,int toy,int spee,int ignwal) {
+void move_object(int objj, int tox, int toy, int speed, int ignwal) {
 
     if (!is_valid_object(objj))
         quit("!MoveObject: invalid object number");
 
+    auto &obj = objs[objj];
     // AGS <= 2.61 uses MoveObject with spp=-1 internally instead of SetObjectPosition
-    if ((loaded_game_file_version <= kGameVersion_261) && (spee == -1))
+    if ((loaded_game_file_version <= kGameVersion_261) && (speed == -1))
     {
-        objs[objj].x = tox;
-        objs[objj].y = toy;
+        obj.x = tox;
+        obj.y = toy;
         return;
     }
 
     debug_script_log("Object %d start move to %d,%d", objj, tox, toy);
 
     // NOTE: for old games we assume the input coordinates are in the "data" coordinate system
-    const int objX = room_to_mask_coord(objs[objj].x);
-    const int objY = room_to_mask_coord(objs[objj].y);
-    tox = room_to_mask_coord(tox);
-    toy = room_to_mask_coord(toy);
+    const int src_x = data_to_game_coord(objs[objj].x);
+    const int src_y = data_to_game_coord(objs[objj].y);
+    const int dst_x = data_to_game_coord(tox);
+    const int dst_y = data_to_game_coord(toy);
 
-    set_route_move_speed(spee, spee);
-    set_color_depth(8);
-    int mslot=find_route(objX, objY, tox, toy, prepare_walkable_areas(-1), objj+1, 1, ignwal);
-    set_color_depth(game.GetColorDepth());
-    if (mslot>0) {
+    const int mslot = objj + 1;
+    MaskRouteFinder *pathfind = get_room_pathfinder();
+    pathfind->SetWalkableArea(prepare_walkable_areas(-1), thisroom.MaskResolution);
+    if (Pathfinding::FindRoute(mls[mslot], pathfind, src_x, src_y, dst_x, dst_y,
+        speed, speed, false, ignwal != 0))
+    {
         objs[objj].moving = mslot;
         mls[mslot].direct = ignwal;
-        convert_move_path_to_room_resolution(&mls[mslot]);
+        convert_move_path_to_data_resolution(mls[mslot]);
     }
 }
 
@@ -770,6 +793,30 @@ bool CycleViewAnim(int view, uint16_t &o_loop, uint16_t &o_frame, bool forwards,
     return !done; // have we finished animating?
 }
 
+void ValidateMoveParams(const char *apiname, int &blocking, int &ignwal)
+{
+    if (blocking == BLOCKING)
+        blocking = 1;
+    else if (blocking == IN_BACKGROUND)
+        blocking = 0;
+
+    if (ignwal == ANYWHERE)
+        ignwal = 1;
+    else if (ignwal == WALKABLE_AREAS)
+        ignwal = 0;
+
+    if ((blocking < 0) || (blocking > 1))
+    {
+        debug_script_warn("%s: invalid 'blocking' value %d, will treat as BLOCKING (1)", apiname, blocking);
+        blocking = 1;
+    }
+    if ((ignwal < 0) || (ignwal > 1))
+    {
+        debug_script_warn("%s: invalid 'walk where' value %d, will treat as ANYWHERE (1)", apiname, ignwal);
+        ignwal = 1;
+    }
+}
+
 //=============================================================================
 //
 // Script API Functions
@@ -780,8 +827,6 @@ bool CycleViewAnim(int view, uint16_t &o_loop, uint16_t &o_frame, bool forwards,
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 
 ScriptObject *Object_GetByName(const char *name)
@@ -1030,6 +1075,16 @@ RuntimeScriptValue Sc_Object_SetClickable(void *self, const RuntimeScriptValue *
     API_OBJCALL_VOID_PINT(ScriptObject, Object_SetClickable);
 }
 
+RuntimeScriptValue Sc_Object_GetDestinationX(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT(ScriptObject, Object_GetDestinationX);
+}
+
+RuntimeScriptValue Sc_Object_GetDestinationY(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT(ScriptObject, Object_GetDestinationY);
+}
+
 // int (ScriptObject *objj)
 RuntimeScriptValue Sc_Object_GetFrame(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -1229,6 +1284,8 @@ void RegisterObjectAPI()
         { "Object::set_BlockingWidth",        API_FN_PAIR(Object_SetBlockingWidth) },
         { "Object::get_Clickable",            API_FN_PAIR(Object_GetClickable) },
         { "Object::set_Clickable",            API_FN_PAIR(Object_SetClickable) },
+        { "Object::get_DestinationX",         API_FN_PAIR(Object_GetDestinationX) },
+        { "Object::get_DestinationY",         API_FN_PAIR(Object_GetDestinationY) },
         { "Object::get_Frame",                API_FN_PAIR(Object_GetFrame) },
         { "Object::get_Graphic",              API_FN_PAIR(Object_GetGraphic) },
         { "Object::set_Graphic",              API_FN_PAIR(Object_SetGraphic) },

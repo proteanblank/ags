@@ -1,9 +1,20 @@
-
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include "script/cs_compiler.h"
-#include "script/cc_macrotable.h"
 #include "script/cc_compiledscript.h"
 #include "script/cc_symboltable.h"
 #include "script/cc_common.h"
@@ -11,12 +22,17 @@
 #include "script/cs_parser.h"
 
 const char *ccSoftwareVersion = "1.0";
-const char *ccCurScriptName = "";
 
 std::vector<const char*> defaultheaders;
 std::vector<const char*> defaultHeaderNames;
 
-MacroTable predefinedMacros;
+void ccGetExtensions(std::vector<std::string> &exts)
+{
+    // Add extensions here as necessary
+    // DynamicArray.Length pseudo-property
+    exts.push_back("DYNARRAY_LENGTH");
+    return;
+}
 
 int ccAddDefaultHeader(const char* nhead, const char *nName)
 {
@@ -36,7 +52,6 @@ void ccSetSoftwareVersion(const char *versionNumber) {
 
 ccScript* ccCompileText(const char *texo, const char *scriptName) {
     ccCompiledScript *cctemp = new ccCompiledScript();
-    cctemp->init();
 
     sym.reset();
 
@@ -51,19 +66,18 @@ ccScript* ccCompileText(const char *texo, const char *scriptName) {
         else
             ccCurScriptName = "Internal header file";
 
-        cctemp->start_new_section(ccCurScriptName);
+        cctemp->start_new_section(ccCurScriptName.c_str());
         cc_compile(defaultheaders[t],cctemp);
         if (cc_has_error()) break;
     }
 
     if (!cc_has_error()) {
         ccCurScriptName = scriptName;
-        cctemp->start_new_section(ccCurScriptName);
+        cctemp->start_new_section(ccCurScriptName.c_str());
         cc_compile(texo,cctemp);
     }
 
     if (cc_has_error()) {
-        cctemp->shutdown();
         delete cctemp;
         return NULL;
     }
@@ -76,16 +90,16 @@ ccScript* ccCompileText(const char *texo, const char *scriptName) {
 
             if ((stype == SYM_FUNCTION) || (stype == SYM_GLOBALVAR)) {
                 // unused func/variable
-                cctemp->imports[sym.entries[t].soffs][0] = 0;
+                cctemp->imports[sym.entries[t].soffs] = std::string();
             }
             else if (sym.entries[t].flags & SFLG_PROPERTY) {
                 // unused property -- get rid of the getter and setter
                 int propGet = sym.entries[t].get_propget();
                 int propSet = sym.entries[t].get_propset();
                 if (propGet >= 0)
-                    cctemp->imports[propGet][0] = 0;
+                    cctemp->imports[propGet] = std::string();
                 if (propSet >= 0)
-                    cctemp->imports[propSet][0] = 0;
+                    cctemp->imports[propSet] = std::string();
             }
         }
 
@@ -93,18 +107,16 @@ ccScript* ccCompileText(const char *texo, const char *scriptName) {
             (sym.get_type(t) != SYM_LOCALVAR)) continue;
 
         if (sym.entries[t].flags & SFLG_IMPORTED) continue;
-        if (ccGetOption(SCOPT_SHOWWARNINGS)==0) ;
-        else if ((sym.entries[t].flags & SFLG_ACCESSED)==0) {
-            printf("warning: variable '%s' is never used\n",sym.get_friendly_name(t).c_str());
-        }
+        //if ((sym.entries[t].flags & SFLG_ACCESSED)==0) {
+        //    printf("warning: variable '%s' is never used\n",sym.get_friendly_name(t).c_str());
+        //}
     }
 
     if (ccGetOption(SCOPT_EXPORTALL)) {
         // export all functions
-        for (size_t t=0;t<cctemp->numfunctions;t++) {
-            if (cctemp->add_new_export(cctemp->functions[t],EXPORT_FUNCTION,
+        for (size_t t=0; t < cctemp->functions.size(); ++t) {
+            if (cctemp->add_new_export(cctemp->functions[t].c_str(), EXPORT_FUNCTION,
                 cctemp->funccodeoffs[t], cctemp->funcnumparams[t]) == -1) {
-                    cctemp->shutdown();
                     return NULL;
             }
 

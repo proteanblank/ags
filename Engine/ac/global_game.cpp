@@ -2,22 +2,22 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/global_game.h"
+#include <algorithm>
 #include <math.h>
 #include <stdio.h>
 #include "core/platform.h"
 #include "ac/audiocliptype.h"
 #include "ac/common.h"
-#include "ac/view.h"
 #include "ac/character.h"
 #include "ac/draw.h"
 #include "ac/dynamicsprite.h"
@@ -27,6 +27,7 @@
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
 #include "ac/global_character.h"
+#include "ac/global_display.h"
 #include "ac/global_gui.h"
 #include "ac/global_hotspot.h"
 #include "ac/global_inventoryitem.h"
@@ -42,6 +43,7 @@
 #include "ac/roomstatus.h"
 #include "ac/string.h"
 #include "ac/system.h"
+#include "ac/view.h"
 #include "debug/debugger.h"
 #include "debug/debug_log.h"
 #include "font/fonts.h"
@@ -62,11 +64,12 @@
 #include "util/path.h"
 #include "util/string_utils.h"
 #include "media/audio/audio_system.h"
+#include "platform/base/agsplatformdriver.h"
 #include "platform/base/sys_main.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
-extern GameState play;
 extern ExecutingScript*curscript;
 extern int displayed_room;
 extern int game_paused;
@@ -90,51 +93,112 @@ void AbortGame()
 
 void GiveScore(int amnt) 
 {
-    GUI::MarkSpecialLabelsForUpdate(kLabelMacro_AllScore);
+    GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_AllScore);
     play.score += amnt;
 
     if ((amnt > 0) && (play.score_sound >= 0))
         play_audio_clip_by_index(play.score_sound);
 
-    run_on_event (GE_GOT_SCORE, RuntimeScriptValue().SetInt32(amnt));
+    run_on_event(kScriptEvent_Score, amnt);
 }
 
 void restart_game() {
     can_run_delayed_command();
     if (inside_script) {
-        curscript->queue_action(ePSARestartGame, 0, "RestartGame");
+        curscript->QueueAction(PostScriptAction(ePSARestartGame, 0, "RestartGame"));
         return;
     }
     try_restore_save(RESTART_POINT_SAVE_GAME_NUMBER);
 }
 
-void RestoreGameSlot(int slnum) {
+void CopySaveSlot(int old_save, int new_save)
+{
+    if (old_save == new_save)
+        return; // cannot copy into itself
+
+    String old_filename = get_save_game_path(old_save);
+    String new_filename = get_save_game_path(new_save);
+    File::CopyFile(old_filename, new_filename, true);
+}
+
+void MoveSaveSlot(int old_save, int new_save)
+{
+    if (old_save == new_save)
+        return; // cannot move into itself
+
+    String old_filename = get_save_game_path(old_save);
+    String new_filename = get_save_game_path(new_save);
+    File::RenameFile(old_filename, new_filename);
+}
+
+void RestoreGameSlot(int slnum)
+{
     if (displayed_room < 0)
         quit("!RestoreGameSlot: a game cannot be restored from within game_start");
 
     can_run_delayed_command();
     if (inside_script) {
-        curscript->queue_action(ePSARestoreGame, slnum, "RestoreGameSlot");
+        curscript->QueueAction(PostScriptAction(ePSARestoreGame, slnum, "RestoreGameSlot"));
         return;
     }
     try_restore_save(slnum);
 }
 
-void DeleteSaveSlot (int slnum) {
-    String nametouse;
-    nametouse = get_save_game_path(slnum);
-    File::DeleteFile(nametouse);
-    if ((slnum >= 1) && (slnum <= MAXSAVEGAMES)) {
-        String thisname;
-        for (int i = MAXSAVEGAMES; i > slnum; i--) {
-            thisname = get_save_game_path(i);
-            if (Common::File::IsFile(thisname)) {
-                // Rename the highest save game to fill in the gap
-                File::RenameFile(thisname, nametouse);
-                break;
+void SaveGameSlot(int slotn, const char *descript, int spritenum)
+{
+    VALIDATE_STRING(descript);
+
+    if (platform->GetDiskFreeSpaceMB(get_save_game_directory()) < 2)
+    {
+        Display("ERROR: There is not enough disk space free to save the game. Clear some disk space and try again.");
+        return;
+    }
+
+    // dont allow save in rep_exec_always, because we dont save
+    // the state of blocked scripts
+    can_run_delayed_command();
+
+    // Make a sprite copy, as save process may be scheduled and asynchronous (in theory)
+    std::unique_ptr<Bitmap> image;
+    if (spritenum >= 0)
+        image.reset(BitmapHelper::CreateBitmapCopy(spriteset[spritenum]));
+
+    if (inside_script)
+    {
+        curscript->QueueAction(PostScriptAction(ePSASaveGame, slotn, "SaveGameSlot", descript, std::move(image)));
+        return;
+    }
+
+    save_game(slotn, descript, std::move(image));
+}
+
+void SaveGameSlot2(int slnum, const char *descript)
+{
+    SaveGameSlot(slnum, descript, -1);
+}
+
+void DeleteSaveSlot(int slnum)
+{
+    String save_filename = get_save_game_path(slnum);
+    File::DeleteFile(save_filename);
+
+    // Pre-3.6.2 engine behavior: if the deleted save slot was from within
+    // MAXSAVEGAMES range, then move the topmost found save file from the same
+    // range to the freed slot index.
+    if (loaded_game_file_version < kGameVersion_362)
+    {
+        if ((slnum >= 1) && (slnum <= LEGACY_MAXSAVEGAMES))
+        {
+            for (int i = LEGACY_MAXSAVEGAMES; i > slnum; i--)
+            {
+                String top_filename = get_save_game_path(i);
+                if (File::IsFile(top_filename))
+                {
+                    File::RenameFile(top_filename, save_filename);
+                    break;
+                }
             }
         }
-
     }
 }
 
@@ -194,14 +258,17 @@ int LoadSaveSlotScreenshot(int slnum, int width, int height) {
     return add_dynamic_sprite(std::move(screenshot));
 }
 
-void FillSaveList(std::vector<SaveListItem> &saves, unsigned top_index, size_t max_count)
+void FillSaveList(std::vector<SaveListItem> &saves, unsigned bot_index, unsigned top_index, bool get_description)
 {
-    if (max_count == 0)
+    if (top_index < bot_index)
         return; // duh
 
-    String svg_dir = get_save_game_directory();
-    String svg_suff = get_save_game_suffix();
-    String pattern = String::FromFormat("agssave.???%s", svg_suff.GetCStr());
+    bot_index = std::min(999u, bot_index); // NOTE: slots are limited by 0..999 range
+    top_index = std::min(999u, top_index);
+
+    const String svg_dir = get_save_game_directory();
+    const String svg_suff = get_save_game_suffix();
+    const String pattern = String::FromFormat("agssave.???%s", svg_suff.GetCStr());
 
     for (FindFile ff = FindFile::OpenFiles(svg_dir, pattern); !ff.AtEnd(); ff.Next())
     {
@@ -209,24 +276,75 @@ void FillSaveList(std::vector<SaveListItem> &saves, unsigned top_index, size_t m
         if (!svg_suff.IsEmpty())
             slotname.ClipRight(svg_suff.GetLength());
         int saveGameSlot = Path::GetFileExtension(slotname).ToInt();
-        // only list games .000 to .XXX (to allow higher slots for other perposes)
-        if (saveGameSlot < 0 || static_cast<unsigned>(saveGameSlot) > top_index)
+        // only list games between .XXX to .YYY (to allow hidden slots for special perposes)
+        if (saveGameSlot < 0 || static_cast<unsigned>(saveGameSlot) < bot_index
+            || static_cast<unsigned>(saveGameSlot) > top_index)
             continue;
         String description;
-        GetSaveSlotDescription(saveGameSlot, description);
+        if (get_description)
+            GetSaveSlotDescription(saveGameSlot, description);
         saves.push_back(SaveListItem(saveGameSlot, description, ff.GetEntry().Time));
-        if (saves.size() >= max_count)
-            break;
     }
+}
+
+static void SortSaveList(std::vector<SaveListItem> &saves, ScriptSaveGameSortStyle save_sort, ScriptSortDirection sort_dir)
+{
+    const bool ascending = (sort_dir != kScSortDescending) || (save_sort == kScSaveGameSort_None);
+    switch (save_sort)
+    {
+    case kScSaveGameSort_Number:
+        if (ascending)
+            std::sort(saves.begin(), saves.end(), SaveItemCmpByNumber());
+        else
+            std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByNumber());
+        break;
+    case kScSaveGameSort_Time:
+        if (ascending)
+            std::sort(saves.begin(), saves.end(), SaveItemCmpByTime());
+        else
+            std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByTime());
+        break;
+    case kScSaveGameSort_Description:
+        if (ascending)
+            std::sort(saves.begin(), saves.end(), SaveItemCmpByDesc());
+        else
+            std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByDesc());
+        break;
+    default: break;
+    }
+}
+
+void FillSaveList(std::vector<SaveListItem> &saves, unsigned bot_index, unsigned top_index, bool get_description, ScriptSaveGameSortStyle save_sort, ScriptSortDirection sort_dir)
+{
+    FillSaveList(saves, bot_index, top_index, get_description);
+    SortSaveList(saves, save_sort, sort_dir);
+}
+
+void FillSaveList(const std::vector<int> &slots, std::vector<SaveListItem> &saves, bool get_description, ScriptSaveGameSortStyle save_sort, ScriptSortDirection sort_dir)
+{
+    for (const auto &slot : slots)
+    {
+        if (slot < 0 || slot > TOP_SAVESLOT)
+            continue; // unsupported save slot
+        String path = get_save_game_path(slot);
+        if (!File::IsFile(path))
+            continue; // file does not exist
+        String description;
+        if (get_description)
+            GetSaveSlotDescription(slot, description);
+        saves.push_back(SaveListItem(slot, description, File::GetFileTime(path)));
+    }
+
+    SortSaveList(saves, save_sort, sort_dir);
 }
 
 int GetLastSaveSlot()
 {
     std::vector<SaveListItem> saves;
-    FillSaveList(saves, RESTART_POINT_SAVE_GAME_NUMBER - 1);
+    FillSaveList(saves, 0, RESTART_POINT_SAVE_GAME_NUMBER - 1, false /* no desc */);
     if (saves.size() == 0)
         return -1;
-    std::sort(saves.rbegin(), saves.rend());
+    std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByTime()); // sort by time in reverse
     return saves[0].Slot;
 }
 
@@ -283,7 +401,7 @@ int RunAGSGame(const String &newgame, unsigned int mode, int data) {
         load_new_game_restore = -1;
 
         if (inside_script) {
-            curscript->queue_action(ePSARunAGSGame, mode | RAGMODE_LOADNOW, "RunAGSGame");
+            curscript->QueueAction(PostScriptAction(ePSARunAGSGame, mode | RAGMODE_LOADNOW, "RunAGSGame"));
             ccInstance::GetCurrentInstance()->Abort();
         }
         else
@@ -305,10 +423,10 @@ int RunAGSGame(const String &newgame, unsigned int mode, int data) {
 #if defined (AGS_AUTO_WRITE_USER_CONFIG)
     save_config_file(); // save current user config in case engine fails to run new game
 #endif // AGS_AUTO_WRITE_USER_CONFIG
-    unload_game_file();
+    unload_game();
 
     // Adjust config (NOTE: normally, RunAGSGame would need a redesign to allow separate config etc per each game)
-    usetup.translation = ""; // reset to default, prevent from trying translation file of game A in game B
+    usetup.Translation = ""; // reset to default, prevent from trying translation file of game A in game B
 
     AssetMgr->RemoveAllLibraries();
 
@@ -323,8 +441,7 @@ int RunAGSGame(const String &newgame, unsigned int mode, int data) {
     if (!err)
         quitprintf("!RunAGSGame: error loading new game file:\n%s", err->FullMessage().GetCStr());
 
-    spriteset.Reset();
-    err = spriteset.InitFile(SpriteFile::DefaultSpriteFileName, SpriteFile::DefaultSpriteIndexName);
+    err = engine_init_sprites();
     if (!err)
         quitprintf("!RunAGSGame: error loading new sprites:\n%s", err->FullMessage().GetCStr());
 
@@ -338,7 +455,7 @@ int RunAGSGame(const String &newgame, unsigned int mode, int data) {
     play.screen_is_faded_out = 1;
 
     if (load_new_game_restore >= 0) {
-        try_restore_save(load_new_game_restore);
+        try_restore_save(load_new_game_restore, true);
         load_new_game_restore = -1;
     }
     else
@@ -414,6 +531,7 @@ void SetRestartPoint() {
 
 
 void SetGameSpeed(int newspd) {
+    game.options[OPT_GAMEFPS] = newspd; // save for the reference
     newspd += play.game_speed_modifier;
     if (newspd>1000) newspd=1000;
     if (newspd<10) newspd=10;
@@ -422,7 +540,9 @@ void SetGameSpeed(int newspd) {
 }
 
 int GetGameSpeed() {
-    return ::lround(get_current_fps()) - play.game_speed_modifier;
+    // TODO: consider return strictly logical game fps;
+    // need to investigate what would be consequence of this in "infinite FPS" mode
+    return ::lround(get_game_fps()) - play.game_speed_modifier;
 }
 
 int SetGameOption (int opt, int newval) {
@@ -465,7 +585,7 @@ int SetGameOption (int opt, int newval) {
     case OPT_DISABLEOFF:
         GUI::Options.DisabledStyle = static_cast<GuiDisableStyle>(game.options[OPT_DISABLEOFF]);
         // If GUI was disabled at this time then also update it, as visual style could've changed
-        if (play.disabled_user_interface > 0) { GUI::MarkAllGUIForUpdate(true, false); }
+        if (play.disabled_user_interface > 0) { GUIE::MarkAllGUIForUpdate(true, false); }
         break;
     case OPT_CROSSFADEMUSIC:
         if (game.audioClipTypes.size() > AUDIOTYPE_LEGACY_MUSIC)
@@ -479,7 +599,7 @@ int SetGameOption (int opt, int newval) {
         adjust_fonts_for_render_mode(newval != 0);
         break;
     case OPT_RIGHTLEFTWRITE:
-        GUI::MarkForTranslationUpdate();
+        GUIE::MarkForTranslationUpdate();
         break;
     case OPT_DUPLICATEINV:
         update_invorder();
@@ -509,7 +629,8 @@ void SkipUntilCharacterStops(int cc) {
     if (!is_valid_character(cc))
         quit("!SkipUntilCharacterStops: invalid character specified");
     if (game.chars[cc].room!=displayed_room)
-        quit("!SkipUntilCharacterStops: specified character not in current room");
+        quitprintf("!SkipUntilCharacterStops: character %s is not in current room %d (it is in room %d)",
+            game.chars[cc].scrname, displayed_room, game.chars[cc].room);
 
     // if they are not currently moving, do nothing
     if (!game.chars[cc].walking)
@@ -574,10 +695,14 @@ int EndCutscene () {
     return retval;
 }
 
-void sc_inputbox(const char*msg,char*bufr) {
+void ShowInputBox(const char*msg, char*bufr) {
     VALIDATE_STRING(bufr);
+    ShowInputBoxImpl(msg, bufr, MAX_MAXSTRLEN);
+}
+
+void ShowInputBoxImpl(const char*msg, char *bufr, size_t buf_len) {
     setup_for_dialog();
-    enterstringwindow(get_translation(msg),bufr);
+    enterstringwindow(get_translation(msg), bufr, buf_len);
     restore_after_dialog();
 }
 
@@ -588,11 +713,11 @@ int GetLocationType(int xxx,int yyy) {
 }
 
 void SaveCursorForLocationChange() {
-    // update the current location name
-    char tempo[100];
-    GetLocationName(game_to_data_coord(mousex), game_to_data_coord(mousey), tempo);
+    // update the current location name (ignore return value)
+    GetLocationName(game_to_data_coord(mousex), game_to_data_coord(mousey));
 
-    if (play.get_loc_name_save_cursor != play.get_loc_name_last_time) {
+    if (play.get_loc_name_save_cursor != play.get_loc_name_last_time)
+    {
         play.get_loc_name_save_cursor = play.get_loc_name_last_time;
         play.restore_cursor_mode_to = GetCursorMode();
         play.restore_cursor_image_to = GetMouseCursor();
@@ -600,118 +725,142 @@ void SaveCursorForLocationChange() {
     }
 }
 
-void GetLocationName(int xxx,int yyy,char*tempo) {
+const char *GetLocationName(int x, int y)
+{
     if (displayed_room < 0)
-        quit("!GetLocationName: no room has been loaded");
+        return ""; // no room loaded yet
 
-    VALIDATE_STRING(tempo);
-
-    tempo[0] = 0;
-
-    if (GetGUIAt(xxx, yyy) >= 0) {
-        int mover = GetInvAt (xxx, yyy);
-        if (mover > 0) {
+    const char *out_name = "";
+    if (GetGUIAt(x, y) >= 0)
+    {
+        int mover = GetInvAt(x, y);
+        if (mover > 0)
+        {
             if (play.get_loc_name_last_time != 1000 + mover)
-                GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+                GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
             play.get_loc_name_last_time = 1000 + mover;
-            snprintf(tempo, MAX_MAXSTRLEN, "%s", get_translation(game.invinfo[mover].name));
+            out_name = get_translation(game.invinfo[mover].name.GetCStr());
         }
         else if ((play.get_loc_name_last_time > 1000) && (play.get_loc_name_last_time < 1000 + MAX_INV)) {
             // no longer selecting an item
-            GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+            GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
             play.get_loc_name_last_time = -1;
         }
-        return;
+        return out_name;
     }
 
-    int loctype = GetLocationType(xxx, yyy); // GetLocationType takes screen coords
-    VpPoint vpt = play.ScreenToRoomDivDown(xxx, yyy);
+    int loctype = GetLocationType(x, y); // GetLocationType takes screen coords
+    VpPoint vpt = play.ScreenToRoomDivDown(x, y);
     if (vpt.second < 0)
-        return;
-    xxx = vpt.first.X;
-    yyy = vpt.first.Y;
-    if ((xxx>=thisroom.Width) | (xxx<0) | (yyy<0) | (yyy>=thisroom.Height))
-        return;
+        return "";
+    x = vpt.first.X;
+    y = vpt.first.Y;
+    if ((x >= thisroom.Width) || (x < 0) || (y < 0) || (y >= thisroom.Height))
+        return "";
 
     int onhs,aa;
-    if (loctype == 0) {
-        if (play.get_loc_name_last_time != 0) {
+    if (loctype == 0)
+    {
+        if (play.get_loc_name_last_time != 0)
+        {
             play.get_loc_name_last_time = 0;
-            GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+            GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
         }
-        return;
+        return "";
     }
 
     // on character
-    if (loctype == LOCTYPE_CHAR) {
+    if (loctype == LOCTYPE_CHAR)
+    {
         onhs = getloctype_index;
-        snprintf(tempo, MAX_MAXSTRLEN, "%s", get_translation(game.chars[onhs].name));
+        out_name = get_translation(game.chars2[onhs].name_new.GetCStr());
         if (play.get_loc_name_last_time != 2000+onhs)
-            GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+            GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
         play.get_loc_name_last_time = 2000+onhs;
-        return;
+        return out_name;
     }
     // on object
-    if (loctype == LOCTYPE_OBJ) {
+    if (loctype == LOCTYPE_OBJ)
+    {
         aa = getloctype_index;
-        snprintf(tempo, MAX_MAXSTRLEN, "%s", get_translation(croom->obj[aa].name.GetCStr()));
+        out_name = get_translation(croom->obj[aa].name.GetCStr());
         // Compatibility: < 3.1.1 games returned space for nameless object
         // (presumably was a bug, but fixing it affected certain games behavior)
-        if (loaded_game_file_version < kGameVersion_311 && tempo[0] == 0) {
-            tempo[0] = ' ';
-            tempo[1] = 0;
+        if (loaded_game_file_version < kGameVersion_311 && out_name[0] == 0)
+        {
+            out_name = " ";
         }
         if (play.get_loc_name_last_time != 3000+aa)
-            GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+            GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
         play.get_loc_name_last_time = 3000+aa;
-        return;
+        return out_name;
     }
     onhs = getloctype_index;
     if (onhs>0)
-        snprintf(tempo, MAX_MAXSTRLEN, "%s", get_translation(croom->hotspot[onhs].Name.GetCStr()));
+        out_name = get_translation(croom->hotspot[onhs].Name.GetCStr());
     if (play.get_loc_name_last_time != onhs)
-        GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+        GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
     play.get_loc_name_last_time = onhs;
+    return out_name;
+}
+
+// GetLocationNameInBuf assumes a string buffer of MAX_MAXSTRLEN
+void GetLocationNameInBuf(int x, int y, char *buf)
+{
+    VALIDATE_STRING(buf);
+    buf[0] = 0;
+
+    const char *name = GetLocationName(x, y);
+    if (!name)
+        return;
+
+    snprintf(buf, MAX_MAXSTRLEN, "%s", name);
 }
 
 int IsKeyPressed (int keycode) {
     return ags_iskeydown(static_cast<eAGSKeyCode>(keycode));
 }
 
-int SaveScreenShot(const char*namm) {
-    String svg_dir = get_save_game_directory();
-    String ext = Path::GetFileExtension(namm);
-    String filename;
+int SaveScreenShot4(const char *namm, int width, int height, int layers)
+{
+    String filepath = namm;
+    String ext = Path::GetFileExtension(filepath);
     if (ext.IsEmpty())
     {
         ext = "bmp";
-        filename = Path::MakePath(svg_dir, namm, "bmp");
+        filepath = Path::ReplaceExtension(filepath, ext);
     }
-    else
+    if (!filepath.StartsWith("$"))
     {
-        filename = Path::ConcatPaths(svg_dir, namm);
+        filepath = Path::ConcatPaths(GameSavedgamesDirToken, filepath);
     }
 
-    std::unique_ptr<Stream> out(File::OpenFileCI(filename, kFile_CreateAlways, kFile_Write));
+    std::unique_ptr<Stream> out = ResolveScriptPathAndOpen(filepath, kFile_CreateAlways, kStream_Write);
     if (!out)
         return 0;
-    std::unique_ptr<Bitmap> bmp(CopyScreenIntoBitmap(play.GetMainViewport().GetWidth(), play.GetMainViewport().GetHeight()));
-    BitmapHelper::SaveBitmap(ext, out.get(), bmp.get());
-    return 1;  // successful
+
+    std::unique_ptr<Bitmap> shot = create_game_screenshot(width, height, layers);
+    if (!shot)
+        return 0; // out of mem or invalid parameters
+    return BitmapHelper::SaveBitmap(shot.get(), palette, out.get(), ext) ? 1 : 0;
+}
+
+int SaveScreenShot1(const char *namm) {
+    return SaveScreenShot4(namm, 0, 0, RENDER_BATCH_ALL);
 }
 
 void SetMultitasking (int mode) {
     if ((mode < 0) | (mode > 1))
         quit("!SetMultitasking: invalid mode parameter");
     // Save requested setting
-    usetup.multitasking = mode != 0;
+    usetup.RunInBackground = mode != 0;
 
     // Account for the override config option (must be checked first!)
-    if ((usetup.override_multitasking >= 0) && (mode != usetup.override_multitasking))
+    if ((usetup.Override.Multitasking >= 0) && (mode != usetup.Override.Multitasking))
     {
         Debug::Printf("SetMultitasking: overridden by user config: %d -> %d",
-            mode, usetup.override_multitasking);
-        mode = usetup.override_multitasking;
+            mode, usetup.Override.Multitasking);
+        mode = usetup.Override.Multitasking;
     }
 
     // Must run on background if debugger is connected
@@ -763,7 +912,7 @@ void RoomProcessClick(int xx,int yy,int mood) {
             yy=thisroom.Hotspots[hsnum].WalkTo.Y;
             debug_script_log("Move to walk-to point hotspot %d", hsnum);
         }
-        walk_character(game.playercharacter,xx,yy,0, true);
+        walk_character(playerchar, xx, yy, false /* walk areas */);
         return;
     }
     play.usedmode=mood;
@@ -829,14 +978,12 @@ void GetMessageText (int msg, char *buffer) {
 }
 
 void SetSpeechFont (int fontnum) {
-    if ((fontnum < 0) || (fontnum >= game.numfonts))
-        quit("!SetSpeechFont: invalid font number.");
+    fontnum = ValidateFontNumber("SetSpeechFont", fontnum);
     play.speech_font = fontnum;
 }
 
 void SetNormalFont (int fontnum) {
-    if ((fontnum < 0) || (fontnum >= game.numfonts))
-        quit("!SetNormalFont: invalid font number.");
+    fontnum = ValidateFontNumber("SetNormalFont", fontnum);
     play.normal_font = fontnum;
 }
 
@@ -870,7 +1017,16 @@ int WaitImpl(int skip_type, int nloops)
     if (play.fast_forward && ((skip_type & ~SKIP_AUTOTIMER) != 0))
         return 0;
 
-    play.wait_counter = nloops;
+    // < 3.6.0 treated negative nloops as "no time";
+    // also old engine let nloops to overflow into neg when assigned to wait_counter...
+    if (game.options[OPT_BASESCRIPTAPI] < kScriptAPI_v360)
+    {
+        if (nloops < 0 || nloops > INT16_MAX)
+            nloops = 0;
+    }
+
+    // clamp to int16
+    play.wait_counter = static_cast<int16_t>(Math::Clamp<int>(nloops, -1, INT16_MAX));
     play.wait_skipped_by = SKIP_NONE;
     play.wait_skipped_by_data = 0;
     play.key_skip_wait = skip_type;
@@ -879,7 +1035,7 @@ int WaitImpl(int skip_type, int nloops)
 
     if (game.options[OPT_BASESCRIPTAPI] < kScriptAPI_v360)
     {
-        // < 3.6.0 return 1 is skipped by user input, otherwise 0
+        // < 3.6.0 return 1 if skipped by user input, otherwise 0
         return ((play.wait_skipped_by & (SKIP_KEYPRESS | SKIP_MOUSECLICK)) != 0) ? 1 : 0;
     }
     // >= 3.6.0 return skip (input) type flags with keycode

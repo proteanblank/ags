@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <stdio.h>
@@ -45,17 +45,17 @@ int Label_GetTextAlignment(GUILabel *labl)
 {
     return (loaded_game_file_version >= kGameVersion_350) ?
         labl->TextAlignment :
-        GetLegacyGUIAlignment(labl->TextAlignment);
+        GetLegacyGUIAlignment((HorAlignment)labl->TextAlignment);
 }
 
 void Label_SetTextAlignment(GUILabel *labl, int align)
 {
     // NOTE: some custom engines supported Label.TextAlignment
     // before 3.5.0 got this added officially
-    HorAlignment use_align =
+    FrameAlignment use_align =
         (loaded_game_file_version >= kGameVersion_350) ?
-        (HorAlignment)align :
-        ConvertLegacyGUIAlignment((LegacyGUIAlignment)align);
+        (FrameAlignment)align :
+        (FrameAlignment)ConvertLegacyGUIAlignment((LegacyGUIAlignment)align);
     if (labl->TextAlignment != use_align)
     {
         labl->TextAlignment = use_align;
@@ -79,8 +79,7 @@ int Label_GetFont(GUILabel *labl) {
 }
 
 void Label_SetFont(GUILabel *guil, int fontnum) {
-    if ((fontnum < 0) || (fontnum >= game.numfonts))
-        quit("!SetLabelFont: invalid font number.");
+    fontnum = ValidateFontNumber("Label.Font", fontnum);
 
     if (fontnum != guil->Font) {
         guil->Font = fontnum;
@@ -98,8 +97,6 @@ void Label_SetFont(GUILabel *guil, int fontnum) {
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 // void (GUILabel *labl, char *buffer)
 RuntimeScriptValue Sc_Label_GetText(void *self, const RuntimeScriptValue *params, int32_t param_count)

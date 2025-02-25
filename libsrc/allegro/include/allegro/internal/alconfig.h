@@ -31,7 +31,7 @@
 #elif defined(_MSC_VER)
    #define ALLEGRO_MSVC
 #elif defined(__APPLE__)
-   #include "TargetConditionals.h"
+   #include <TargetConditionals.h>
    #ifndef TARGET_OS_SIMULATOR
       #define TARGET_OS_SIMULATOR (0)
    #endif
@@ -55,6 +55,9 @@
    #define ALLEGRO_UNIX
 #elif defined(__FreeBSD__)
     #define ALLEGRO_UNIX
+#elif defined(__MINGW32__)
+    #define ALLEGRO_MINGW
+    #define ALLEGRO_WINDOWS
 #endif
 
 
@@ -62,6 +65,8 @@
 #ifndef SCAN_EXPORT
    #if defined ALLEGRO_MSVC
       #include "allegro/platform/almsvc.h"
+   #elif defined ALLEGRO_MINGW
+      #include "allegro/platform/alucfg.h"
    #elif defined ALLEGRO_MACOSX
       #include "allegro/platform/alosxcfg.h"
    #elif defined ALLEGRO_UNIX

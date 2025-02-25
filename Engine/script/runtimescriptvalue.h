@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -30,6 +30,8 @@ enum ScriptValueType
     kScValFloat,        // as float (for floating point math), 32-bit
     kScValPluginArg,    // an 32-bit value, passed to a script function when called
                         // directly by plugin; is allowed to represent object pointer
+    kScValPluginArgPtr, // a *presumably* pointer value, passed to a script function
+                        // when called directly by plugin; does not include MgrPtr
     kScValStackPtr,     // as a pointer to stack entry
     kScValData,         // as a container for randomly sized data (usually array)
     kScValGlobalVar,    // as a pointer to script variable; used only for global vars,
@@ -92,9 +94,9 @@ public:
     // Once those classes are merged, it will no longer be needed.
     union
     {
-        void                *MgrPtr;// generic object manager pointer
-        IScriptObject    *ObjMgr;// script object manager
-        CCStaticArray       *ArrMgr;// static array manager
+        void             *MgrPtr; // generic object manager pointer
+        IScriptObject    *ObjMgr; // script object manager
+        CCStaticArray    *ArrMgr; // static array manager
     };
     // The "real" size of data, either one stored in I/FValue,
     // or the one referenced by Ptr. Used for calculating stack
@@ -192,6 +194,31 @@ public:
         MgrPtr  = nullptr;
         Size    = 4;
         return *this;
+    }
+
+    inline RuntimeScriptValue &SetPluginArgPtr(void *ptr)
+    {
+        Type = kScValPluginArgPtr;
+        IValue = 0;
+        Ptr = ptr;
+        MgrPtr = nullptr;
+        Size = 4;
+        return *this;
+    }
+
+    // SetPluginArgOrPtr - is a hack that tries to deduce whether the
+    // argument *may be a pointer* in a 64-bit enviroment.
+    // If value's occupied bits fit within a 32-bit integer, then assigns
+    // a kScValPluginArg, if they exceed 32-bits, then assigns kScValPluginArgPtr.
+    inline RuntimeScriptValue &SetPluginArgOrPtr(intptr_t val)
+    {
+#if (AGS_PLATFORM_64BIT)
+        if ((val & 0xFFFFFFFF00000000) != 0)
+        {
+            return SetPluginArgPtr(reinterpret_cast<void*>(val));
+        }
+#endif
+        return SetPluginArgument(static_cast<int32_t>(val));
     }
 
     inline RuntimeScriptValue &SetStackPtr(RuntimeScriptValue *stack_entry)
@@ -365,9 +392,15 @@ public:
         }
         case kScValStaticArray:
         case kScValScriptObject:
+        case kScValPluginObject:
             return RuntimeScriptValue().SetInt32(this->ObjMgr->ReadInt32(this->Ptr, this->IValue));
-        default:
+        case kScValPluginArg:
+        case kScValData:
+        case kScValStringLiteral:
             return RuntimeScriptValue().SetInt32(*(int32_t*)this->GetPtrWithOffset());
+        default:
+            assert(false);
+            return {};
         }
     }
 
@@ -417,15 +450,18 @@ public:
         }
         case kScValStaticArray:
         case kScValScriptObject:
+        case kScValPluginObject:
         {
             this->ObjMgr->WriteInt32(this->Ptr, this->IValue, rval.IValue);
             break;
         }
-        default:
-        {
+        case kScValPluginArg:
+        case kScValData:
             *((int32_t*)this->GetPtrWithOffset()) = rval.IValue;
             break;
-        }
+        default:
+            assert(false);
+            break;
         }
     }
 
@@ -447,7 +483,7 @@ public:
     // tell for certain that we are expecting a pointer to the object and not its (first) field.
     RuntimeScriptValue &DirectPtrObj();
     // Resolve and return direct pointer to the referenced data; non pointer types return IValue
-    intptr_t           GetDirectPtr() const;
+    void *      GetDirectPtr() const;
 };
 
 #endif // __AGS_EE_SCRIPT__RUNTIMESCRIPTVALUE_H

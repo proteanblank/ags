@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AGS_EE_CC__SCRIPTRUNTIME_H
@@ -96,7 +96,11 @@ void ccSetDebugHook(new_line_hook_type jibble);
 void ccSetScriptAliveTimer(unsigned sys_poll_timeout, unsigned abort_timeout, unsigned abort_loops);
 // reset the current while loop counter
 void ccNotifyScriptStillAlive();
-// for calling exported plugin functions old-style
-int call_function(intptr_t addr, const RuntimeScriptValue *object, int numparm, const RuntimeScriptValue *parms);
+
+// Symbols registered for scripts
+extern SystemImports simp;
+// This is to register symbols exclusively for plugins, to allow them
+// perform old style unsafe function calls
+extern SystemImports simp_for_plugin;
 
 #endif // __AGS_EE_CC__SCRIPTRUNTIME_H

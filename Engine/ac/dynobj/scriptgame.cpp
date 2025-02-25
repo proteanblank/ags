@@ -2,29 +2,31 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/dynobj/scriptgame.h"
 #include "ac/gamesetupstruct.h"
 #include "ac/game.h"
+#include "ac/gamesetup.h"
 #include "ac/gamestate.h"
-#include "gui/guimain.h"
+#include "ac/gui.h"
+#include "debug/debug_log.h"
 #include "script/cc_common.h" // cc_error
 
-using namespace AGS::Common;
+using namespace AGS::Engine;
 
 extern GameSetupStruct game;
 CCScriptGame GameStaticManager;
 
 
-int32_t CCScriptGame::ReadInt32(void *address, intptr_t offset)
+int32_t CCScriptGame::ReadInt32(const void *address, intptr_t offset)
 {
     const int index = offset / sizeof(int32_t);
     if (index >= 5 && index < 5 + MAXGLOBALVARS)
@@ -139,14 +141,17 @@ void CCScriptGame::WriteInt32(void *address, intptr_t offset, int32_t val)
     case 56:  play.usedinv = val; break;
     case 57:
         play.inv_top = val;
-        GUI::MarkInventoryForUpdate(game.playercharacter, true);
+        GUIE::MarkInventoryForUpdate(game.playercharacter, true);
         break;
     case 58:  // play.inv_numdisp
     case 59:  // play.inv_numorder
     case 60:  // play.inv_numinline
-        cc_error("ScriptGame: attempt to write readonly variable at offset %d", offset);
+        debug_script_warn("ScriptGame: attempt to write in readonly variable at offset %d, value %d", offset, val);
         break;
-    case 61:  play.text_speed = val; break;
+    case 61:  
+        if (usetup.Access.TextReadSpeed <= 0)
+            play.text_speed = val;
+        break;
     case 62:  play.sierra_inv_color = val; break;
     case 63:  play.talkanim_speed = val; break;
     case 64:  play.inv_item_wid = val; break;
@@ -156,7 +161,10 @@ void CCScriptGame::WriteInt32(void *address, intptr_t offset, int32_t val)
     case 68:  play.speech_textwindow_gui = val; break;
     case 69:  play.follow_change_room_timer = val; break;
     case 70:  play.totalscore = val; break;
-    case 71:  play.skip_display = val; break;
+    case 71:
+        if (usetup.Access.TextSkipStyle == kSkipSpeechNone)
+            play.skip_display = static_cast<SkipSpeechStyle>(val);
+        break;
     case 72:  play.no_multiloop_repeat = val; break;
     case 73:  play.roomscript_finished = val; break;
     case 74:  play.used_inv_on = val; break;
@@ -172,7 +180,7 @@ void CCScriptGame::WriteInt32(void *address, intptr_t offset, int32_t val)
     case 84: // play.fast_forward;
     case 85: // play.room_width;
     case 86: // play.room_height;
-        cc_error("ScriptGame: attempt to write readonly variable at offset %d", offset);
+        debug_script_warn("ScriptGame: attempt to write in readonly variable at offset %d, value %d", offset, val);
         break;
     case 87:  play.game_speed_modifier = val; break;
     case 88:  play.score_sound = val; break;
@@ -207,7 +215,7 @@ void CCScriptGame::WriteInt32(void *address, intptr_t offset, int32_t val)
     case 117: // play.fade_to_red;
     case 118: // play.fade_to_green;
     case 119: // play.fade_to_blue;
-        cc_error("ScriptGame: attempt to write readonly variable at offset %d", offset);
+        debug_script_warn("ScriptGame: attempt to write in readonly variable at offset %d, value %d", offset, val);
         break;
     case 120:  play.show_single_dialog_option = val; break;
     case 121:  play.keep_screen_during_instant_transition = val; break;

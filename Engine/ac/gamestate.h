@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_GAMESTATE_H
@@ -47,21 +47,50 @@ struct ScriptViewport;
 struct ScriptCamera;
 struct ScriptOverlay;
 
+#define MAX_GAME_STATE_NAME_LENGTH 100
 #define GAME_STATE_RESERVED_INTS 5
+#define LEGACY_GAMESTATE_GAMENAMELENGTH 100
+// This is a length limit for serialized field,
+// not actual api input argument
+#define PLAYMP3FILE_MAX_FILENAME_LEN 50
 
 // Savegame data format
 enum GameStateSvgVersion
 {
-    kGSSvgVersion_OldFormat = -1, // TODO: remove after old save support is dropped
     kGSSvgVersion_Initial   = 0,
     kGSSvgVersion_350       = 1,
     kGSSvgVersion_350_9     = 2,
     kGSSvgVersion_350_10    = 3,
+    kGSSvgVersion_361_14    = 4,
+};
+
+
+// A GameState is a parent class for the game states.
+class GameState
+{
+public:
+    virtual ~GameState() = default;
+
+    // Begin the state, initialize and prepare any resources
+    virtual void Begin() = 0;
+    // End the state, does final actions, releases all resources
+    virtual void End() = 0;
+    // Draw the state
+    virtual void Draw() = 0;
+    // Update the state during a game tick;
+    // returns whether should continue to run state loop, or stop
+    virtual bool Run() = 0;
+
+    // Pause the state, makes sure that all related timers, threads etc
+    // are also paused, avoiding any unexpected updates
+    virtual void Pause() { /* do nothing */ };
+    // Resume the state after pausing
+    virtual void Resume() { /* do nothing */ };
 };
 
 
 // Runtime game state
-struct GameState
+struct GamePlayState
 {
     // WARNING: following is a part of the script and plugin API
     // (until further notice)
@@ -89,13 +118,13 @@ struct GameState
     int  speech_textwindow_gui = 0;      // textwindow used for sierra-style speech
     int  follow_change_room_timer = 0;   // delay before moving following characters into new room
     int  totalscore = 0;        // maximum possible score
-    int  skip_display = 0;      // how the user can skip normal Display windows
+    SkipSpeechStyle skip_display = kSkipSpeechKeyMouse; // how the user can skip normal Display windows
     int  no_multiloop_repeat = 0; // for backwards compatibility
     int  roomscript_finished = 0; // on_call finished in room
     int  used_inv_on = 0;       // inv item they clicked on
     int  no_textbg_when_voice = 0; // no textwindow bgrnd when voice speech is used
     int  max_dialogoption_width = 0; // max width of dialog options text window
-    int  no_hicolor_fadein = 0; // fade out but instant in for hi-color
+    int  no_hicolor_fadein = 0; // (DEPRECATED, lo-end optimization) fade out but instant in for hi-color
     int  bgspeech_game_speed = 0; // is background speech relative to game speed
     int  bgspeech_stay_on_display = 0; // whether to remove bg speech when DisplaySpeech is used
     int  unfactor_speech_from_textlength = 0; // remove "&10" when calculating time for text to stay
@@ -144,6 +173,10 @@ struct GameState
     int  show_single_dialog_option = 0;
     int  keep_screen_during_instant_transition = 0;
     int  read_dialog_option_colour = 0;
+    // stop_dialog_at_end - special value that is not supposed to be used in user script,
+    // but used in a generated dialogscript (when converted from dialog script slang)
+    // to tell how to proceed after "run-script" command ("dialog_request" callback).
+    // if non-0 - means that we are inside "dialog_request" callback.
     int  stop_dialog_at_end = 0;
     int  speech_portrait_placement = 0; // speech portrait placement mode (automatic/custom)
     int  speech_portrait_x = 0; // a speech portrait x offset from corresponding screen side
@@ -164,10 +197,8 @@ struct GameState
     short wait_counter = 0;
     char  wait_skipped_by = 0; // tells how last blocking wait was skipped [not serialized]
     int   wait_skipped_by_data = 0; // extended data telling how last blocking wait was skipped [not serialized]
-    short mboundx1 = 0;
-    short mboundx2 = 0;
-    short mboundy1 = 0;
-    short mboundy2 = 0;
+    SkipSpeechStyle skip_timed_display = kSkipSpeechKeyMouseTime; // how the timed room messages may be skipped (see MSG_TIMELIMIT) [not serialized]
+    Rect  mbounds; // mouse cursor bounds
     int   fade_effect = 0;
     int   bg_frame_locked = 0;
     int   globalscriptvars[MAXGSVALUES]{};
@@ -175,19 +206,21 @@ struct GameState
     int   music_repeat = 0;
     int   music_master_volume = 0;
     int   digital_master_volume = 0;
-    char  walkable_areas_on[MAX_WALK_AREAS + 1]{};
+    char  walkable_areas_on[MAX_WALK_AREAS]{};
     short screen_flipped = 0;
+    bool  enable_antialiasing = false; // enable sprite AA (linear) scaling
     int   entered_at_x = 0;
     int   entered_at_y = 0;
     int   entered_edge = 0;
     bool  voice_avail = false; // whether voice-over is available
     SpeechMode speech_mode = kSpeech_TextOnly; // speech mode (text, voice, or both)
-    int   cant_skip_speech = 0;
+    int   speech_skip_style = 0; // stores SKIP_* flags
     int   script_timers[MAX_TIMERS]{};
     int   sound_volume = 0;
     int   speech_volume = 0;
     int   normal_font = 0;
     int   speech_font = 0;
+    int   std_gui_textheight = 0; // text height for built-in gui dialogs (TODO: use font setting instead)
     char  key_skip_wait = 0;
     int   swap_portrait_lastchar = 0;
     int   swap_portrait_lastlastchar = 0;
@@ -196,11 +229,11 @@ struct GameState
     int   screen_tint = 0;
     int   num_parsed_words = 0;
     short parsed_words[MAX_PARSED_WORDS]{};
-    char  bad_parsed_word[100]{};
+    Common::String bad_parsed_word;
     int   raw_color = 0;
     int   raw_modified[MAX_ROOM_BGFRAMES]{};
     Common::PBitmap raw_drawing_surface;
-    short filenumbers[MAXSAVEGAMES]{};
+    int16_t filenumbers[LEGACY_MAXSAVEGAMES]{};
     int   room_changes = 0;
     int   mouse_cursor_hidden = 0;
     int   silent_midi = 0;
@@ -233,10 +266,11 @@ struct GameState
     short crossfade_final_volume_in = 0;
     QueuedAudioItem new_music_queue[MAX_QUEUED_MUSIC]{};
     char  takeover_from[50]{};
-    char  playmp3file_name[PLAYMP3FILE_MAX_FILENAME_LEN]{};
+    // Currently played external file; this is only for reference
+    AGS::Common::String playmp3file_name;
     char  globalstrings[MAXGLOBALSTRINGS][MAX_MAXSTRLEN]{};
     char  lastParserEntry[MAX_MAXSTRLEN]{};
-    char  game_name[100]{};
+    AGS::Common::String game_name;
     int   ground_level_areas_disabled = 0;
     int   next_screen_transition = 0;
     int   gamma_adjustment = 0;
@@ -266,6 +300,8 @@ struct GameState
 
     // Special overlays
     //
+    // Total number of existing overlays, only for the reference
+    int  overlay_count = 0;
     // Is there a QFG4-style dialog overlay on screen (contains overlay ID)
     int  complete_overlay_on = 0;
     // Is there a blocking text overlay on screen (contains overlay ID)
@@ -277,10 +313,11 @@ struct GameState
     // Speech portrait overlay managed handle
     int  speech_face_schandle = 0;
 
-    int shake_screen_yoff = 0; // y offset of the shaking screen
+    // y offset of the shaking screen
+    int shake_screen_yoff = 0;
 
 
-    GameState();
+    GamePlayState();
 
     //
     // Viewport and camera control.
@@ -361,6 +398,9 @@ struct GameState
     // because script interpreter does this when acquiring managed pointer.
     ScriptCamera *GetScriptCamera(int index);
 
+    // Tells if engine should apply AA (linear) scaling to the game sprites
+    bool ShouldAASprites() const { return enable_antialiasing && (disable_antialiasing == 0); }
+
     //
     // User input management
     //
@@ -398,9 +438,6 @@ struct GameState
     //
     // Serialization
     //
-    void ReadQueuedAudioItems_Aligned(Common::Stream *in);
-    void ReadCustomProperties_v340(Common::Stream *in, GameDataVersion data_ver);
-    void WriteCustomProperties_v340(Common::Stream *out, GameDataVersion data_ver) const;
     void ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, GameStateSvgVersion svg_ver, AGS::Engine::RestoredData &r_data);
     void WriteForSavegame(Common::Stream *out) const;
     // This is required for freeing only particular parts when restoring the game;
@@ -447,7 +484,7 @@ HorAlignment ConvertLegacyScriptAlignment(LegacyScriptAlignment align);
 // Alignment constants in the Script API and still support old version.
 HorAlignment ReadScriptAlignment(int32_t align);
 
-extern GameState play;
+extern GamePlayState play;
 extern std::vector<CharacterExtras> charextra;
 extern std::vector<MoveList> mls;
 

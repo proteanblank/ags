@@ -32,8 +32,6 @@ namespace AGS.Types
         private int _rightEdgeX;
         private int _topEdgeY;
         private int _bottomEdgeY;
-        private int _playMusicOnRoomLoad;
-        private bool _saveLoadEnabled = true;
         private bool _showPlayerCharacter = true;
         private int _playerCharacterView;
         private RoomVolumeAdjustment _musicVolumeAdjustment;
@@ -47,7 +45,7 @@ namespace AGS.Types
         private int _backgroundCount;
         private int _gameId;
         private bool _modified;
-        private CustomProperties _properties = new CustomProperties();
+        private CustomProperties _properties = new CustomProperties(CustomPropertyAppliesTo.Rooms);
         private Interactions _interactions = new Interactions(_interactionSchema);
         private IList<RoomMessage> _messages = new List<RoomMessage>();
         private IList<RoomObject> _objects = new List<RoomObject>();
@@ -60,7 +58,9 @@ namespace AGS.Types
 
         static Room()
         {
-            _interactionSchema = new InteractionSchema(new string[] {
+            _interactionSchema = new InteractionSchema(
+                string.Empty, true,
+                new string[] {
                 "Walks off left edge",
                 "Walks off right edge",
                 "Walks off bottom edge",
@@ -287,7 +287,7 @@ namespace AGS.Types
         [Browsable(false)]
         public string PropertyGridTitle
         {
-            get { return _description + " (Room; number " + _number + ")"; }
+            get { return $"{_description} (Room; number {_number})"; }
         }
 
         [Description("The speed at which the backgrounds will rotate (only applicable if you have imported more than one)")]
@@ -308,19 +308,15 @@ namespace AGS.Types
             set { _backgroundAnimEnabled = value; }
         }
 
+        [Obsolete]
         [Browsable(false)]
-        public int PlayMusicOnRoomLoad
-        {
-            get { return _playMusicOnRoomLoad; }
-            set { _playMusicOnRoomLoad = value; }
-        }
+        // NOTE: have to keep setter here because we load old rooms before upgrading them
+        public int PlayMusicOnRoomLoad { get; set; }
 
+        [Obsolete]
         [Browsable(false)]
-        public bool SaveLoadEnabled
-        {
-            get { return _saveLoadEnabled; }
-            set { _saveLoadEnabled = value; }
-        }
+        // NOTE: have to keep setter here because we load old rooms before upgrading them
+        public bool SaveLoadEnabled { get; set; }
 
         [Description("Whether the player character is visible on this screen")]
         [DefaultValue(true)]
@@ -385,12 +381,14 @@ namespace AGS.Types
 
         [AGSSerializeClass()]
         [Description("Custom properties for this room")]
-        [Category("Properties")]
-        [EditorAttribute(typeof(CustomPropertiesUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
         public CustomProperties Properties
         {
             get { return _properties; }
-            protected set { _properties = value; }
+            protected set 
+            {
+                _properties = value;
+                _properties.AppliesTo = CustomPropertyAppliesTo.Rooms;
+            }
         }
 
         [AGSNoSerialize()]

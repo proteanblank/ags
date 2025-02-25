@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -26,41 +26,39 @@
 using namespace AGS::Common;
 
 extern GameSetupStruct game;
-extern GameState play;
 
-ScriptPosition last_in_dialog_request_script_pos;
-void RunDialog(int tum) {
+void RunDialog(int tum)
+{
     if ((tum<0) | (tum>=game.numdialog))
         quit("!RunDialog: invalid topic number specified");
 
     can_run_delayed_command();
 
-    if (play.stop_dialog_at_end != DIALOG_NONE) {
-        if (play.stop_dialog_at_end == DIALOG_RUNNING)
-            play.stop_dialog_at_end = DIALOG_NEWTOPIC + tum;
-        else
-            quitprintf("!RunDialog: two NewRoom/RunDialog/StopDialog requests within dialog; last was called in \"%s\", line %d",
-                        last_in_dialog_request_script_pos.Section.GetCStr(), last_in_dialog_request_script_pos.Line);
-        return;
-    }
-
-    get_script_position(last_in_dialog_request_script_pos);
+    if (handle_state_change_in_dialog_request("RunDialog", DIALOG_NEWTOPIC + tum))
+        return; // handled
 
     if (inside_script) 
-        curscript->queue_action(ePSARunDialog, tum, "RunDialog");
+        get_executingscript()->QueueAction(PostScriptAction(ePSARunDialog, tum, "RunDialog"));
     else
         do_conversation(tum);
 }
 
+void StopDialog()
+{
+    // NOTE: dialog options may be displayed with Dialog.DisplayOptions() too
+    if (!is_in_dialog() && !is_in_dialogoptions())
+    {
+        debug_script_log("StopDialog: not currently in dialog, nor dialog options are displayed, ignored");
+        return;
+    }
 
-void StopDialog() {
-  if (play.stop_dialog_at_end == DIALOG_NONE) {
-    debug_script_warn("StopDialog called, but was not in a dialog");
-    debug_script_log("StopDialog called but no dialog");
-    return;
-  }
-  get_script_position(last_in_dialog_request_script_pos);
-  play.stop_dialog_at_end = DIALOG_STOP;
+    if (handle_state_change_in_dialog_request("StopDialog", DIALOG_STOP))
+        return; // handled
+
+    if (inside_script && get_can_run_delayed_command())
+        get_executingscript()->QueueAction(PostScriptAction(ePSAStopDialog, 0, "StopDialog"));
+    else
+        schedule_dialog_stop();
 }
 
 void SetDialogOption(int dlg, int opt, int onoroff, bool dlg_script)

@@ -10,6 +10,7 @@ namespace AGS.Types
 	public class RoomObject : IComparable<RoomObject>, IChangeNotification, ICustomTypeDescriptor
     {
 		public const string PROPERTY_NAME_SCRIPT_NAME = "Name";
+        public const string PROPERTY_NAME_DESCRIPTION = "Description";
 
         private static InteractionSchema _interactionSchema;
 
@@ -25,18 +26,19 @@ namespace AGS.Types
         private string _description = string.Empty;
         private bool _useRoomAreaScaling;
         private bool _useRoomAreaLighting;
-        private CustomProperties _properties = new CustomProperties();
+        private CustomProperties _properties = new CustomProperties(CustomPropertyAppliesTo.Objects);
         private Interactions _interactions = new Interactions(_interactionSchema);
 		private IChangeNotification _notifyOfModification;
 
         static RoomObject()
         {
-            _interactionSchema = new InteractionSchema(new string[] {"$$01 object",
+            _interactionSchema = new InteractionSchema(string.Empty, true,
+                new string[] {"$$01 object",
                 "$$02 object", "$$03 object",  "Use inventory on object", 
                 "Any click on object", 
                 "$$05 object", "$$08 object", "$$09 object"},
                 new string[] { "Look", "Interact", "Talk", "UseInv", "AnyClick", "PickUp", "Mode8", "Mode9" },
-                "Object *o, CursorMode mode");
+                "Object *theObject, CursorMode mode");
         }
 
 		public RoomObject(IChangeNotification changeNotifier)
@@ -164,17 +166,19 @@ namespace AGS.Types
         [Browsable(false)]
         public string PropertyGridTitle
         {
-            get { return _name + " (Object; ID " + _id + ")"; }
+            get { return TypesHelper.MakePropertyGridTitle("Object", _name, _description, _id); }
         }
 
         [AGSSerializeClass()]
         [Description("Custom properties for this object")]
-        [Category("Properties")]
-        [EditorAttribute(typeof(CustomPropertiesUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
         public CustomProperties Properties
         {
             get { return _properties; }
-            protected set { _properties = value; }
+            protected set
+            {
+                _properties = value;
+                _properties.AppliesTo = CustomPropertyAppliesTo.Objects;
+            }
         }
 
         [AGSNoSerialize()]

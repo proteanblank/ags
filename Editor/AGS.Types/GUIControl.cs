@@ -42,9 +42,19 @@ namespace AGS.Types
         private bool _visible = true;
         private bool _translated = true;
 
-        [AGSNoSerialize]
+        [NonSerialized]
+        private GUI _parent;
+        [NonSerialized]
         private GUIControlGroup _memberOf;
-        
+
+        [Browsable(false)]
+        [AGSNoSerialize]
+        public GUI Parent
+        {
+            get { return _parent; }
+            set { _parent = value; }
+        }
+
         [Browsable(false)]
         [AGSNoSerialize]
         public GUIControlGroup MemberOf
@@ -172,6 +182,12 @@ namespace AGS.Types
         public abstract string ControlType { get; }
         [Browsable(false)]
         public abstract string ScriptClassType { get; }
+
+        [Browsable(false)]
+        public string PropertyGridTitle
+        {
+            get { return TypesHelper.MakePropertyGridTitle(ControlType, _name, _id); }
+        }
 
         /// <summary>
         /// Gets a list of all sprites used by this control. Useful for

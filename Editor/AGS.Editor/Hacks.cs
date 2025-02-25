@@ -18,6 +18,9 @@ namespace AGS.Editor
         private const int EM_REPLACESEL = 0x00C2;
         private const int EM_GETSCROLLPOS = WM_USER + 221;
         private const int EM_SETSCROLLPOS = WM_USER + 222;
+        private const int EM_SETMARGINS = 0xD3;
+        private const int EC_LEFTMARGIN = 0x1;
+        private const int EC_RIGHTMARGIN = 0x2;
         // TreeView messages
         private const int TV_FIRST = 0x1100;
         private const int TVM_GETEDITCONTROL = (TV_FIRST + 15);
@@ -89,6 +92,14 @@ namespace AGS.Editor
             Marshal.FreeHGlobal(strPtr);
         }
 
+        /// <summary>
+        /// Sets RichTextBox's margins
+        /// </summary>
+        public static void SetRichTextBoxMargins(this RichTextBox rtb, int left, int right)
+        {
+            SendMessage(rtb.Handle, EM_SETMARGINS, (EC_LEFTMARGIN | EC_RIGHTMARGIN), (IntPtr)(right * 0x10000 + left));
+        }
+
         // Hack to get around the fact that the BeforeLabelEdit event provides no way to
         // let you change the text they're about to edit
         public static void SetTreeViewEditText(TreeView tree, string myText)
@@ -112,6 +123,56 @@ namespace AGS.Editor
             ToolStripButton viewTabButton = viewTabButtons[selectedTabIndex];
 
             propGrid.GetType().InvokeMember("OnViewTabButtonClick", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.InvokeMethod, null, propGrid, new object[] { viewTabButton, EventArgs.Empty });
+        }
+
+        // Using explorer through the process interface opens a new window, this allows to keep an existing window and highlight a file in it
+        // Taken from SO, with slight adjustments, from here https://stackoverflow.com/a/72200643
+        [DllImport("shell32.dll", SetLastError = true)]
+        public static extern int SHOpenFolderAndSelectItems(IntPtr pidlFolder, uint cidl, [In, MarshalAs(UnmanagedType.LPArray)] IntPtr[] apidl, uint dwFlags);
+
+        [DllImport("shell32.dll", SetLastError = true)]
+        public static extern void SHParseDisplayName([MarshalAs(UnmanagedType.LPWStr)] string name, IntPtr bindingContext, [Out] out IntPtr pidl, uint sfgaoIn, [Out] out uint psfgaoOut);
+
+        public static void ShowInExplorer(string filePath)
+        {
+            ShowInExplorer(System.IO.Path.GetDirectoryName(filePath), System.IO.Path.GetFileName(filePath));
+        }
+        public static void ShowInExplorer(string folderPath, string file)
+        {
+            IntPtr nativeFolder;
+            uint psfgaoOut;
+            SHParseDisplayName(folderPath, IntPtr.Zero, out nativeFolder, 0, out psfgaoOut);
+
+            if (nativeFolder == IntPtr.Zero)
+            {
+                // can't find folder
+                return;
+            }
+
+            IntPtr nativeFile = IntPtr.Zero;
+            if (!string.IsNullOrEmpty(file))
+            {
+                SHParseDisplayName(System.IO.Path.Combine(folderPath, file), IntPtr.Zero, out nativeFile, 0, out psfgaoOut);
+            }
+
+            IntPtr[] fileArray;
+            if (nativeFile == IntPtr.Zero)
+            {
+                // Open the folder without the file selected if we can't find the file
+                fileArray = new IntPtr[] { nativeFolder };
+            }
+            else
+            {
+                fileArray = new IntPtr[] { nativeFile };
+            }
+
+            SHOpenFolderAndSelectItems(nativeFolder, (uint)fileArray.Length, fileArray, 0);
+
+            Marshal.FreeCoTaskMem(nativeFolder);
+            if (nativeFile != IntPtr.Zero)
+            {
+                Marshal.FreeCoTaskMem(nativeFile);
+            }
         }
     }
 }

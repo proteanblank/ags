@@ -52,6 +52,7 @@ namespace AGS.Editor
                         scintilla.CallTipFont = _settings.ScriptTipFont;
                         scintilla.CallTipFontSize = _settings.ScriptTipFontSize;
                         scintilla.UpdateAllStyles();
+                        scintilla.ToggleLineCommentAddsSpace = _settings.ToggleLineCommentAddsSpace;
                     }
                 }
             }
@@ -158,6 +159,7 @@ namespace AGS.Editor
 
             Factory.AGSEditor.Settings.Apply(_settings);
             UpdateFontSettings();
+            Factory.GUIController.ShowTabIcons = Factory.AGSEditor.Settings.ShowIconInTab;
         }
 
         private void btnApply_Click(object sender, EventArgs e)

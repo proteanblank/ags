@@ -2,25 +2,27 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AGS_EE_MAIN__ENGINE_H
 #define __AGS_EE_MAIN__ENGINE_H
 
 #include "util/ini_util.h"
+#include "util/error.h"
 
 const char *get_engine_name();
 const char *get_engine_version();
 AGS::Common::String get_engine_version_and_build();
 void        show_preload();
 void        engine_init_game_settings();
+AGS::Common::HError engine_init_sprites();
 int         initialize_engine(const AGS::Common::ConfigTree &startup_opts);
 
 struct DisplayModeSetup;
@@ -53,11 +55,10 @@ struct ResourcePaths
     PackLocation SpeechPak;  // voice-over package
     String       DataDir;    // path to the data directory
     bool         VoiceAvail = false; // tells whether voice files available in either location
-    // NOTE: optional directories are currently only for compatibility with Editor (game test runs)
-    // This is bit ugly, but remain so until more flexible configuration is designed
-    String       DataDir2;   // optional data directory
-    String       AudioDir2;  // optional audio directory
-    String       VoiceDir2;  // optional voice-over directory (base)
+    // Optional directories are represented by pairs of "path" and "filter".
+    // Currently are only set for compatibility with Editor (game test runs from IDE),
+    // see "--runfromide" command line arg.
+    std::vector<std::pair<String, String>> OptDataDirs; // optional data directories
     String       VoiceDirSub;// full voice-over directory with optional sub-dir
 };
 extern ResourcePaths ResPaths;

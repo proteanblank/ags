@@ -2,19 +2,20 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_TTFFONTRENDERER_H
 #define __AC_TTFFONTRENDERER_H
 
 #include <map>
+#include "core/assetmanager.h"
 #include "font/agsfontrenderer.h"
 #include "util/string.h"
 
@@ -41,27 +42,33 @@ public:
 
   // IAGSFontRendererInternal implementation
   bool IsBitmapFont() override;
-  bool LoadFromDiskEx(int fontNumber, int fontSize, const FontRenderParams *params,
-      FontMetrics *metrics) override;
+  bool LoadFromDiskEx(int fontNumber, int fontSize, AGS::Common::String *src_filename,
+      const FontRenderParams *params, FontMetrics *metrics) override;
   void GetFontMetrics(int fontNumber, FontMetrics *metrics) override;
   void AdjustFontForAntiAlias(int fontNumber, bool aa_mode) override;
+
+  TTFFontRenderer(AGS::Common::AssetManager *amgr);
+  virtual ~TTFFontRenderer();
 
   //
   // Utility functions
   //
   // Try load the TTF font using provided point size, and report its metrics
-  static bool MeasureFontOfPointSize(const AGS::Common::String &filename, int size_pt, FontMetrics *metrics);
+  bool MeasureFontOfPointSize(const AGS::Common::String &filename, int size_pt, FontMetrics *metrics);
   // Try load the TTF font, find the point size which results in pixel height
   // as close to the requested as possible; report its metrics
-  static bool MeasureFontOfPixelHeight(const AGS::Common::String &filename, int pixel_height, FontMetrics *metrics);
+  bool MeasureFontOfPixelHeight(const AGS::Common::String &filename, int pixel_height, FontMetrics *metrics);
 
 private:
+    ALFONT_FONT *LoadTTF(const AGS::Common::String &filename, int font_size, int alfont_flags);
+
     struct FontData
     {
         ALFONT_FONT     *AlFont;
         FontRenderParams Params;
     };
     std::map<int, FontData> _fontData;
+    AGS::Common::AssetManager *_amgr = nullptr;
 };
 
 #endif // __AC_TTFFONTRENDERER_H

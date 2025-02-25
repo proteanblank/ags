@@ -2,16 +2,15 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-
 #include "gui/guiinv.h"
 #include "gui/guimain.h"
 #include "ac/draw.h"
@@ -23,7 +22,6 @@
 
 
 extern GameSetupStruct game;
-extern GameState play;
 
 
 namespace AGS
@@ -48,7 +46,7 @@ int GUIInvWindow::GetCharacterId() const
 
 void GUIInvWindow::Draw(Bitmap *ds, int x, int y)
 {
-    const bool enabled = IsGUIEnabled(this);
+    const bool enabled = GUI::IsGUIEnabled(this);
     if (!enabled && (GUI::Options.DisabledStyle == kGuiDis_Blackout))
         return;
 
@@ -90,7 +88,7 @@ void GUIInvWindow::Draw(Bitmap *ds, int x, int y)
         play.inventory_greys_out == 1)
     {
         // darken the inventory when disabled
-        GUI::DrawDisabledEffect(ds, RectWH(x, y, Width, Height));
+        GUI::DrawDisabledEffect(ds, RectWH(x, y, _width, _height));
     }
 }
 

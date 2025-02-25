@@ -2,20 +2,20 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-
 #ifndef __AC_WFNFONTRENDERER_H
 #define __AC_WFNFONTRENDERER_H
 
 #include <map>
+#include "core/assetmanager.h"
 #include "font/agsfontrenderer.h"
 
 class WFNFont;
@@ -41,10 +41,14 @@ public:
 
   // IAGSFontRendererInternal implementation
   bool IsBitmapFont() override;
-  bool LoadFromDiskEx(int fontNumber, int fontSize, const FontRenderParams *params,
-      FontMetrics *metrics) override;
+  bool LoadFromDiskEx(int fontNumber, int fontSize, AGS::Common::String *src_filename,
+      const FontRenderParams *params, FontMetrics *metrics) override;
   void GetFontMetrics(int fontNumber, FontMetrics *metrics) override { *metrics = FontMetrics(); }
   void AdjustFontForAntiAlias(int /*fontNumber*/, bool /*aa_mode*/) override { /* do nothing */}
+
+  WFNFontRenderer(AGS::Common::AssetManager *mgr)
+      : _amgr(mgr) {}
+  virtual ~WFNFontRenderer() = default;
 
 private:
   struct FontData
@@ -53,6 +57,7 @@ private:
     FontRenderParams Params;
   };
   std::map<int, FontData> _fontData;
+  AGS::Common::AssetManager *_amgr = nullptr;
 };
 
 #endif // __AC_WFNFONTRENDERER_H
