@@ -2,29 +2,31 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
 // AGS Runtime header
 //
 //=============================================================================
-
 #ifndef __AGS_EE_AC__GAME_H
 #define __AGS_EE_AC__GAME_H
 
+#include <memory>
+#include "ac/runtime_defines.h"
 #include "ac/dynobj/scriptviewframe.h"
+#include "gfx/bitmap.h"
 #include "main/game_file.h"
 #include "util/string.h"
 
 // Forward declaration
-namespace AGS { namespace Common { class Bitmap; class Stream; } }
+namespace AGS { namespace Common { class AssetManager; class Stream; } }
 using namespace AGS; // FIXME later
 
 #define RAGMODE_PRESERVEGLOBALINT 1
@@ -83,6 +85,13 @@ const char* Game_GetSaveSlotDescription(int slnum);
 
 const char* Game_GetGlobalStrings(int index);
 
+// Various sort parameter validation.
+ScriptFileSortStyle ValidateFileSort(const char *apiname, int file_sort);
+ScriptSaveGameSortStyle ValidateSaveGameSort(const char *apiname, int save_sort);
+ScriptSortDirection ValidateSortDirection(const char *apiname, int sort_dir);
+// Save slot range validation; fixups min and max slots, returns if the resulting range is non-empty
+bool ValidateSaveSlotRange(const char *api_name, int &min_slot, int &max_slot);
+
 // View, loop, frame parameter assertions.
 // WARNING: these functions assume that view is already in an internal 0-based range.
 void AssertView(const char *apiname, int view);
@@ -135,7 +144,10 @@ bool Game_ChangeSpeechVox(const char *newFilename);
 //=============================================================================
 
 void set_debug_mode(bool on);
+// Sets logical game FPS, telling how often the game should update
 void set_game_speed(int new_fps);
+// Gets strictly logical game FPS, regardless of whether this is real FPS right now or not.
+float get_game_speed();
 void setup_for_dialog();
 void restore_after_dialog();
 Common::String get_save_game_directory();
@@ -148,26 +160,32 @@ bool get_save_slotnum(const Common::String &filename, int &slot);
 // Try calling built-in restore game dialog;
 // NOTE: this is a script command; may be aborted according to the game & room settings
 void restore_game_dialog();
+void restore_game_dialog2(int min_slot, int max_slot);
 // Unconditionally display a built-in restore game dialog
-bool do_restore_game_dialog();
+bool do_restore_game_dialog(int min_slot, int max_slot);
 // Try calling built-in save game dialog;
 // NOTE: this is a script command; may be aborted according to the game & room settings
 void save_game_dialog();
+void save_game_dialog2(int min_slot, int max_slot);
 // Unconditionally display a built-in save game dialog
-bool do_save_game_dialog();
+bool do_save_game_dialog(int min_slot, int max_slot);
 void free_do_once_tokens();
+// Shuts down game's running state objects
+void shutdown_game_state();
 // Free all the memory associated with the game
-void unload_game_file();
-void save_game(int slotn, const char*descript);
+void unload_game();
+void save_game(int slotn, const Common::String &descript, std::unique_ptr<Common::Bitmap> &&image = nullptr);
+std::unique_ptr<Common::Bitmap> create_game_screenshot(int width, int height, int layers);
 bool read_savedgame_description(const Common::String &savedgame, Common::String &description);
 std::unique_ptr<Common::Bitmap> read_savedgame_screenshot(const Common::String &savedgame);
 // Tries to restore saved game and displays an error on failure; if the error occured
 // too late, when the game data was already overwritten, shuts engine down.
-bool try_restore_save(int slot);
-bool try_restore_save(const Common::String &path, int slot);
+bool try_restore_save(int slot, bool startup = false);
+bool try_restore_save(const Common::String &path, int slot, bool startup = false);
 void serialize_bitmap(const Common::Bitmap *thispic, Common::Stream *out);
 Common::Bitmap *read_serialized_bitmap(Common::Stream *in);
 void skip_serialized_bitmap(Common::Stream *in);
+void prescan_save_slots(int dest_arr_handle, int min_slot, int max_slot, int file_sort, int sort_dir, int user_param);
 
 bool is_in_cutscene();
 CutsceneSkipStyle get_cutscene_skipstyle();
@@ -188,16 +206,18 @@ void display_switch_out_suspend();
 // Called when the game gets input focus and should resume
 void display_switch_in_resume();
 
-void replace_tokens(const char*srcmes,char*destm, int maxlen = 99999);
+void replace_tokens(const char*srcmes,char*destm, size_t maxlen);
 const char *get_global_message (int msnum);
 void get_message_text (int msnum, char *buffer, char giveErr = 1);
 
 // Notifies the game objects that certain sprite was updated.
 // This make them update their render states, caches, and so on.
-void game_sprite_updated(int sprnum);
-// Notifies the game objects that certain sprite was deleted.
-// Those which used that sprite will reset to dummy sprite 0, update their render states and caches.
-void game_sprite_deleted(int sprnum);
+void game_sprite_updated(int sprnum, bool deleted = false);
+// Precaches sprites for a view, within a selected range of loops.
+void precache_view(int view, int first_loop = 0, int last_loop = INT32_MAX, bool with_sounds = false);
+
+// Global AssetManager instance.
+extern std::unique_ptr<AGS::Common::AssetManager> AssetMgr;
 
 extern int in_new_room;
 extern int new_room_pos;

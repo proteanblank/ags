@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <string.h> // memset
@@ -18,7 +18,6 @@
 #include "ac/roomstatus.h"
 #include "game/customproperties.h"
 #include "game/savegame_components.h"
-#include "util/alignedstream.h"
 #include "util/string_utils.h"
 
 using namespace AGS::Common;
@@ -28,7 +27,7 @@ using namespace AGS::Engine;
 void HotspotState::ReadFromSavegame(Common::Stream *in, int save_ver)
 {
     Enabled = in->ReadInt8() != 0;
-    if (save_ver > 0)
+    if (save_ver >= kRoomStatSvgVersion_36016)
     {
         Name = StrUtil::ReadString(in);
     }
@@ -73,66 +72,6 @@ void RoomStatus::FreeProperties()
     objProps.clear();
 }
 
-void RoomStatus::ReadFromFile_v321(Stream *in, GameDataVersion data_ver)
-{
-    FreeScriptData();
-    FreeProperties();
-
-    contentFormat = kRoomStatSvgVersion_Initial;
-    beenhere = in->ReadInt32();
-    numobj = in->ReadInt32();
-    obj.resize(MAX_ROOM_OBJECTS_v300);
-    objProps.resize(MAX_ROOM_OBJECTS_v300);
-    intrObject.resize(MAX_ROOM_OBJECTS_v300);
-    ReadRoomObjects_Aligned(in);
-
-    int16_t dummy[MAX_LEGACY_ROOM_FLAGS]; // cannot seek with AlignedStream
-    in->ReadArrayOfInt16(dummy, MAX_LEGACY_ROOM_FLAGS); // flagstates (OBSOLETE)
-    tsdatasize = static_cast<uint32_t>(in->ReadInt32());
-    in->ReadInt32(); // tsdata
-    for (int i = 0; i < MAX_ROOM_HOTSPOTS; ++i)
-    {
-        intrHotspot[i].ReadFromSavedgame_v321(in);
-    }
-    for (auto &intr : intrObject)
-    {
-        intr.ReadFromSavedgame_v321(in);
-    }
-    for (int i = 0; i < MAX_ROOM_REGIONS; ++i)
-    {
-        intrRegion[i].ReadFromSavedgame_v321(in);
-    }
-    intrRoom.ReadFromSavedgame_v321(in);
-    for (size_t i = 0; i < MAX_ROOM_HOTSPOTS; ++i)
-        hotspot[i].Enabled = in->ReadInt8() != 0;
-    in->ReadArrayOfInt8((int8_t*)region_enabled, MAX_ROOM_REGIONS);
-    in->ReadArrayOfInt16(walkbehind_base, MAX_WALK_BEHINDS);
-    in->ReadArrayOfInt32(interactionVariableValues, MAX_GLOBAL_VARIABLES);
-
-    if (data_ver >= kGameVersion_340_4)
-    {
-        Properties::ReadValues(roomProps, in);
-        for (int i = 0; i < MAX_ROOM_HOTSPOTS; ++i)
-        {
-            Properties::ReadValues(hsProps[i], in);
-        }
-        for (auto &props : objProps)
-        {
-            Properties::ReadValues(props, in);
-        }
-    }
-}
-
-void RoomStatus::ReadRoomObjects_Aligned(Common::Stream *in)
-{
-    AlignedStream align_s(in, Common::kAligned_Read);
-    for (auto &o : obj)
-    {
-        o.ReadFromSavegame(&align_s, 0);
-        align_s.Reset();
-    }
-}
-
 void RoomStatus::ReadFromSavegame(Stream *in, GameDataVersion data_ver, RoomStatSvgVersion save_ver)
 {
     FreeScriptData();
@@ -172,7 +111,7 @@ void RoomStatus::ReadFromSavegame(Stream *in, GameDataVersion data_ver, RoomStat
     if (data_ver <= kGameVersion_272)
     {
         SavegameComponents::ReadInteraction272(intrRoom, in);
-        in->ReadArrayOfInt32(interactionVariableValues, MAX_GLOBAL_VARIABLES);
+        in->ReadArrayOfInt32(interactionVariableValues, MAX_INTERACTION_VARIABLES);
     }
 
     tsdatasize = static_cast<uint32_t>(in->ReadInt32());
@@ -225,7 +164,7 @@ void RoomStatus::WriteToSavegame(Stream *out, GameDataVersion data_ver) const
     if (data_ver <= kGameVersion_272)
     {
         SavegameComponents::WriteInteraction272(intrRoom, out);
-        out->WriteArrayOfInt32(interactionVariableValues, MAX_GLOBAL_VARIABLES);
+        out->WriteArrayOfInt32(interactionVariableValues, MAX_INTERACTION_VARIABLES);
     }
 
     out->WriteInt32(static_cast<int32_t>(tsdatasize));

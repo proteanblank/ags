@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
@@ -18,8 +18,8 @@
 #include "ac/common.h"
 #include "ac/draw.h"
 #include "ac/game.h"
-#include "ac/gamesetup.h"
 #include "ac/gamesetupstruct.h"
+#include "ac/gamestate.h"
 #include "ac/global_game.h"
 #include "gui/cscidialog.h"
 #include <cctype> //isdigit()
@@ -34,6 +34,7 @@ using namespace AGS::Engine;
 
 extern IGraphicsDriver *gfxDriver;
 extern GameSetupStruct game;
+extern GamePlayState play;
 
 namespace {
 
@@ -42,13 +43,11 @@ int windowPosX, windowPosY, windowPosWidth, windowPosHeight;
 Bitmap *windowBuffer;
 IDriverDependantBitmap *dialogDDB;
 
-#undef MAXSAVEGAMES
-#define MAXSAVEGAMES 20
 char *lpTemp, *lpTemp2;
 char bufTemp[260], buffer2[260];
 int numsaves = 0, toomanygames;
-int filenumbers[MAXSAVEGAMES];
-unsigned long filedates[MAXSAVEGAMES];
+std::vector<int> filenumbers;
+std::vector<time_t> filedates;
 
 CSCIMessage smes;
 
@@ -105,13 +104,15 @@ void refresh_gui_screen()
     render_graphics(dialogDDB, windowPosX, windowPosY);
 }
 
-int loadgamedialog()
+void preparesavegamelist(int ctrllist, int min_slot, int max_slot);
+
+int loadgamedialog(int min_slot, int max_slot)
 {
   const int wnd_width = 200;
   const int wnd_height = 120;
   const int boxleft = myscrnwid / 2 - wnd_width / 2;
   const int boxtop = myscrnhit / 2 - wnd_height / 2;
-  const int buttonhit = usetup.textheight + 5;
+  const int buttonhit = play.std_gui_textheight + 5;
 
   int handl = CSCIDrawWindow(boxleft, boxtop, wnd_width, wnd_height);
   int ctrlok =
@@ -123,7 +124,7 @@ int loadgamedialog()
   int ctrltex1 = CSCICreateControl(CNT_LABEL, 10, 5, 120, 0, get_global_message(MSG_SELECTLOAD));
   CSCISendControlMessage(ctrllist, CLB_CLEAR, 0, 0);
 
-  preparesavegamelist(ctrllist);
+  preparesavegamelist(ctrllist, min_slot, max_slot);
   CSCIMessage mes;
   lpTemp = nullptr;
   int toret = -1;
@@ -156,7 +157,7 @@ int loadgamedialog()
   return toret;
 }
 
-int savegamedialog()
+int savegamedialog(int min_slot, int max_slot)
 {
   char okbuttontext[50];
   strcpy(okbuttontext, get_global_message(MSG_SAVEBUTTON));
@@ -166,7 +167,7 @@ int savegamedialog()
   const int wnd_height = 120;
   const int boxleft = myscrnwid / 2 - wnd_width / 2;
   const int boxtop = myscrnhit / 2 - wnd_height / 2;
-  const int buttonhit = usetup.textheight + 5;
+  const int buttonhit = play.std_gui_textheight + 5;
   int labeltop = 5;
 
   int handl = CSCIDrawWindow(boxleft, boxtop, wnd_width, wnd_height);
@@ -177,7 +178,7 @@ int savegamedialog()
   int ctrltbox = 0;
 
   CSCISendControlMessage(ctrllist, CLB_CLEAR, 0, 0);    // clear the list box
-  preparesavegamelist(ctrllist);
+  preparesavegamelist(ctrllist, min_slot, max_slot);
   if (toomanygames) {
     strcpy(okbuttontext, get_global_message(MSG_REPLACE));
     strcpy(labeltext, get_global_message(MSG_MUSTREPLACE));
@@ -296,26 +297,31 @@ int savegamedialog()
   return toret;
 }
 
-void preparesavegamelist(int ctrllist)
+void preparesavegamelist(int ctrllist, int min_slot, int max_slot)
 {
-  // TODO: find out if limiting to MAXSAVEGAMES is still necessary here
-  std::vector<SaveListItem> saves;
-  FillSaveList(saves, TOP_LISTEDSAVESLOT, MAXSAVEGAMES);
-  std::sort(saves.rbegin(), saves.rend());
+  max_slot = std::min(max_slot, TOP_SAVESLOT);
+  min_slot = std::min(max_slot, std::max(0, min_slot));
 
-  // fill in the list box and global savegameindex[] array for backward compatibilty
+  std::vector<SaveListItem> saves;
+  FillSaveList(saves, min_slot, max_slot, true);
+  std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByTime()); // sort by time in reverse
+
+  filenumbers.resize(saves.size());
+  filedates.resize(saves.size());
   for (numsaves = 0; (size_t)numsaves < saves.size(); ++numsaves)
   {
       CSCISendControlMessage(ctrllist, CLB_ADDITEM, 0, (intptr_t)saves[numsaves].Description.GetCStr());
       filenumbers[numsaves] = saves[numsaves].Slot;
-      filedates[numsaves] = (long int)saves[numsaves].FileTime;
+      filedates[numsaves] = saves[numsaves].FileTime;
   }
-  toomanygames = (numsaves >= MAXSAVEGAMES) ? 1 : 0;
+  // "toomanygames" if the whole range of slots is occupied
+  toomanygames = 
+      saves.size() >= static_cast<uint32_t>(max_slot - min_slot);
   // Select the first item
   CSCISendControlMessage(ctrllist, CLB_SETCURSEL, 0, 0);
 }
 
-void enterstringwindow(const char *prompttext, char *stouse)
+void enterstringwindow(const char *prompttext, char *dst_buf, size_t dst_sz)
 {
   const int wnd_width = 200;
   const int wnd_height = 40;
@@ -352,13 +358,13 @@ void enterstringwindow(const char *prompttext, char *stouse)
   if (wantCancel)
     CSCIDeleteControl(ctrlcancel);
   CSCIEraseWindow(handl);
-  strcpy(stouse, buffer2);
+  snprintf(dst_buf, dst_sz, "%s", buffer2);
 }
 
-int enternumberwindow(char *prompttext)
+int enternumberwindow(const char *prompttext)
 {
   char ourbuf[200];
-  enterstringwindow(prompttext, ourbuf);
+  enterstringwindow(prompttext, ourbuf, sizeof(ourbuf));
   if (ourbuf[0] == 0)
     return -9999;
   return atoi(ourbuf);

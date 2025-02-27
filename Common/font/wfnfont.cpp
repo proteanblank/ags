@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -87,12 +87,12 @@ WFNError WFNFont::ReadFromFile(Stream *in, const soff_t data_size)
         return kWFNErr_NoError; // no items
 
     // Read character data array
-    std::vector<uint8_t> raw_data; raw_data.resize(total_char_data);
-    in->Read(&raw_data.front(), total_char_data);
+    std::vector<uint8_t> raw_data(total_char_data);
+    in->Read(raw_data.data(), total_char_data);
 
     // Read offset table
-    std::vector<uint16_t> offset_table; offset_table.resize(char_count);
-    in->ReadArrayOfInt16(reinterpret_cast<int16_t*>(&offset_table.front()), char_count);
+    std::vector<uint16_t> offset_table(char_count);
+    in->ReadArrayOfInt16(reinterpret_cast<int16_t*>(offset_table.data()), char_count);
 
     // Read all referenced offsets in an unsorted vector
     std::vector<uint16_t> offs;

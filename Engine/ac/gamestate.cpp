@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
@@ -28,7 +28,6 @@
 #include "game/savegame_internal.h"
 #include "main/engine.h"
 #include "media/audio/audio_system.h"
-#include "util/alignedstream.h"
 #include "util/string_utils.h"
 
 using namespace AGS::Common;
@@ -39,21 +38,21 @@ extern RoomStruct thisroom;
 extern CharacterInfo *playerchar;
 extern ScriptSystem scsystem;
 
-GameState::GameState()
+GamePlayState::GamePlayState()
 {
 }
 
-bool GameState::IsAutoRoomViewport() const
+bool GamePlayState::IsAutoRoomViewport() const
 {
     return _isAutoRoomViewport;
 }
 
-void GameState::SetAutoRoomViewport(bool on)
+void GamePlayState::SetAutoRoomViewport(bool on)
 {
     _isAutoRoomViewport = on;
 }
 
-void GameState::SetMainViewport(const Rect &viewport)
+void GamePlayState::SetMainViewport(const Rect &viewport)
 {
     _mainViewport = viewport;
     Mouse::UpdateGraphicArea();
@@ -62,17 +61,17 @@ void GameState::SetMainViewport(const Rect &viewport)
     _mainViewportHasChanged = true;
 }
 
-const Rect &GameState::GetMainViewport() const
+const Rect &GamePlayState::GetMainViewport() const
 {
     return _mainViewport;
 }
 
-const Rect &GameState::GetUIViewport() const
+const Rect &GamePlayState::GetUIViewport() const
 {
     return _uiViewport;
 }
 
-SpriteTransform GameState::GetGlobalTransform(bool full_frame_rend) const
+SpriteTransform GamePlayState::GetGlobalTransform(bool full_frame_rend) const
 {
     // NOTE: shake_screen is not applied to the sprite batches,
     // but only as a final render factor (optimization)
@@ -81,17 +80,17 @@ SpriteTransform GameState::GetGlobalTransform(bool full_frame_rend) const
         shake_screen_yoff * static_cast<int>(full_frame_rend));
 }
 
-PViewport GameState::GetRoomViewport(int index) const
+PViewport GamePlayState::GetRoomViewport(int index) const
 {
     return _roomViewports[index];
 }
 
-const std::vector<PViewport> &GameState::GetRoomViewportsZOrdered() const
+const std::vector<PViewport> &GamePlayState::GetRoomViewportsZOrdered() const
 {
     return _roomViewportsSorted;
 }
 
-PViewport GameState::GetRoomViewportAt(int x, int y) const
+PViewport GamePlayState::GetRoomViewportAt(int x, int y) const
 {
     // We iterate backwards, because in AGS low z-order means bottom
     for (auto it = _roomViewportsSorted.rbegin(); it != _roomViewportsSorted.rend(); ++it)
@@ -100,12 +99,12 @@ PViewport GameState::GetRoomViewportAt(int x, int y) const
     return nullptr;
 }
 
-Rect GameState::GetRoomViewportAbs(int index) const
+Rect GamePlayState::GetRoomViewportAbs(int index) const
 {
     return Rect::MoveBy(_roomViewports[index]->GetRect(), _mainViewport.Left, _mainViewport.Top);
 }
 
-void GameState::SetUIViewport(const Rect &viewport)
+void GamePlayState::SetUIViewport(const Rect &viewport)
 {
     _uiViewport = viewport;
 }
@@ -115,7 +114,7 @@ static bool ViewportZOrder(const PViewport e1, const PViewport e2)
     return e1->GetZOrder() < e2->GetZOrder();
 }
 
-void GameState::UpdateViewports()
+void GamePlayState::UpdateViewports()
 {
     if (_mainViewportHasChanged)
     {
@@ -157,23 +156,23 @@ void GameState::UpdateViewports()
     }
 }
 
-void GameState::InvalidateViewportZOrder()
+void GamePlayState::InvalidateViewportZOrder()
 {
     _roomViewportZOrderChanged = true;
 }
 
-PCamera GameState::GetRoomCamera(int index) const
+PCamera GamePlayState::GetRoomCamera(int index) const
 {
     return _roomCameras[index];
 }
 
-void GameState::UpdateRoomCameras()
+void GamePlayState::UpdateRoomCameras()
 {
     for (size_t i = 0; i < _roomCameras.size(); ++i)
         UpdateRoomCamera(i);
 }
 
-void GameState::UpdateRoomCamera(int index)
+void GamePlayState::UpdateRoomCamera(int index)
 {
     auto cam = _roomCameras[index];
     const Rect &rc = cam->GetRect();
@@ -190,22 +189,22 @@ void GameState::UpdateRoomCamera(int index)
     }
 }
 
-Point GameState::RoomToScreen(int roomx, int roomy)
+Point GamePlayState::RoomToScreen(int roomx, int roomy)
 {
     return _roomViewports[0]->RoomToScreen(roomx, roomy, false).first;
 }
 
-int GameState::RoomToScreenX(int roomx)
+int GamePlayState::RoomToScreenX(int roomx)
 {
     return _roomViewports[0]->RoomToScreen(roomx, 0, false).first.X;
 }
 
-int GameState::RoomToScreenY(int roomy)
+int GamePlayState::RoomToScreenY(int roomy)
 {
     return _roomViewports[0]->RoomToScreen(0, roomy, false).first.Y;
 }
 
-VpPoint GameState::ScreenToRoomImpl(int scrx, int scry, int view_index, bool clip_viewport, bool convert_cam_to_data)
+VpPoint GamePlayState::ScreenToRoomImpl(int scrx, int scry, int view_index, bool clip_viewport, bool convert_cam_to_data)
 {
     PViewport view;
     if (view_index < 0)
@@ -225,21 +224,21 @@ VpPoint GameState::ScreenToRoomImpl(int scrx, int scry, int view_index, bool cli
     return view->ScreenToRoom(scrx, scry, clip_viewport, convert_cam_to_data);
 }
 
-VpPoint GameState::ScreenToRoom(int scrx, int scry, bool restrict)
+VpPoint GamePlayState::ScreenToRoom(int scrx, int scry, bool restrict)
 {
     if (game.options[OPT_BASESCRIPTAPI] >= kScriptAPI_v3507)
         return ScreenToRoomImpl(scrx, scry, -1, restrict, false);
     return ScreenToRoomImpl(scrx, scry, 0, false, false);
 }
 
-VpPoint GameState::ScreenToRoomDivDown(int scrx, int scry)
+VpPoint GamePlayState::ScreenToRoomDivDown(int scrx, int scry)
 {
     if (game.options[OPT_BASESCRIPTAPI] >= kScriptAPI_v3507)
         return ScreenToRoomImpl(scrx, scry, -1, true, true);
     return ScreenToRoomImpl(scrx, scry, 0, false, true);
 }
 
-void GameState::CreatePrimaryViewportAndCamera()
+void GamePlayState::CreatePrimaryViewportAndCamera()
 {
     if (_roomViewports.size() == 0)
     {
@@ -255,7 +254,7 @@ void GameState::CreatePrimaryViewportAndCamera()
     _roomCameras[0]->LinkToViewport(_roomViewports[0]);
 }
 
-PViewport GameState::CreateRoomViewport()
+PViewport GamePlayState::CreateRoomViewport()
 {
     int index = (int)_roomViewports.size();
     PViewport viewport(new Viewport());
@@ -269,7 +268,7 @@ PViewport GameState::CreateRoomViewport()
     return viewport;
 }
 
-ScriptViewport *GameState::RegisterRoomViewport(int index, int32_t handle)
+ScriptViewport *GamePlayState::RegisterRoomViewport(int index, int32_t handle)
 {
     if (index < 0 || (size_t)index >= _roomViewports.size())
         return nullptr;
@@ -277,7 +276,7 @@ ScriptViewport *GameState::RegisterRoomViewport(int index, int32_t handle)
     if (handle == 0)
     {
         handle = ccRegisterManagedObject(scview, scview);
-        ccAddObjectReference(handle); // one reference for the GameState
+        ccAddObjectReference(handle); // one reference for the GamePlayState
     }
     else
     {
@@ -287,7 +286,7 @@ ScriptViewport *GameState::RegisterRoomViewport(int index, int32_t handle)
     return scview;
 }
 
-void GameState::DeleteRoomViewport(int index)
+void GamePlayState::DeleteRoomViewport(int index)
 {
     if (index < 0 || (size_t)index >= _roomViewports.size())
         return;
@@ -322,12 +321,12 @@ void GameState::DeleteRoomViewport(int index)
     on_roomviewport_deleted(index);
 }
 
-int GameState::GetRoomViewportCount() const
+int GamePlayState::GetRoomViewportCount() const
 {
     return (int)_roomViewports.size();
 }
 
-PCamera GameState::CreateRoomCamera()
+PCamera GamePlayState::CreateRoomCamera()
 {
     int index = (int)_roomCameras.size();
     PCamera camera(new Camera());
@@ -339,7 +338,7 @@ PCamera GameState::CreateRoomCamera()
     return camera;
 }
 
-ScriptCamera *GameState::RegisterRoomCamera(int index, int32_t handle)
+ScriptCamera *GamePlayState::RegisterRoomCamera(int index, int32_t handle)
 {
     if (index < 0 || (size_t)index >= _roomCameras.size())
         return nullptr;
@@ -347,7 +346,7 @@ ScriptCamera *GameState::RegisterRoomCamera(int index, int32_t handle)
     if (handle == 0)
     {
         handle = ccRegisterManagedObject(sccamera, sccamera);
-        ccAddObjectReference(handle); // one reference for the GameState
+        ccAddObjectReference(handle); // one reference for the GamePlayState
     }
     else
     {
@@ -357,7 +356,7 @@ ScriptCamera *GameState::RegisterRoomCamera(int index, int32_t handle)
     return sccamera;
 }
 
-void GameState::DeleteRoomCamera(int index)
+void GamePlayState::DeleteRoomCamera(int index)
 {
     if (index < 0 || (size_t)index >= _roomCameras.size())
         return;
@@ -386,74 +385,72 @@ void GameState::DeleteRoomCamera(int index)
     }
 }
 
-int GameState::GetRoomCameraCount() const
+int GamePlayState::GetRoomCameraCount() const
 {
     return (int)_roomCameras.size();
 }
 
-ScriptViewport *GameState::GetScriptViewport(int index)
+ScriptViewport *GamePlayState::GetScriptViewport(int index)
 {
     if (index < 0 || (size_t)index >= _roomViewports.size())
         return nullptr;
     return (ScriptViewport*)ccGetObjectAddressFromHandle(_scViewportHandles[index]);
 }
 
-ScriptCamera *GameState::GetScriptCamera(int index)
+ScriptCamera *GamePlayState::GetScriptCamera(int index)
 {
     if (index < 0 || (size_t)index >= _roomCameras.size())
         return nullptr;
     return (ScriptCamera*)ccGetObjectAddressFromHandle(_scCameraHandles[index]);
 }
 
-bool GameState::IsIgnoringInput() const
+bool GamePlayState::IsIgnoringInput() const
 {
     return AGS_Clock::now() < _ignoreUserInputUntilTime;
 }
 
-void GameState::SetIgnoreInput(int timeout_ms)
+void GamePlayState::SetIgnoreInput(int timeout_ms)
 {
     if (AGS_Clock::now() + std::chrono::milliseconds(timeout_ms) > _ignoreUserInputUntilTime)
         _ignoreUserInputUntilTime = AGS_Clock::now() + std::chrono::milliseconds(timeout_ms);
 }
 
-void GameState::ClearIgnoreInput()
+void GamePlayState::ClearIgnoreInput()
 {
     _ignoreUserInputUntilTime = AGS_Clock::now();
 }
 
-void GameState::SetWaitSkipResult(int how, int data)
+void GamePlayState::SetWaitSkipResult(int how, int data)
 {
     wait_counter = 0;
     wait_skipped_by = how;
     wait_skipped_by_data = data;
 }
 
-int GameState::GetWaitSkipResult() const
+int GamePlayState::GetWaitSkipResult() const
 { // NOTE: we remove timer flag to make timeout reason = 0
     return ((wait_skipped_by & ~SKIP_AUTOTIMER) << SKIP_RESULT_TYPE_SHIFT)
         | (wait_skipped_by_data & SKIP_RESULT_DATA_MASK);
 }
 
-bool GameState::IsBlockingVoiceSpeech() const
+bool GamePlayState::IsBlockingVoiceSpeech() const
 {
     return speech_has_voice && speech_voice_blocking;
 }
 
-bool GameState::IsNonBlockingVoiceSpeech() const
+bool GamePlayState::IsNonBlockingVoiceSpeech() const
 {
     return speech_has_voice && !speech_voice_blocking;
 }
 
-bool GameState::ShouldPlayVoiceSpeech() const
+bool GamePlayState::ShouldPlayVoiceSpeech() const
 {
     return !play.fast_forward &&
         (play.speech_mode != kSpeech_TextOnly) && (play.voice_avail);
 }
 
-void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, GameStateSvgVersion svg_ver, RestoredData &r_data)
+void GamePlayState::ReadFromSavegame(Stream *in, GameDataVersion data_ver, GameStateSvgVersion svg_ver, RestoredData &r_data)
 {
-    const bool old_save = svg_ver < kGSSvgVersion_Initial;
-    const bool extended_old_save = old_save && (data_ver >= kGameVersion_340_4);
     score = in->ReadInt32();
     usedmode = in->ReadInt32();
     disabled_user_interface = in->ReadInt32();
@@ -476,7 +473,7 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     speech_textwindow_gui = in->ReadInt32();
     follow_change_room_timer = in->ReadInt32();
     totalscore = in->ReadInt32();
-    skip_display = in->ReadInt32();
+    skip_display = static_cast<SkipSpeechStyle>(in->ReadInt32());
     no_multiloop_repeat = in->ReadInt32();
     roomscript_finished = in->ReadInt32();
     used_inv_on = in->ReadInt32();
@@ -534,34 +531,23 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     show_single_dialog_option = in->ReadInt32();
     keep_screen_during_instant_transition = in->ReadInt32();
     read_dialog_option_colour = in->ReadInt32();
-    stop_dialog_at_end = in->ReadInt32();
+    in->ReadInt32(); // was stop_dialog_at_end, which should not serialize
     speech_portrait_placement = in->ReadInt32();
     speech_portrait_x = in->ReadInt32();
     speech_portrait_y = in->ReadInt32();
     speech_display_post_time_ms = in->ReadInt32();
     dialog_options_highlight_color = in->ReadInt32();
-    if (old_save)
-        in->ReadArrayOfInt32(reserved, GAME_STATE_RESERVED_INTS);
-    // ** up to here is referenced in the script "game." object
-    if (old_save)
-    {
-        in->ReadInt32(); // recording
-        in->ReadInt32(); // playback
-        in->ReadInt16(); // gamestep
-    }
     randseed = in->ReadInt32();    // random seed
     player_on_region = in->ReadInt32();    // player's current region
-    if (old_save)
-        in->ReadInt32(); // screen_is_faded_out
     check_interaction_only = in->ReadInt32();
     bg_frame = in->ReadInt32();
     bg_anim_delay = in->ReadInt32();  // for animating backgrounds
     music_vol_was = in->ReadInt32();  // before the volume drop
     wait_counter = in->ReadInt16();
-    mboundx1 = in->ReadInt16();
-    mboundx2 = in->ReadInt16();
-    mboundy1 = in->ReadInt16();
-    mboundy2 = in->ReadInt16();
+    mbounds.Left = in->ReadInt16();
+    mbounds.Right = in->ReadInt16();
+    mbounds.Top = in->ReadInt16();
+    mbounds.Bottom = in->ReadInt16();
     fade_effect = in->ReadInt32();
     bg_frame_locked = in->ReadInt32();
     in->ReadArrayOfInt32(globalscriptvars, MAXGSVALUES);
@@ -569,7 +555,7 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     music_repeat = in->ReadInt32();
     music_master_volume = in->ReadInt32();
     digital_master_volume = in->ReadInt32();
-    in->Read(walkable_areas_on, MAX_WALK_AREAS+1);
+    in->Read(walkable_areas_on, MAX_WALK_AREAS);
     screen_flipped = in->ReadInt16();
     if (svg_ver < kGSSvgVersion_350_10)
     {
@@ -581,7 +567,7 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     entered_at_y = in->ReadInt32();
     entered_edge = in->ReadInt32();
     speech_mode = (SpeechMode)in->ReadInt32();
-    cant_skip_speech = in->ReadInt32();
+    speech_skip_style = in->ReadInt32();
     in->ReadArrayOfInt32(script_timers, MAX_TIMERS);
     sound_volume = in->ReadInt32();
     speech_volume = in->ReadInt32();
@@ -594,13 +580,9 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     screen_tint = in->ReadInt32();
     num_parsed_words = in->ReadInt32();
     in->ReadArrayOfInt16( parsed_words, MAX_PARSED_WORDS);
-    in->Read( bad_parsed_word, 100);
+    bad_parsed_word.ReadCount(in, 100); // CHECKME: does it have to be serialized?
     raw_color = in->ReadInt32();
-    if (old_save)
-        in->ReadArrayOfInt32(raw_modified, MAX_ROOM_BGFRAMES);
-    in->ReadArrayOfInt16( filenumbers, MAXSAVEGAMES);
-    if (old_save)
-        in->ReadInt32(); // room_changes
+    in->ReadArrayOfInt16( filenumbers, LEGACY_MAXSAVEGAMES);
     mouse_cursor_hidden = in->ReadInt32();
     silent_midi = in->ReadInt32();
     silent_midi_channel = in->ReadInt32();
@@ -613,10 +595,7 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     rtint_blue = in->ReadInt32();
     rtint_level = in->ReadInt32();
     rtint_light = in->ReadInt32();
-    if (!old_save || extended_old_save)
-        rtint_enabled = in->ReadBool();
-    else
-        rtint_enabled = rtint_level > 0;
+    rtint_enabled = in->ReadBool();
     end_cutscene_music = in->ReadInt32();
     skip_until_char_stops = in->ReadInt32();
     get_loc_name_last_time = in->ReadInt32();
@@ -626,12 +605,9 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     music_queue_size = in->ReadInt16();
     in->ReadArrayOfInt16( music_queue, MAX_QUEUED_MUSIC);
     new_music_queue_size = in->ReadInt16();
-    if (!old_save)
+    for (int i = 0; i < MAX_QUEUED_MUSIC; ++i)
     {
-        for (int i = 0; i < MAX_QUEUED_MUSIC; ++i)
-        {
-            new_music_queue[i].ReadFromFile(in);
-        }
+        new_music_queue[i].ReadFromSavegame(in);
     }
 
     crossfading_out_channel = in->ReadInt16();
@@ -642,38 +618,28 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     crossfade_in_volume_per_step = in->ReadInt16();
     crossfade_final_volume_in = in->ReadInt16();
 
-    if (old_save)
-        ReadQueuedAudioItems_Aligned(in);
-
     in->Read(takeover_from, 50);
-    in->Read(playmp3file_name, PLAYMP3FILE_MAX_FILENAME_LEN);
+    playmp3file_name.ReadCount(in, PLAYMP3FILE_MAX_FILENAME_LEN);
     in->Read(globalstrings, MAXGLOBALSTRINGS * MAX_MAXSTRLEN);
     in->Read(lastParserEntry, MAX_MAXSTRLEN);
-    in->Read(game_name, 100);
+    if (svg_ver < kGSSvgVersion_361_14)
+        game_name.ReadCount(in, LEGACY_GAMESTATE_GAMENAMELENGTH);
+    else
+        game_name = StrUtil::ReadString(in);
     ground_level_areas_disabled = in->ReadInt32();
     next_screen_transition = in->ReadInt32();
     in->ReadInt32(); // gamma_adjustment -- do not apply gamma level from savegame
     temporarily_turned_off_character = in->ReadInt16();
     inv_backwards_compatibility = in->ReadInt16();
-    if (old_save)
-    {
-        in->ReadInt32(); // gui_draw_order
-        in->ReadInt32(); // do_once_tokens;
-    }
     r_data.DoOnceCount = static_cast<uint32_t>(in->ReadInt32());
-    if (!old_save)
+    for (size_t i = 0; i < r_data.DoOnceCount; ++i)
     {
-        for (size_t i = 0; i < r_data.DoOnceCount; ++i)
-        {
-            do_once_tokens.insert(StrUtil::ReadString(in));
-        }
+        do_once_tokens.insert(StrUtil::ReadString(in));
     }
     text_min_display_time_ms = in->ReadInt32();
     ignore_user_input_after_text_timeout_ms = in->ReadInt32();
     if (svg_ver < kGSSvgVersion_350_9)
         in->ReadInt32(); // ignore_user_input_until_time -- do not apply from savegame
-    if (old_save)
-        in->ReadArrayOfInt32(default_audio_type_volumes, MAX_AUDIO_TYPES);
     if (svg_ver >= kGSSvgVersion_350_9)
     {
         int voice_speech_flags = in->ReadInt32();
@@ -682,7 +648,7 @@ void GameState::ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, G
     }
 }
 
-void GameState::WriteForSavegame(Common::Stream *out) const
+void GamePlayState::WriteForSavegame(Stream *out) const
 {
     // NOTE: following parameters are never saved:
     // recording, playback, gamestep, screen_is_faded_out, room_changes
@@ -760,7 +726,7 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt32(show_single_dialog_option);
     out->WriteInt32(keep_screen_during_instant_transition);
     out->WriteInt32(read_dialog_option_colour);
-    out->WriteInt32(stop_dialog_at_end);
+    out->WriteInt32(0); // was stop_dialog_at_end, which should not serialize
     out->WriteInt32(speech_portrait_placement);
     out->WriteInt32(speech_portrait_x);
     out->WriteInt32(speech_portrait_y);
@@ -774,10 +740,10 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt32( bg_anim_delay);  // for animating backgrounds
     out->WriteInt32( music_vol_was);  // before the volume drop
     out->WriteInt16(wait_counter);
-    out->WriteInt16(mboundx1);
-    out->WriteInt16(mboundx2);
-    out->WriteInt16(mboundy1);
-    out->WriteInt16(mboundy2);
+    out->WriteInt16(mbounds.Left);
+    out->WriteInt16(mbounds.Right);
+    out->WriteInt16(mbounds.Top);
+    out->WriteInt16(mbounds.Bottom);
     out->WriteInt32( fade_effect);
     out->WriteInt32( bg_frame_locked);
     out->WriteArrayOfInt32(globalscriptvars, MAXGSVALUES);
@@ -785,13 +751,13 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt32( music_repeat);
     out->WriteInt32( music_master_volume);
     out->WriteInt32( digital_master_volume);
-    out->Write(walkable_areas_on, MAX_WALK_AREAS+1);
+    out->Write(walkable_areas_on, MAX_WALK_AREAS);
     out->WriteInt16( screen_flipped);
     out->WriteInt32( entered_at_x);
     out->WriteInt32( entered_at_y);
     out->WriteInt32( entered_edge);
     out->WriteInt32( speech_mode);
-    out->WriteInt32( cant_skip_speech);
+    out->WriteInt32( speech_skip_style);
     out->WriteArrayOfInt32(script_timers, MAX_TIMERS);
     out->WriteInt32( sound_volume);
     out->WriteInt32( speech_volume);
@@ -804,9 +770,9 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt32( screen_tint);
     out->WriteInt32( num_parsed_words);
     out->WriteArrayOfInt16( parsed_words, MAX_PARSED_WORDS);
-    out->Write( bad_parsed_word, 100);
+    bad_parsed_word.WriteCount(out, 100); // CHECKME: does it have to be serialized?
     out->WriteInt32( raw_color);
-    out->WriteArrayOfInt16( filenumbers, MAXSAVEGAMES);
+    out->WriteArrayOfInt16( filenumbers, LEGACY_MAXSAVEGAMES);
     out->WriteInt32( mouse_cursor_hidden);
     out->WriteInt32( silent_midi);
     out->WriteInt32( silent_midi_channel);
@@ -831,7 +797,7 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt16(new_music_queue_size);
     for (int i = 0; i < MAX_QUEUED_MUSIC; ++i)
     {
-        new_music_queue[i].WriteToFile(out);
+        new_music_queue[i].WriteToSavegame(out);
     }
 
     out->WriteInt16( crossfading_out_channel);
@@ -843,10 +809,10 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt16( crossfade_final_volume_in);
 
     out->Write(takeover_from, 50);
-    out->Write(playmp3file_name, PLAYMP3FILE_MAX_FILENAME_LEN);
+    playmp3file_name.WriteCount(out, PLAYMP3FILE_MAX_FILENAME_LEN);
     out->Write(globalstrings, MAXGLOBALSTRINGS * MAX_MAXSTRLEN);
     out->Write(lastParserEntry, MAX_MAXSTRLEN);
-    out->Write(game_name, 100);
+    StrUtil::WriteString(game_name, out);
     out->WriteInt32( ground_level_areas_disabled);
     out->WriteInt32( next_screen_transition);
     out->WriteInt32( gamma_adjustment);
@@ -866,17 +832,7 @@ void GameState::WriteForSavegame(Common::Stream *out) const
     out->WriteInt32(voice_speech_flags);
 }
 
-void GameState::ReadQueuedAudioItems_Aligned(Common::Stream *in)
-{
-    AlignedStream align_s(in, Common::kAligned_Read);
-    for (int i = 0; i < MAX_QUEUED_MUSIC; ++i)
-    {
-        new_music_queue[i].ReadFromFile(&align_s);
-        align_s.Reset();
-    }
-}
-
-void GameState::FreeProperties()
+void GamePlayState::FreeProperties()
 {
     for (auto &p : charProps)
         p.clear();
@@ -884,7 +840,7 @@ void GameState::FreeProperties()
         p.clear();
 }
 
-void GameState::FreeViewportsAndCameras()
+void GamePlayState::FreeViewportsAndCameras()
 {
     _roomViewports.clear();
     _roomViewportsSorted.clear();
@@ -909,35 +865,6 @@ void GameState::FreeViewportsAndCameras()
         }
     }
     _scCameraHandles.clear();
-}
-
-void GameState::ReadCustomProperties_v340(Common::Stream *in, GameDataVersion data_ver)
-{
-    if (data_ver >= kGameVersion_340_4)
-    {
-        // After runtime property values were read we also copy missing default,
-        // because we do not keep defaults in the saved game, and also in case
-        // this save is made by an older game version which had different
-        // properties.
-        for (int i = 0; i < game.numcharacters; ++i)
-            Properties::ReadValues(charProps[i], in);
-        for (int i = 0; i < game.numinvitems; ++i)
-            Properties::ReadValues(invProps[i], in);
-    }
-}
-
-void GameState::WriteCustomProperties_v340(Common::Stream *out, GameDataVersion data_ver) const
-{
-    if (data_ver >= kGameVersion_340_4)
-    {
-        // We temporarily remove properties that kept default values
-        // just for the saving data time to avoid getting lots of 
-        // redundant data into saved games
-        for (int i = 0; i < game.numcharacters; ++i)
-            Properties::WriteValues(charProps[i], out);
-        for (int i = 0; i < game.numinvitems; ++i)
-            Properties::WriteValues(invProps[i], out);
-    }
 }
 
 // Converts legacy alignment type used in script API

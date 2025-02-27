@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -30,7 +30,7 @@ struct ScriptSystem : AGSCCStaticObject
 {
     int width = 0; // game screen width
     int height = 0; // game screen height
-    int coldepth = 0; // game's color depth
+    int coldepth = 0; // game's color depth, in bits per pixel (8, 16, 32)
     int os = 0; // operating system's code (see eScriptSystemOSID)
     int windowed = 0; // windowed/fullscreen flag
     int vsync = 0; // vertical sync flag
@@ -39,7 +39,7 @@ struct ScriptSystem : AGSCCStaticObject
     char aci_version[10]{}; // engine version string (informational)
     int reserved[5]{}; // reserved fields
 
-    int32_t ReadInt32(void *address, intptr_t offset) override;
+    int32_t ReadInt32(const void *address, intptr_t offset) override;
     void    WriteInt32(void *address, intptr_t offset, int32_t val) override;
 };
 

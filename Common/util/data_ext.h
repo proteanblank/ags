@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -62,6 +62,8 @@ enum DataExtFlags
     kDataExt_NumID8  = 0x0000, // default
     kDataExt_NumID32 = 0x0001,
     // 32-bit or 64-bit file offset support
+    // NOTE: for historical reasons this refers to blocks with numeric ID ONLY;
+    // new-style blocks with a 16-char ID always write 64-bit offset
     kDataExt_File32  = 0x0000, // default
     kDataExt_File64  = 0x0002
 };
@@ -84,7 +86,8 @@ typedef TypedCodeError<DataExtErrorType, GetDataExtErrorText> DataExtError;
 class DataExtParser
 {
 public:
-    DataExtParser(Stream *in, int flags) : _in(in), _flags(flags) {}
+    DataExtParser(std::unique_ptr<Stream> &&in, int flags)
+        : _in(std::move(in)), _flags(flags) {}
     virtual ~DataExtParser() = default;
 
     // Returns the conventional string ID for an old-style block with numeric ID
@@ -94,8 +97,9 @@ public:
     // the parser will not error if the mistake is in this range of bytes
     virtual soff_t GetOverLeeway(int /*block_id*/) const { return 0; }
 
-    // Gets a stream
-    inline Stream *GetStream() { return _in; }
+    // Returns stream's ownership back to the caller
+    inline std::unique_ptr<Stream> ReleaseStream() { return std::move(_in); }
+
     // Tells if the end of the block list was reached
     inline bool AtEnd() const { return _blockID < 0; }
     // Gets parser flags
@@ -119,7 +123,7 @@ public:
     HError FindOne(int id);
 
 protected:
-    Stream *_in {};
+    std::unique_ptr<Stream> _in;
     int _flags {};
 
     int _blockID {-1};
@@ -137,14 +141,17 @@ class DataExtReader : protected DataExtParser
 public:
     virtual ~DataExtReader() = default;
 
+    using DataExtParser::ReleaseStream;
+
     // Parses a block list, calls ReadBlock for each found block
     HError Read();
 
 protected:
-    DataExtReader(Stream *in, int flags) : DataExtParser(in, flags) {}
+    DataExtReader(std::unique_ptr<Stream> &&in, int flags)
+        : DataExtParser(std::move(in), flags) {}
     // Reads a single data block and tell whether to continue reading;
     // default implementation skips the block
-    virtual HError ReadBlock(int block_id, const String &ext_id,
+    virtual HError ReadBlock(Stream *in, int block_id, const String &ext_id,
         soff_t block_len, bool &read_next) = 0;
 };
 

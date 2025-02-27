@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_GUIBUTTON_H
@@ -66,19 +66,33 @@ enum GUIButtonPlaceholder
 class GUIButton : public GUIObject
 {
 public:
+    // Default text padding
+    static const int DefaultHorPadding = 2;
+    static const int DefaultVerPadding = 2;
+
     GUIButton();
 
     bool HasAlphaChannel() const override;
+    int32_t GetCurrentImage() const;
+    int32_t GetNormalImage() const;
+    int32_t GetMouseOverImage() const;
+    int32_t GetPushedImage() const;
+    GUIButtonPlaceholder GetPlaceholder() const;
     const String &GetText() const;
     bool IsImageButton() const;
     bool IsClippingImage() const;
-    GUIButtonPlaceholder GetPlaceholder() const;
 
     // Operations
     Rect CalcGraphicRect(bool clipped) override;
     void Draw(Bitmap *ds, int x = 0, int y = 0) override;
     void SetClipImage(bool on);
+    void SetCurrentImage(int32_t image);
+    void SetMouseOverImage(int32_t image);
+    void SetNormalImage(int32_t image);
+    void SetPushedImage(int32_t image);
+    void SetImages(int32_t normal, int32_t over, int32_t pushed);
     void SetText(const String &text);
+    void SetWrapText(bool on);
 
     // Events
     bool OnMouseDown() override;
@@ -94,17 +108,15 @@ public:
 
 // TODO: these members are currently public; hide them later
 public:
-    int32_t     Image;
-    int32_t     MouseOverImage;
-    int32_t     PushedImage;
-    int32_t     CurrentImage;
     int32_t     Font;
     color_t     TextColor;
     FrameAlignment TextAlignment;
+    int32_t     TextPaddingHor;
+    int32_t     TextPaddingVer;
     // Click actions for left and right mouse buttons
     // NOTE: only left click is currently in use
     GUIClickAction ClickAction[kNumGUIClicks];
-    int32_t        ClickData[kNumGUIClicks];
+    int32_t     ClickData[kNumGUIClicks];
 
     bool        IsPushed;
     bool        IsMouseOver;
@@ -114,7 +126,14 @@ private:
     void DrawText(Bitmap *ds, int x, int y, bool draw_disabled);
     void DrawTextButton(Bitmap *ds, int x, int y, bool draw_disabled);
     void PrepareTextToDraw();
+    // Update current image depending on the button's state
+    void UpdateCurrentImage();
 
+    int32_t _image;
+    int32_t _mouseOverImage;
+    int32_t _pushedImage;
+    // Active displayed image
+    int32_t _currentImage;
     // Text property set by user
     String _text;
     // type of content placeholder, if any
@@ -129,7 +148,5 @@ private:
 
 } // namespace Common
 } // namespace AGS
-
-extern std::vector<AGS::Common::GUIButton> guibuts;
 
 #endif // __AC_GUIBUTTON_H

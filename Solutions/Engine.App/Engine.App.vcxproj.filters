@@ -53,9 +53,6 @@
     <Filter Include="Source Files\device">
       <UniqueIdentifier>{ca1424ae-e55d-4606-bf8b-0ad17cf33607}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\font">
-      <UniqueIdentifier>{d80f48e0-98d9-4b7e-8e6d-55948449f1b2}</UniqueIdentifier>
-    </Filter>
     <Filter Include="Source Files\game">
       <UniqueIdentifier>{c0ec3579-115c-40be-8a7b-d59abd533b3b}</UniqueIdentifier>
     </Filter>
@@ -211,9 +208,6 @@
       <Filter>Source Files\ac</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Engine\ac\game.cpp">
-      <Filter>Source Files\ac</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Engine\ac\gamesetup.cpp">
       <Filter>Source Files\ac</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Engine\ac\gamestate.cpp">
@@ -516,9 +510,6 @@
     <ClCompile Include="..\..\Engine\gfx\blender.cpp">
       <Filter>Source Files\gfx</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\Engine\gfx\color_engine.cpp">
-      <Filter>Source Files\gfx</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\Engine\gfx\gfx_util.cpp">
       <Filter>Source Files\gfx</Filter>
     </ClCompile>
@@ -609,9 +600,6 @@
     <ClCompile Include="..\..\Engine\media\video\video.cpp">
       <Filter>Source Files\media\video</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\Engine\debug\consoleoutputtarget.cpp">
-      <Filter>Source Files\debug</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\Engine\debug\debug.cpp">
       <Filter>Source Files\debug</Filter>
     </ClCompile>
@@ -619,9 +607,6 @@
       <Filter>Source Files\debug</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Engine\debug\logfile.cpp">
-      <Filter>Source Files\debug</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Engine\debug\messagebuffer.cpp">
       <Filter>Source Files\debug</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Engine\platform\windows\debug\namedpipesagsdebugger.cpp">
@@ -671,9 +656,6 @@
     </ClCompile>
     <ClCompile Include="..\..\Engine\device\mousew32.cpp">
       <Filter>Source Files\device</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Engine\font\fonts_engine.cpp">
-      <Filter>Source Files\font</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Engine\game\game_init.cpp">
       <Filter>Source Files\game</Filter>
@@ -762,9 +744,6 @@
     <ClCompile Include="..\..\Engine\ac\route_finder_impl_legacy.cpp">
       <Filter>Source Files\ac</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\Engine\game\savegame_v321.cpp">
-      <Filter>Source Files\game</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\libsrc\mojoAL\mojoal.c">
       <Filter>Library Sources\MojoAL</Filter>
     </ClCompile>
@@ -809,6 +788,33 @@
     </ClCompile>
     <ClCompile Include="..\..\Engine\plugin\plugin_stubs.cpp">
       <Filter>Source Files\plugin</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\media\audio\audioplayer.cpp">
+      <Filter>Source Files\media\audio</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\media\video\videoplayer.cpp">
+      <Filter>Source Files\media\video</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\media\video\flic_player.cpp">
+      <Filter>Source Files\media\video</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\media\video\theora_player.cpp">
+      <Filter>Source Files\media\video</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\platform\windows\setup\windialog.cpp">
+      <Filter>Source Files\setup</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\platform\windows\setup\winapihelpers.cpp">
+      <Filter>Source Files\setup</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\platform\windows\setup\winpagedialog.cpp">
+      <Filter>Source Files\setup</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\platform\windows\setup\basicpagedialog.cpp">
+      <Filter>Source Files\setup</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\Engine\platform\windows\setup\advancedpagedialog.cpp">
+      <Filter>Source Files\setup</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -1256,9 +1262,6 @@
     <ClInclude Include="..\..\Engine\script\exports.h">
       <Filter>Header Files\script</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Engine\script\nonblockingscriptfunction.h">
-      <Filter>Header Files\script</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\Engine\script\runtimescriptvalue.h">
       <Filter>Header Files\script</Filter>
     </ClInclude>
@@ -1301,9 +1304,6 @@
     <ClInclude Include="..\..\Engine\debug\agseditordebugger.h">
       <Filter>Header Files\debug</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Engine\debug\consoleoutputtarget.h">
-      <Filter>Header Files\debug</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\Engine\debug\debug_log.h">
       <Filter>Header Files\debug</Filter>
     </ClInclude>
@@ -1317,9 +1317,6 @@
       <Filter>Header Files\debug</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Engine\debug\logfile.h">
-      <Filter>Header Files\debug</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Engine\debug\messagebuffer.h">
       <Filter>Header Files\debug</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Engine\platform\windows\debug\namedpipesagsdebugger.h">
@@ -1361,16 +1358,10 @@
     <ClInclude Include="..\..\Engine\gui\cscidialog.h">
       <Filter>Header Files\gui</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Engine\gui\gui.h">
-      <Filter>Header Files\gui</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\Engine\gui\guidialog.h">
       <Filter>Header Files\gui</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Engine\gui\guidialogdefines.h">
-      <Filter>Header Files\gui</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Engine\gui\guidialoginternaldefs.h">
       <Filter>Header Files\gui</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Engine\gui\mycontrols.h">
@@ -1628,8 +1619,35 @@
     <ClInclude Include="..\..\Engine\ac\dynobj\cc_scriptobject.h">
       <Filter>Header Files\ac\dynobj</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Engine\plugin\agsplugin_evts.h">
-      <Filter>Header Files\plugin</Filter>
+    <ClInclude Include="..\..\Engine\media\audio\audioplayer.h">
+      <Filter>Header Files\media\audio</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\media\video\videoplayer.h">
+      <Filter>Header Files\media\video</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\media\video\flic_player.h">
+      <Filter>Header Files\media\video</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\media\video\theora_player.h">
+      <Filter>Header Files\media\video</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\platform\windows\setup\windialog.h">
+      <Filter>Header Files\setup</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\platform\windows\setup\winapihelpers.h">
+      <Filter>Header Files\setup</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\platform\windows\setup\winpagedialog.h">
+      <Filter>Header Files\setup</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\platform\windows\setup\basicpagedialog.h">
+      <Filter>Header Files\setup</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\platform\windows\setup\advancedpagedialog.h">
+      <Filter>Header Files\setup</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\Engine\ac\dynobj\scriptrestoredsaveinfo.h">
+      <Filter>Header Files\ac\dynobj</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
@@ -1643,6 +1661,9 @@
     </None>
     <None Include="..\..\Engine\resource\tintshaderLegacy.fxo">
       <Filter>Resource Files</Filter>
+    </None>
+    <None Include="..\..\Engine\ac\route_finder_jps.inl">
+      <Filter>Header Files\ac</Filter>
     </None>
   </ItemGroup>
   <ItemGroup>

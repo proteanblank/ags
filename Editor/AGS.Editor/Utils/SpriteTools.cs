@@ -12,6 +12,66 @@ using AGS.Types;
 
 namespace AGS.Editor.Utils
 {
+    public struct SpriteImportOptions
+    {
+        public bool ImportAlpha;
+        public bool RemapColours;
+        public bool UseRoomBackground;
+        public SpriteImportTransparency Transparency;
+        public string Filename;
+        public int Frame;
+        public Rectangle Selection;
+        public bool Tile;
+
+        public SpriteImportOptions(bool alpha, bool remapColours, bool useRoomBackground,
+            SpriteImportTransparency transparency, string filename, int frame, Rectangle selection, bool tile)
+        {
+            ImportAlpha = alpha;
+            RemapColours = remapColours;
+            UseRoomBackground = useRoomBackground;
+            Transparency = transparency;
+            Filename = filename;
+            Frame = frame;
+            Selection = selection;
+            Tile = tile;
+        }
+
+        /// <summary>
+        /// Initializes only most basic options.
+        /// </summary>
+        public SpriteImportOptions(bool alpha, bool remapColours, bool useRoomBackground, SpriteImportTransparency transparency)
+            : this(alpha, remapColours, useRoomBackground, transparency, "", 0, Rectangle.Empty, false)
+        {
+        }
+
+        /// <summary>
+        /// Initializes options with a filename and optional frame (for multi-frame image formats).
+        /// </summary>
+        public SpriteImportOptions(bool alpha, bool remapColours, bool useRoomBackground,
+            SpriteImportTransparency transparency, string filename, int frame = 0)
+            : this(alpha, remapColours, useRoomBackground, transparency, filename, frame, Rectangle.Empty, false)
+        {
+        }
+
+        /// <summary>
+        /// Initializes options by copying existing options and applying new filename and frame.
+        /// </summary>
+        public SpriteImportOptions(SpriteImportOptions baseOptions, string filename, int frame = 0)
+            : this(baseOptions.ImportAlpha, baseOptions.RemapColours, baseOptions.UseRoomBackground, baseOptions.Transparency,
+                  filename, frame, Rectangle.Empty, false)
+        {
+        }
+
+        /// <summary>
+        /// Initializes options by copying existing options and applying new tile selection.
+        /// </summary>
+        public SpriteImportOptions(SpriteImportOptions baseOptions, Rectangle selection, bool tile)
+            : this(baseOptions.ImportAlpha, baseOptions.RemapColours, baseOptions.UseRoomBackground, baseOptions.Transparency,
+                  baseOptions.Filename, baseOptions.Frame, selection, tile)
+        {
+        }
+    }
+
     public class SpriteTools
     {
         public static IEnumerable<Bitmap> LoadSpritesFromFile(string fileName, int start = 0)
@@ -33,7 +93,7 @@ namespace AGS.Editor.Utils
 
             try
             {
-                loadedBmp = (Bitmap)Bitmap.FromStream(fileStream);
+                loadedBmp = BitmapExtensions.LoadBitmapKeepingFormat(fileStream);
             }
             catch
             {
@@ -47,9 +107,10 @@ namespace AGS.Editor.Utils
             // Unfortunately the Bitmap.Clone method will crash later due to
             // a .NET bug when it's loaded from a stream. Therefore we need
             // to make a fresh copy.
+            Bitmap oldBmp = loadedBmp;
             loadedBmp = Utilities.CreateCopyOfBitmapPreservingColourDepth(loadedBmp);
+            oldBmp.Dispose();
 
-            //Bitmap loadedBmp = new Bitmap(fileName);
             if ((System.IO.Path.GetExtension(fileName).ToLower() == ".gif") &&
                 (loadedBmp.PixelFormat != PixelFormat.Format8bppIndexed))
             {
@@ -61,6 +122,11 @@ namespace AGS.Editor.Utils
 
                 using (GifDecoder decoder = new GifDecoder(fileName))
                 {
+                    if (start >= decoder.GetFrameCount())
+                    {
+                        throw new Types.InvalidDataException($"'{fileName}' does not contain frame {start}");
+                    }
+
                     for (int i = start; i < decoder.GetFrameCount(); i++)
                     {
                         loadedBmp = (Bitmap)decoder.GetFrame(i).Clone();
@@ -251,38 +317,56 @@ namespace AGS.Editor.Utils
             return LoadBitmapForSprite(spr, spr.SourceFile, spr.Frame);
         }
 
-        public static void ReplaceSprite(Sprite sprite, Bitmap bmp, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, string filename, int frame, Rectangle selection, bool tile)
+        private static void SetSpriteImportOptions(Sprite sprite, SpriteImportOptions options)
         {
-            // ignore alpha channel if not 32 bit ARGB
-            bool useAlphaChannel = bmp.PixelFormat != PixelFormat.Format32bppArgb ||
-                Factory.AGSEditor.CurrentGame.Settings.ColorDepth != GameColorDepth.TrueColor ? false : alpha;
+            sprite.TransparentColour = options.Transparency;
+            sprite.RemapToGamePalette = options.RemapColours;
+            sprite.RemapToRoomPalette = options.UseRoomBackground;
+            sprite.SourceFile = Utilities.GetRelativeToProjectPath(options.Filename);
+            sprite.Frame = options.Frame;
+            sprite.OffsetX = options.Selection.Left;
+            sprite.OffsetY = options.Selection.Top;
+            sprite.ImportWidth = options.Selection.Width;
+            sprite.ImportHeight = options.Selection.Height;
+            sprite.ImportAlphaChannel = options.ImportAlpha;
+            sprite.ImportAsTile = options.Tile;
+        }
+
+        private static void AdjustImportParams(Bitmap bmp, SpriteImportOptions options,
+            out bool useAlphaChannel, out bool remapColours, out bool useRoomBackground)
+        {
+            // Use alpha channel if:
+            // * game is 32-bit
+            // * bitmap has valid alpha component
+            // * alpha requested by user;
+            useAlphaChannel = options.ImportAlpha
+                && Factory.AGSEditor.CurrentGame.Settings.ColorDepth == GameColorDepth.TrueColor
+                && bmp.HasAlpha();
 
             // ignore palette remap options if not using an indexed palette
-            if (bmp.PixelFormat != PixelFormat.Format8bppIndexed)
+            // and even then - if using alpha channel (remap won't work with alpha)
+            if (bmp.PixelFormat != PixelFormat.Format8bppIndexed && !useAlphaChannel)
             {
                 remapColours = false;
                 useRoomBackground = false;
             }
-
-            // do replacement
-            Factory.NativeProxy.ReplaceSpriteWithBitmap(sprite, bmp, transparency, remapColours, useRoomBackground, useAlphaChannel);
-
-            sprite.TransparentColour = transparency;
-            sprite.RemapToGamePalette = remapColours;
-            sprite.RemapToRoomPalette = useRoomBackground;
-            sprite.SourceFile = Utilities.GetRelativeToProjectPath(filename);
-            sprite.Frame = frame;
-            sprite.OffsetX = selection.Left;
-            sprite.OffsetY = selection.Top;
-            sprite.ImportWidth = selection.Width;
-            sprite.ImportHeight = selection.Height;
-            sprite.ImportAlphaChannel = alpha;
-            sprite.ImportAsTile = tile;
+            else
+            {
+                remapColours = options.RemapColours;
+                useRoomBackground = options.UseRoomBackground;
+            }
         }
 
-        public static void ReplaceSprite(Sprite sprite, Bitmap bmp, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, string filename, int frame, SpriteSheet spritesheet)
+        public static void ReplaceSprite(Sprite sprite, Bitmap bmp, SpriteImportOptions options)
+        {
+            bool useAlphaChannel, remapColours, useRoomBackground;
+            AdjustImportParams(bmp, options, out useAlphaChannel, out remapColours, out useRoomBackground);
+
+            Factory.NativeProxy.ReplaceSpriteWithBitmap(sprite, bmp, options.Transparency, remapColours, useRoomBackground, useAlphaChannel);
+            SetSpriteImportOptions(sprite, options);
+        }
+
+        public static void ReplaceSprite(Sprite sprite, Bitmap bmp, SpriteImportOptions options, SpriteSheet spritesheet)
         {
             bool tiled = spritesheet != null;
 
@@ -293,8 +377,7 @@ namespace AGS.Editor.Utils
                 if (!selection.IsEmpty)
                 {
                     Bitmap replacement = bmp.Clone(selection, bmp.PixelFormat);
-                    ReplaceSprite(sprite, replacement, alpha, remapColours, useRoomBackground, transparency, filename,
-                        frame, selection, tiled);
+                    ReplaceSprite(sprite, replacement, new SpriteImportOptions(options, selection, tiled));
                     replacement.Dispose();
                 }
                 else
@@ -306,52 +389,31 @@ namespace AGS.Editor.Utils
             else
             {
                 Rectangle selection = new Rectangle(0, 0, bmp.Width, bmp.Height);
-                ReplaceSprite(sprite, bmp, alpha, remapColours, useRoomBackground, transparency, filename, frame, selection, tiled);
+                ReplaceSprite(sprite, bmp, new SpriteImportOptions(options, selection, tiled));
             }
         }
 
-        public static void ReplaceSprite(Sprite sprite, string filename, int frame, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, SpriteSheet spritesheet)
+        public static void ReplaceSprite(Sprite sprite, SpriteImportOptions options, SpriteSheet spritesheet)
         {
-            Bitmap bmp = LoadFrameImageFromFile(filename, frame);
-            ReplaceSprite(sprite, bmp, alpha, remapColours, useRoomBackground, transparency, filename, frame, spritesheet);
+            Bitmap bmp = LoadFrameImageFromFile(options.Filename, options.Frame);
+            ReplaceSprite(sprite, bmp, options, spritesheet);
             bmp.Dispose();
         }
 
-        public static void ImportNewSprite(SpriteFolder folder, Bitmap bmp, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, string filename, int frame, Rectangle selection, bool tile)
+        public static void ImportNewSprite(SpriteFolder folder, Bitmap bmp, SpriteImportOptions options)
         {
-            // ignore alpha channel if not 32 bit ARGB
-            bool useAlphaChannel = bmp.PixelFormat != PixelFormat.Format32bppArgb ||
-                Factory.AGSEditor.CurrentGame.Settings.ColorDepth != GameColorDepth.TrueColor ? false : alpha;
+            bool useAlphaChannel, remapColours, useRoomBackground;
+            AdjustImportParams(bmp, options, out useAlphaChannel, out remapColours, out useRoomBackground);
 
-            // ignore palette remap options if not using an indexed palette
-            if (bmp.PixelFormat != PixelFormat.Format8bppIndexed)
+            Sprite sprite = Factory.NativeProxy.CreateSpriteFromBitmap(bmp, options.Transparency, remapColours, useRoomBackground, useAlphaChannel);
+            if (sprite != null)
             {
-                remapColours = false;
-                useRoomBackground = false;
-            } 
-
-            // do import
-            Sprite sprite = Factory.NativeProxy.CreateSpriteFromBitmap(bmp, transparency, remapColours, useRoomBackground, useAlphaChannel);
-            
-            sprite.TransparentColour = transparency;
-            sprite.RemapToGamePalette = remapColours;
-            sprite.RemapToRoomPalette = useRoomBackground;
-            sprite.SourceFile = Utilities.GetRelativeToProjectPath(filename);
-            sprite.Frame = frame;
-            sprite.OffsetX = selection.Left;
-            sprite.OffsetY = selection.Top;
-            sprite.ImportWidth = selection.Width;
-            sprite.ImportHeight = selection.Height;
-            sprite.ImportAlphaChannel = alpha;
-            sprite.ImportAsTile = tile;
-
-            folder.Sprites.Add(sprite);
+                SetSpriteImportOptions(sprite, options);
+                folder.Sprites.Add(sprite);
+            }
         }
 
-        public static void ImportNewSprites(SpriteFolder folder, Bitmap bmp, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, string filename, int frame, SpriteSheet spritesheet)
+        public static void ImportNewSprites(SpriteFolder folder, Bitmap bmp, SpriteImportOptions options, SpriteSheet spritesheet)
         {
             bool tiled = spritesheet != null;
 
@@ -360,28 +422,27 @@ namespace AGS.Editor.Utils
                 foreach (Rectangle selection in spritesheet.GetSpriteSelections(new Size(bmp.Width, bmp.Height)))
                 {
                     Bitmap import = bmp.Clone(selection, bmp.PixelFormat);
-                    ImportNewSprite(folder, import, alpha, remapColours, useRoomBackground, transparency, filename, frame, selection, tiled);
+                    ImportNewSprite(folder, import, new SpriteImportOptions(options, selection, tiled));
                     import.Dispose();
                 }
             }
             else
             {
                 Rectangle selection = new Rectangle(0, 0, bmp.Width, bmp.Height);
-                ImportNewSprite(folder, bmp, alpha, remapColours, useRoomBackground, transparency, filename, frame, selection, tiled);
+                ImportNewSprite(folder, bmp, new SpriteImportOptions(options, selection, tiled));
             }
         }
 
-        public static void ImportNewSprites(SpriteFolder folder, string filename, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, SpriteSheet spritesheet = null)
+        public static void ImportNewSprites(SpriteFolder folder, SpriteImportOptions options, SpriteSheet spritesheet = null)
         {
-            Progress progress = new Progress(GetFrameCountEstimateFromFile(filename), String.Format("Importing frames from {0}", filename));
+            Progress progress = new Progress(GetFrameCountEstimateFromFile(options.Filename), String.Format("Importing frames from {0}", options.Filename));
             progress.Show();
             int frame = 0;
 
-            foreach (Bitmap bmp in LoadSpritesFromFile(filename))
+            foreach (Bitmap bmp in LoadSpritesFromFile(options.Filename))
             {
                 progress.SetProgressValue(frame);
-                ImportNewSprites(folder, bmp, alpha, remapColours, useRoomBackground, transparency, filename, frame, spritesheet);
+                ImportNewSprites(folder, bmp, options, spritesheet);
                 bmp.Dispose();
                 frame ++;
             }
@@ -390,8 +451,7 @@ namespace AGS.Editor.Utils
             progress.Dispose();
         }
 
-        public static void ImportNewSprites(SpriteFolder folder, string[] filenames, bool alpha, bool remapColours, bool useRoomBackground,
-            SpriteImportTransparency transparency, SpriteSheet spritesheet = null)
+        public static void ImportNewSprites(SpriteFolder folder, string[] filenames, SpriteImportOptions options, SpriteSheet spritesheet = null)
         {
             Progress progress = new Progress(filenames.Length, String.Format("Importing sprites from {0} files", filenames.Length));
             progress.Show();
@@ -399,7 +459,7 @@ namespace AGS.Editor.Utils
             for (int index = 0; index < filenames.Length; index ++)
             {
                 progress.SetProgressValue(index);
-                ImportNewSprites(folder, filenames[index], alpha, remapColours, useRoomBackground, transparency, spritesheet);
+                ImportNewSprites(folder, new SpriteImportOptions(options, filenames[index]), spritesheet);
             }
 
             progress.Hide();
@@ -457,7 +517,7 @@ namespace AGS.Editor.Utils
             }
 
             ImageFormat format = sprite.ColorDepth < 32 && !sprite.AlphaChannel ? ImageFormat.Bmp : ImageFormat.Png;
-            Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(sprite.Number, sprite.Width, sprite.Height);
+            Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(sprite.Number);
             path = string.Format("{0}.{1}", path, format.ToString().ToLower());
             bmp.Save(path, format);
             bmp.Dispose();
@@ -621,6 +681,20 @@ namespace AGS.Editor.Utils
         }
 
         /// <summary>
+        /// Returns a PixelFormat best suiting the given sprite's color depth in bits per pixel.
+        /// </summary>
+        public static PixelFormat ColorDepthToPixelFormat(int colorDepth)
+        {
+            switch (colorDepth)
+            {
+                case 8: return PixelFormat.Format8bppIndexed;
+                case 16: return PixelFormat.Format16bppRgb565;
+                case 32: return PixelFormat.Format32bppArgb;
+                default: return PixelFormat.Undefined;
+            }
+        }
+
+        /// <summary>
         /// Writes a dummy sprite file with one 1x1 clear sprite at index 0.
         /// </summary>
         public static void WriteDummySpriteFile(string filename)
@@ -629,10 +703,11 @@ namespace AGS.Editor.Utils
             if (Factory.AGSEditor.CurrentGame.Settings.OptimizeSpriteStorage)
                 storeFlags |= (int)Native.SpriteFileWriter.StorageFlags.OptimizeForSize;
             var compressSprites = Factory.AGSEditor.CurrentGame.Settings.CompressSpritesType;
+            int gameColorDepth = (int)Factory.AGSEditor.CurrentGame.Settings.ColorDepth * 8; // to bits per pixel
 
             var writer = new Native.SpriteFileWriter(filename);
             writer.Begin(storeFlags, compressSprites);
-            var bmp = new Bitmap(1, 1);
+            var bmp = new Bitmap(1, 1, ColorDepthToPixelFormat(gameColorDepth));
             writer.WriteBitmap(bmp);
             bmp.Dispose();
             writer.End();
@@ -640,9 +715,10 @@ namespace AGS.Editor.Utils
 
         /// <summary>
         /// Writes the sprite file, importing all the existing sprites either from the
-        /// their sources, or sprite cache, - whatever is present (in that order).
+        /// their sources, or existing spriteset file, - whatever is present (in that order).
         /// </summary>
-        public static void WriteSpriteFileFromSources(string filename, IWorkProgress progress)
+        public static void WriteSpriteFileFromSources(string destFilename,
+            string srcSetFilename, string srcIndexFilename, IWorkProgress progress)
         {
             int storeFlags = 0;
             if (Factory.AGSEditor.CurrentGame.Settings.OptimizeSpriteStorage)
@@ -656,7 +732,10 @@ namespace AGS.Editor.Utils
             progress.Total = orderedSprites.Count();
             progress.Current = 0;
 
-            var writer = new Native.SpriteFileWriter(filename);
+            // We need reader in case some sprite source are missing:
+            // then we will try reading the sprite from existing sprite file
+            var reader = new Native.SpriteFileReader(srcSetFilename, srcIndexFilename);
+            var writer = new Native.SpriteFileWriter(destFilename);
             writer.Begin(storeFlags, compressSprites);
             int spriteIndex = 0;
             int realSprites = 0;
@@ -668,28 +747,46 @@ namespace AGS.Editor.Utils
                     writer.WriteEmptySlot();
                 }
 
-                // Try get the image, first from source, then from editor's cache
-                var bmp = LoadBitmapFromSource(sprite);
-                // TODO: this is quite suboptimal, find a way to retrieve a native handle instead?
-                if (bmp == null)
-                    bmp = Factory.NativeProxy.GetBitmapForSprite(sprite.Number, sprite.Width, sprite.Height);
+                WriteSprite(writer, reader, sprite);
 
-                if (bmp != null)
-                {
-                    writer.WriteBitmap(bmp, sprite.TransparentColour, sprite.RemapToGamePalette,
-                        sprite.RemapToRoomPalette, sprite.AlphaChannel);
-                    bmp.Dispose();
-                }
-                else
-                {
-                    bmp = new Bitmap(sprite.Width, sprite.Height);
-                    writer.WriteBitmap(bmp);
-                    bmp.Dispose();
-                }
                 progress.Current = ++realSprites;
                 spriteIndex++;
             }
             writer.End();
+
+            reader.Dispose();
+            writer.Dispose();
+        }
+
+        private static void WriteSprite(Native.SpriteFileWriter writer, Native.SpriteFileReader reader, Sprite sprite)
+        {
+            // First try to import the image from source
+            var bmp = LoadBitmapFromSource(sprite);
+            if (bmp != null)
+            {
+                writer.WriteBitmap(bmp, sprite.TransparentColour, sprite.RemapToGamePalette,
+                    sprite.RemapToRoomPalette, sprite.AlphaChannel);
+                bmp.Dispose();
+                return;
+            }
+
+            // If sprite reader is available, try to read the compiled sprite's raw data
+            if (reader != null)
+            {
+                var rawdata = reader.LoadSpriteAsRawData(sprite.Number);
+                if (rawdata != null)
+                {
+                    writer.WriteRawData(rawdata);
+                    rawdata.Dispose();
+                    return;
+                }
+            }
+
+            // If sprite cannot be found anywhere, then create a dummy empty sprite,
+            // maintaining the size and color depth
+            bmp = new Bitmap(sprite.Width, sprite.Height, ColorDepthToPixelFormat(sprite.ColorDepth));
+            writer.WriteBitmap(bmp);
+            bmp.Dispose();
         }
     }
 }

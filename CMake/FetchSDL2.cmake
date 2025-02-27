@@ -1,7 +1,8 @@
 FetchContent_Declare(
     sdl2_content
-    URL https://github.com/libsdl-org/SDL/archive/refs/tags/release-2.28.2.tar.gz
-    URL_HASH MD5=e00fe25102433d40d39ba67007a9fd2c
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    URL https://github.com/libsdl-org/SDL/archive/refs/tags/release-2.30.11.tar.gz
+    URL_HASH SHA1=db4ae1d7a477854d44a468f19661794b59721267
 )
 
 FetchContent_GetProperties(sdl2_content)
@@ -52,8 +53,7 @@ if(NOT sdl2_content_POPULATED)
     list(APPEND SDL2_INCLUDE_DIRS "${sdl2_content_BINARY_DIR}/include-config-release/")
     list(APPEND SDL2_INCLUDE_DIRS "${sdl2_content_BINARY_DIR}/include/")
     list(APPEND SDL2_LIBRARY_DIRS "${sdl2_content_BINARY_DIR}/")
-    list(APPEND SDL2_LIBRARIES SDL2::SDL2)
-    list(APPEND SDL2_LIBRARIES SDL2::SDL2main)
+    set(SDL2_LIBRARIES SDL2::SDL2)
     set(SDL2_INCLUDE_DIR SDL2_INCLUDE_DIRS)
     set(SDL2MAIN_LIBRARY SDL2::SDL2main)
     set(SDL2_LIBRARY SDL2::SDL2)

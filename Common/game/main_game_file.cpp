@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <cstdio>
@@ -27,9 +27,9 @@
 #include "gui/guilabel.h"
 #include "gui/guimain.h"
 #include "script/cc_common.h"
-#include "util/alignedstream.h"
 #include "util/data_ext.h"
 #include "util/directory.h"
+#include "util/file.h"
 #include "util/path.h"
 #include "util/string_compat.h"
 #include "util/string_utils.h"
@@ -156,8 +156,9 @@ String FindGameData(const String &path)
 }
 
 // Begins reading main game file from a generic stream
-static HGameFileError OpenMainGameFileBase(Stream *in, MainGameSource &src)
+static HGameFileError OpenMainGameFileBase(MainGameSource &src)
 {
+    Stream *in = src.InputStream.get();
     // Check data signature
     String data_sig = String::FromStreamCount(in, MainGameSource::Signature.GetLength());
     if (data_sig.Compare(MainGameSource::Signature))
@@ -192,12 +193,12 @@ HGameFileError OpenMainGameFile(const String &filename, MainGameSource &src)
     // Cleanup source struct
     src = MainGameSource();
     // Try to open given file
-    Stream *in = File::OpenFileRead(filename);
+    auto in = File::OpenFileRead(filename);
     if (!in)
-        return new MainGameFileError(kMGFErr_FileOpenFailed, String::FromFormat("Filename: %s.", filename.GetCStr()));
+        return new MainGameFileError(kMGFErr_FileOpenFailed, String::FromFormat("Tried filename: %s.", filename.GetCStr()));
     src.Filename = filename;
-    src.InputStream.reset(in);
-    return OpenMainGameFileBase(in, src);
+    src.InputStream = std::move(in);
+    return OpenMainGameFileBase(src);
 }
 
 HGameFileError OpenMainGameFileFromDefaultAsset(MainGameSource &src, AssetManager *mgr)
@@ -206,17 +207,18 @@ HGameFileError OpenMainGameFileFromDefaultAsset(MainGameSource &src, AssetManage
     src = MainGameSource();
     // Try to find and open main game file
     String filename = MainGameSource::DefaultFilename_v3;
-    Stream *in = mgr->OpenAsset(filename);
+    auto in = mgr->OpenAsset(filename);
     if (!in)
     {
         filename = MainGameSource::DefaultFilename_v2;
         in = mgr->OpenAsset(filename);
     }
     if (!in)
-        return new MainGameFileError(kMGFErr_FileOpenFailed, String::FromFormat("Filename: %s.", filename.GetCStr()));
+        return new MainGameFileError(kMGFErr_FileOpenFailed, String::FromFormat("Tried filenames: %s, %s.",
+            MainGameSource::DefaultFilename_v3.GetCStr(), MainGameSource::DefaultFilename_v2.GetCStr()));
     src.Filename = filename;
-    src.InputStream.reset(in);
-    return OpenMainGameFileBase(in, src);
+    src.InputStream = std::move(in);
+    return OpenMainGameFileBase(src);
 }
 
 HGameFileError ReadDialogScript(PScript &dialog_script, Stream *in, GameDataVersion data_ver)
@@ -254,17 +256,6 @@ HGameFileError ReadScriptModules(std::vector<PScript> &sc_mods, Stream *in, Game
     return HGameFileError::None();
 }
 
-void ReadViewStruct272_Aligned(std::vector<ViewStruct272> &oldv, Stream *in, size_t count)
-{
-    AlignedStream align_s(in, Common::kAligned_Read);
-    oldv.resize(count);
-    for (size_t i = 0; i < count; ++i)
-    {
-        oldv[i].ReadFromFile(&align_s);
-        align_s.Reset();
-    }
-}
-
 void ReadViews(GameSetupStruct &game, std::vector<ViewStruct> &views, Stream *in, GameDataVersion data_ver)
 {
     views.resize(game.numviews);
@@ -277,8 +268,11 @@ void ReadViews(GameSetupStruct &game, std::vector<ViewStruct> &views, Stream *in
     }
     else // 2.x views
     {
-        std::vector<ViewStruct272> oldv;
-        ReadViewStruct272_Aligned(oldv, in, game.numviews);
+        std::vector<ViewStruct272> oldv(game.numviews);
+        for (int i = 0; i < game.numviews; ++i)
+        {
+            oldv[i].ReadFromFile(in);
+        }
         Convert272ViewsToNew(oldv, views);
     }
 }
@@ -339,7 +333,6 @@ void ReadDialogs(std::vector<DialogTopic> &dialog,
                 fgetstring(stringbuffer, iii);
         }
     */
-    int i = 0;
     char buffer[1000];
     if (data_ver <= kGameVersion_260)
     {
@@ -370,7 +363,6 @@ void ReadDialogs(std::vector<DialogTopic> &dialog,
                 break;
 
             old_speech_lines.push_back(buffer);
-            i++;
         }
     }
     else
@@ -390,7 +382,6 @@ void ReadDialogs(std::vector<DialogTopic> &dialog,
             decrypt_text(buffer, newlen);
             buffer[newlen] = 0;
             old_speech_lines.push_back(buffer);
-            i++;
         }
     }
 }
@@ -415,7 +406,7 @@ HGameFileError ReadPlugins(std::vector<PluginInfo> &infos, Stream *in)
         if (datasize > 0)
         {
             info.Data.resize(datasize);
-            in->Read(&info.Data.front(), datasize);
+            in->Read(info.Data.data(), datasize);
         }
         infos.push_back(info);
     }
@@ -431,6 +422,7 @@ void BuildAudioClipArray(const std::vector<String> &assets, std::vector<ScriptAu
     int temp_number;
     char temp_extension[10];
 
+    // FIXME: use audio type constants instead of obscure numeric literals
     for (const String &asset : assets)
     {
         if (sscanf(asset.GetCStr(), "%5s%d.%3s", temp_name, &temp_number, temp_extension) != 3)
@@ -487,7 +479,7 @@ void ApplySpriteData(GameSetupStruct &game, const LoadedGameEntities &ents, Game
         return;
 
     // Apply sprite flags read from original format (sequential array)
-    spriteset.EnlargeTo(ents.SpriteCount - 1);
+    game.SpriteInfos.resize(ents.SpriteCount);
     for (size_t i = 0; i < ents.SpriteCount; ++i)
     {
         game.SpriteInfos[i].Flags = ents.SpriteFlags[i];
@@ -504,6 +496,35 @@ void ApplySpriteData(GameSetupStruct &game, const LoadedGameEntities &ents, Game
             else
                 info.Flags |= SPF_VAR_RESOLUTION;
         }
+    }
+}
+
+void UpgradeGame(GameSetupStruct &game, GameDataVersion data_ver)
+{
+    // Global talking animation speed
+    if (data_ver < kGameVersion_312)
+    {
+        // Fix animation speed for old formats
+        game.options[OPT_GLOBALTALKANIMSPD] = 5;
+    }
+    else if (data_ver < kGameVersion_330)
+    {
+        // Convert game option for 3.1.2 - 3.2 games
+        game.options[OPT_GLOBALTALKANIMSPD] = game.options[OPT_GLOBALTALKANIMSPD] != 0 ? 5 : (-5 - 1);
+    }
+    // Old dialog options API for pre-3.4.0.2 games
+    if (data_ver < kGameVersion_340_2)
+    {
+        game.options[OPT_DIALOGOPTIONSAPI] = -1;
+    }
+    // Relative asset resolution in pre-3.5.0.8 (always enabled)
+    if (data_ver < kGameVersion_350)
+    {
+        game.options[OPT_RELATIVEASSETRES] = 1;
+    }
+    if (data_ver < kGameVersion_362)
+    {
+        game.options[OPT_SAVESCREENSHOTLAYER] = UINT32_MAX; // all possible layers
     }
 }
 
@@ -552,21 +573,10 @@ void UpgradeAudio(GameSetupStruct &game, LoadedGameEntities &ents, GameDataVersi
     if (data_ver >= kGameVersion_320)
         return;
 
-    // An explanation of building audio clips array for pre-3.2 games.
-    //
-    // When AGS version 3.2 was released, it contained new audio system.
-    // In the nutshell, prior to 3.2 audio files had to be manually put
-    // to game project directory and their IDs were taken out of filenames.
-    // Since 3.2 this information is stored inside the game data.
-    // To make the modern engine compatible with pre-3.2 games, we have
-    // to scan game data packages for audio files, and enumerate them
-    // ourselves, then add this information to game struct.
-
-    // Create soundClips and audioClipTypes structures.
+    // Create new-style audioClipTypes array.
     std::vector<AudioClipType> audiocliptypes;
-    std::vector<ScriptAudioClip> audioclips;
-
-    // TODO: find out what is 4 (maybe music, sound, ambient sound, voice?)
+    // FIXME: use audio type constants instead of obscure numeric literals
+    // (maybe music, sound, ambient sound, voice???)
     audiocliptypes.resize(4);
     for (int i = 0; i < 4; i++)
     {
@@ -576,64 +586,73 @@ void UpgradeAudio(GameSetupStruct &game, LoadedGameEntities &ents, GameDataVersi
     }
     audiocliptypes[3].reservedChannels = 0;
 
-    audioclips.reserve(1000);
-    std::vector<String> assets;
-    // Read audio clip names from from registered libraries
-    for (size_t i = 0; i < AssetMgr->GetLibraryCount(); ++i)
-    {
-        const AssetLibInfo *game_lib = AssetMgr->GetLibraryInfo(i);
-        if (File::IsDirectory(game_lib->BasePath))
-            continue; // might be a directory
-
-        for (const AssetInfo &info : game_lib->AssetInfos)
-        {
-            if (info.FileName.CompareLeftNoCase("music", 5) == 0 || info.FileName.CompareLeftNoCase("sound", 5) == 0)
-                assets.push_back(info.FileName);
-        }
-    }
-    // Append contents of the registered directories
-    // TODO: implement pattern search or asset query with callback (either of two or both)
-    // within AssetManager to avoid doing this in place here. Alternatively we could maybe
-    // make AssetManager to do directory scans by demand and fill AssetInfos...
-    // but that have to be done consistently if done at all.
-    for (size_t i = 0; i < AssetMgr->GetLibraryCount(); ++i)
-    {
-        const AssetLibInfo *game_lib = AssetMgr->GetLibraryInfo(i);
-        if (!File::IsDirectory(game_lib->BasePath))
-            continue; // might be a library
-
-        for (FindFile ff = FindFile::OpenFiles(game_lib->BasePath, "*.*"); !ff.AtEnd(); ff.Next())
-        {
-            String filename = ff.Current();
-            if (ags_strnicmp(filename.GetCStr(), "music", 5) == 0 || ags_strnicmp(filename.GetCStr(), "sound", 5) == 0)
-                assets.push_back(filename);
-        }
-    }
-    BuildAudioClipArray(assets, audioclips);
-
-    // Copy gathered data over to game
+    // Assign new types to the game
     game.audioClipTypes = audiocliptypes;
+}
+
+void ScanOldStyleAudio(AssetManager *asset_mgr, GameSetupStruct &game, std::vector<ViewStruct> &views, GameDataVersion data_ver)
+{
+    // An explanation of building audio clips array for pre-3.2 games.
+    //
+    // When AGS version 3.2 was released, it contained new audio system.
+    // In the nutshell, prior to 3.2 audio files had to be manually put
+    // to game project directory and their IDs were taken out of filenames.
+    // Since 3.2 this information is stored inside the game data.
+    // To make the modern engine compatible with pre-3.2 games, we have
+    // to scan game data packages for audio files, and enumerate them
+    // ourselves, then add this information to game struct.
+    if (data_ver >= kGameVersion_320)
+        return;
+
+    // Read audio clip names from registered libraries
+    std::vector<String> assets;
+    std::vector<String> filtered_assets;
+    asset_mgr->FindAssets(assets, "*.*", "audio");
+    for (const String &filename : assets)
+    {
+        if (filename.CompareLeftNoCase("music", 5) == 0 || filename.CompareLeftNoCase("sound", 5) == 0)
+            filtered_assets.push_back(filename);
+    }
+
+    // Build new-style audio clips array and assign to the game
+    std::vector<ScriptAudioClip> audioclips;
+    BuildAudioClipArray(filtered_assets, audioclips);
     game.audioClips = audioclips;
     
-    RemapLegacySoundNums(game, ents.Views, data_ver);
+    RemapLegacySoundNums(game, views, data_ver);
 }
 
 // Convert character data to the current version
 void UpgradeCharacters(GameSetupStruct &game, GameDataVersion data_ver)
 {
     auto &chars = game.chars;
+    auto &chars2 = game.chars2;
     const int numcharacters = game.numcharacters;
 
-    // Fixup charakter script names for 2.x (EGO -> cEgo)
+    // Characters can always walk through each other on < 2.54
+    if (data_ver < kGameVersion_254)
+    {
+        for (int i = 0; i < numcharacters; i++)
+        {
+            chars[i].flags |= CHF_NOBLOCKING;
+        }
+    }
+
+    // Fixup character script names for 2.x (EGO -> cEgo)
+    // In 2.x versions the "scriptname" field in game data contained a name
+    // limited by 14 chars (although serialized in 20 bytes). After reading,
+    // it was exported as "cScriptname..." for the script.
     if (data_ver <= kGameVersion_272)
     {
-        String tempbuffer;
+        char namelwr[LEGACY_MAX_SCRIPT_NAME_LEN - 1];
         for (int i = 0; i < numcharacters; i++)
         {
             if (chars[i].scrname[0] == 0)
                 continue;
-            tempbuffer.Format("c%c%s", chars[i].scrname[0], ags_strlwr(&chars[i].scrname[1]));
-            snprintf(chars[i].scrname, MAX_SCRIPT_NAME_LEN, "%s", tempbuffer.GetCStr());
+            ags_strncpy_s(namelwr, sizeof(namelwr), chars[i].scrname, LEGACY_MAX_SCRIPT_NAME_LEN - 2);
+            ags_strlwr(namelwr + 1); // lowercase starting with the second char
+            snprintf(chars[i].scrname, sizeof(chars[i].scrname), "c%s", namelwr);
+            chars2[i].scrname_new = chars[i].scrname;
         }
     }
 
@@ -647,24 +666,25 @@ void UpgradeCharacters(GameSetupStruct &game, GameDataVersion data_ver)
         }
     }
 
-    // Characters can always walk through each other on < 2.54
-    if (data_ver < kGameVersion_254)
+    // < 3.6.2 characters always followed OPT_CHARTURNWHENFACE,
+    // so they have to have TURNWHENFACE enabled
+    if (data_ver < kGameVersion_362)
     {
         for (int i = 0; i < numcharacters; i++)
         {
-            chars[i].flags |= CHF_NOBLOCKING;
+            chars[i].flags |= CHF_TURNWHENFACE;
         }
     }
 }
 
-void UpgradeGUI(GameSetupStruct &game, GameDataVersion data_ver)
+void UpgradeGUI(GameSetupStruct &game, LoadedGameEntities &ents, GameDataVersion data_ver)
 {
     // Previously, Buttons and Labels had a fixed Translated behavior
     if (data_ver < kGameVersion_361)
     {
-        for (auto &btn : guibuts)
+        for (auto &btn : ents.GuiControls.Buttons)
             btn.SetTranslated(true); // always translated
-        for (auto &lbl : guilabels)
+        for (auto &lbl : ents.GuiControls.Labels)
             lbl.SetTranslated(true); // always translated
     }
 }
@@ -745,18 +765,17 @@ void FixupSaveDirectory(GameSetupStruct &game)
 {
     // If the save game folder was not specified by game author, create one of
     // the game name, game GUID, or uniqueid, as a last resort
-    if (!game.saveGameFolderName[0])
+    if (game.saveGameFolderName.IsEmpty())
     {
-        if (game.gamename[0])
-            snprintf(game.saveGameFolderName, MAX_SG_FOLDER_LEN, "%s", game.gamename);
+        if (!game.gamename.IsEmpty())
+            game.saveGameFolderName = game.gamename;
         else if (game.guid[0])
-            snprintf(game.saveGameFolderName, MAX_SG_FOLDER_LEN, "%s", game.guid);
+            game.saveGameFolderName = game.guid;
         else
-            snprintf(game.saveGameFolderName, MAX_SG_FOLDER_LEN, "AGS-Game-%d", game.uniqueid);
+            game.saveGameFolderName.Format("AGS-Game-%d", game.uniqueid);
     }
     // Lastly, fixup folder name by removing any illegal characters
-    String s = Path::FixupSharedFilename(game.saveGameFolderName);
-    snprintf(game.saveGameFolderName, MAX_SG_FOLDER_LEN, "%s", s.GetCStr());
+    game.saveGameFolderName = Path::FixupSharedFilename(game.saveGameFolderName);
 }
 
 HGameFileError ReadSpriteFlags(LoadedGameEntities &ents, Stream *in, GameDataVersion data_ver)
@@ -780,21 +799,45 @@ HGameFileError ReadSpriteFlags(LoadedGameEntities &ents, Stream *in, GameDataVer
 class GameDataExtReader : public DataExtReader
 {
 public:
-    GameDataExtReader(LoadedGameEntities &ents, GameDataVersion data_ver, Stream *in)
-        : DataExtReader(in, kDataExt_NumID8 | kDataExt_File64)
+    GameDataExtReader(LoadedGameEntities &ents, GameDataVersion data_ver, std::unique_ptr<Stream> &&in)
+        : DataExtReader(std::move(in), kDataExt_NumID8 | kDataExt_File64)
         , _ents(ents)
         , _dataVer(data_ver)
     {}
 
 protected:
-    HError ReadBlock(int block_id, const String &ext_id,
+    HError ReadBlock(Stream *in, int block_id, const String &ext_id,
         soff_t block_len, bool &read_next) override;
 
     LoadedGameEntities &_ents;
     GameDataVersion _dataVer {};
 };
 
-HError GameDataExtReader::ReadBlock(int /*block_id*/, const String &ext_id,
+static HError ReadInteractionScriptModules(Stream *in, LoadedGameEntities &ents)
+{
+    // Updated InteractionEvents format, which specifies script module
+    // for object interaction events
+    size_t num_chars = in->ReadInt32();
+    if (num_chars != ents.Game.chars.size())
+        return new Error(String::FromFormat("Mismatching number of characters: read %zu expected %zu", num_chars, ents.Game.chars.size()));
+    for (size_t i = 0; i < (size_t)ents.Game.numcharacters; ++i)
+        ents.Game.charScripts[i] = InteractionEvents::CreateFromStream_v362(in);
+    uint32_t num_invitems = in->ReadInt32();
+    if (num_invitems != ents.Game.numinvitems)
+        return new Error(String::FromFormat("Mismatching number of inventory items: read %zu expected %zu", num_invitems, (size_t)ents.Game.numinvitems));
+    for (uint32_t i = 0; i < (uint32_t)ents.Game.numinvitems; ++i)
+        ents.Game.invScripts[i] = InteractionEvents::CreateFromStream_v362(in);
+
+    // Script module specification for GUI events
+    uint32_t num_gui = in->ReadInt32();
+    if (num_gui != ents.Game.numgui)
+        return new Error(String::FromFormat("Mismatching number of GUI: read %zu expected %zu", num_gui, (size_t)ents.Game.numgui));
+    for (size_t i = 0; i < (size_t)ents.Game.numgui; ++i)
+        ents.Guis[i].ScriptModule = StrUtil::ReadString(in);
+    return HError::None();
+}
+
+HError GameDataExtReader::ReadBlock(Stream *in, int /*block_id*/, const String &ext_id,
     soff_t /*block_len*/, bool &read_next)
 {
     read_next = true;
@@ -805,62 +848,176 @@ HError GameDataExtReader::ReadBlock(int /*block_id*/, const String &ext_id,
     // }
     if (ext_id.CompareNoCase("v360_fonts") == 0)
     {
-        for (int i = 0; i < _ents.Game.numfonts; ++i)
+        for (FontInfo &finfo : _ents.Game.fonts)
         {
             // adjustable font outlines
-            _ents.Game.fonts[i].AutoOutlineThickness = _in->ReadInt32();
-            _ents.Game.fonts[i].AutoOutlineStyle =
-                static_cast<enum FontInfo::AutoOutlineStyle>(_in->ReadInt32());
+            finfo.AutoOutlineThickness = in->ReadInt32();
+            finfo.AutoOutlineStyle =
+                static_cast<enum FontInfo::AutoOutlineStyle>(in->ReadInt32());
             // reserved
-            _in->ReadInt32();
-            _in->ReadInt32();
-            _in->ReadInt32();
-            _in->ReadInt32();
+            in->ReadInt32();
+            in->ReadInt32();
+            in->ReadInt32();
+            in->ReadInt32();
         }
-        return HError::None();
     }
     else if (ext_id.CompareNoCase("v360_cursors") == 0)
     {
-        for (int i = 0; i < _ents.Game.numcursors; ++i)
+        for (MouseCursor &mcur : _ents.Game.mcurs)
         {
-            _ents.Game.mcurs[i].animdelay = _in->ReadInt32();
+            mcur.animdelay = in->ReadInt32();
             // reserved
-            _in->ReadInt32();
-            _in->ReadInt32();
-            _in->ReadInt32();
+            in->ReadInt32();
+            in->ReadInt32();
+            in->ReadInt32();
         }
-        return HError::None();
     }
-    return new MainGameFileError(kMGFErr_ExtUnknown, String::FromFormat("Type: %s", ext_id.GetCStr()));
+    else if (ext_id.CompareNoCase("v361_objnames") == 0)
+    {
+        // Extended object names and script names:
+        // for object types that had hard name length limits
+        _ents.Game.gamename = StrUtil::ReadString(in);
+        _ents.Game.saveGameFolderName = StrUtil::ReadString(in);
+        size_t num_chars = in->ReadInt32();
+        if (num_chars != _ents.Game.chars.size())
+            return new Error(String::FromFormat("Mismatching number of characters: read %zu expected %zu", num_chars, _ents.Game.chars.size()));
+        for (int i = 0; i < _ents.Game.numcharacters; ++i)
+        {
+            auto &chinfo = _ents.Game.chars[i];
+            auto &chinfo2 = _ents.Game.chars2[i];
+            chinfo2.scrname_new = StrUtil::ReadString(in);
+            chinfo2.name_new = StrUtil::ReadString(in);
+            // assign to the legacy fields for compatibility with old plugins
+            snprintf(chinfo.scrname, LEGACY_MAX_SCRIPT_NAME_LEN, "%s", chinfo2.scrname_new.GetCStr());
+            snprintf(chinfo.name, LEGACY_MAX_CHAR_NAME_LEN, "%s", chinfo2.name_new.GetCStr());
+        }
+        size_t num_invitems = in->ReadInt32();
+        if (num_invitems != _ents.Game.numinvitems)
+            return new Error(String::FromFormat("Mismatching number of inventory items: read %zu expected %zu", num_invitems, (size_t)_ents.Game.numinvitems));
+        for (int i = 0; i < _ents.Game.numinvitems; ++i)
+        {
+            _ents.Game.invinfo[i].name = StrUtil::ReadString(in);
+        }
+        size_t num_cursors = in->ReadInt32();
+        if (num_cursors != _ents.Game.mcurs.size())
+            return new Error(String::FromFormat("Mismatching number of cursors: read %zu expected %zu", num_cursors, _ents.Game.mcurs.size()));
+        for (MouseCursor &mcur : _ents.Game.mcurs)
+        {
+            mcur.name = StrUtil::ReadString(in);
+        }
+        size_t num_clips = in->ReadInt32();
+        if (num_clips != _ents.Game.audioClips.size())
+            return new Error(String::FromFormat("Mismatching number of audio clips: read %zu expected %zu", num_clips, _ents.Game.audioClips.size()));
+        for (ScriptAudioClip &clip : _ents.Game.audioClips)
+        {
+            clip.scriptName = StrUtil::ReadString(in);
+            clip.fileName = StrUtil::ReadString(in);
+        }
+    }
+    else if (ext_id.CompareNoCase("v362_interevents") == 0)
+    {
+        HError err = ReadInteractionScriptModules(in, _ents);
+        if (!err)
+            return err;
+    }
+    else if (ext_id.CompareNoCase("v362_interevent2") == 0)
+    {
+        // Explicit script module names
+        // NOTE: that scripts may not be initialized at this time in case they are stored as separate
+        // assets within the game package; we still read the names though to keep data format simpler
+        String script_name = StrUtil::ReadString(in);
+        if (_ents.GlobalScript)
+            _ents.GlobalScript->SetScriptName(script_name.ToStdString());
+        script_name = StrUtil::ReadString(in);
+        if (_ents.DialogScript)
+            _ents.DialogScript->SetScriptName(script_name.ToStdString());
+        size_t module_count = in->ReadInt32();
+        if (module_count != _ents.ScriptModules.size())
+            return new Error(String::FromFormat("Mismatching number of script modules: read %zu expected %zu", module_count, _ents.ScriptModules.size()));
+        for (size_t i = 0; i < module_count; ++i)
+        {
+            script_name = StrUtil::ReadString(in);
+            if (_ents.ScriptModules[i])
+                _ents.ScriptModules[i]->SetScriptName(script_name.ToStdString());
+        }
+
+        HError err = ReadInteractionScriptModules(in, _ents);
+        if (!err)
+            return err;
+    }
+    else if (ext_id.CompareNoCase("v362_guictrls") == 0)
+    {
+        size_t num_guibut = in->ReadInt32();
+        if (num_guibut != _ents.GuiControls.Buttons.size())
+            return new Error(String::FromFormat("Mismatching number of GUI buttons: read %zu expected %zu", num_guibut, _ents.GuiControls.Buttons.size()));
+        for (GUIButton &but : _ents.GuiControls.Buttons)
+        {
+            // button padding
+            but.TextPaddingHor = in->ReadInt32();
+            but.TextPaddingVer = in->ReadInt32();
+            in->ReadInt32(); // reserve 2 ints
+            in->ReadInt32();
+        }
+    }
+    else
+    {
+        return new MainGameFileError(kMGFErr_ExtUnknown, String::FromFormat("Type: %s", ext_id.GetCStr()));
+    }
+    return HError::None();
+}
+
+// Search and read only data belonging to the general game info
+class GameDataExtPreloader : public GameDataExtReader
+{
+public:
+    GameDataExtPreloader(LoadedGameEntities &ents, GameDataVersion data_ver, std::unique_ptr<Stream> &&in)
+        : GameDataExtReader(ents, data_ver, std::move(in)) {}
+
+protected:
+    HError ReadBlock(Stream *in, int block_id, const String &ext_id,
+        soff_t block_len, bool &read_next) override;
+};
+
+HError GameDataExtPreloader::ReadBlock(Stream *in, int /*block_id*/, const String &ext_id,
+    soff_t /*block_len*/, bool &read_next)
+{
+    // Try reading only data which belongs to the general game info
+    read_next = true;
+    if (ext_id.CompareNoCase("v361_objnames") == 0)
+    {
+        _ents.Game.gamename = StrUtil::ReadString(in);
+        _ents.Game.saveGameFolderName = StrUtil::ReadString(in);
+        read_next = false; // we're done
+    }
+    SkipBlock(); // prevent assertion trigger
+    return HError::None();
 }
 
 
-HGameFileError ReadGameData(LoadedGameEntities &ents, Stream *in, GameDataVersion data_ver)
+HGameFileError ReadGameData(LoadedGameEntities &ents, std::unique_ptr<Stream> &&s_in, GameDataVersion data_ver)
 {
     GameSetupStruct &game = ents.Game;
+    Stream *in = s_in.get(); // for convenience
 
     //-------------------------------------------------------------------------
-    // The classic data section.
+    // The standard data section.
     //-------------------------------------------------------------------------
     GameSetupStruct::SerializeInfo sinfo;
-    {
-        AlignedStream align_s(in, Common::kAligned_Read);
-        game.GameSetupStructBase::ReadFromFile(&align_s, data_ver, sinfo);
-    }
+    game.GameSetupStructBase::ReadFromFile(in, data_ver, sinfo);
+    game.read_savegame_info(in, data_ver); // here we also read GUID in v3.* games
 
-    Debug::Printf(kDbgMsg_Info, "Game title: '%s'", game.gamename);
+    Debug::Printf(kDbgMsg_Info, "Game title: '%s'", game.gamename.GetCStr());
     Debug::Printf(kDbgMsg_Info, "Game uid (old format): `%d`", game.uniqueid);
     Debug::Printf(kDbgMsg_Info, "Game guid: '%s'", game.guid);
 
     if (game.GetGameRes().IsNull())
         return new MainGameFileError(kMGFErr_InvalidNativeResolution);
 
-    game.read_savegame_info(in, data_ver);
     game.read_font_infos(in, data_ver);
     HGameFileError err = ReadSpriteFlags(ents, in, data_ver);
     if (!err)
         return err;
-    game.ReadInvInfo_Aligned(in);
+    game.ReadInvInfo(in);
     err = game.read_cursors(in);
     if (!err)
         return err;
@@ -896,12 +1053,13 @@ HGameFileError ReadGameData(LoadedGameEntities &ents, Stream *in, GameDataVersio
 
     ReadDialogs(ents.Dialogs, ents.OldDialogScripts, ents.OldDialogSources, ents.OldSpeechLines,
                 in, data_ver, game.numdialog);
-    HError err2 = GUI::ReadGUI(in);
+    GUIRefCollection guictrl_refs(ents.GuiControls);
+    HError err2 = GUI::ReadGUI(ents.Guis, guictrl_refs, in);
     if (!err2)
         return new MainGameFileError(kMGFErr_GameEntityFailed, err2);
-    game.numgui = guis.size();
+    game.numgui = ents.Guis.size();
 
-    if (data_ver >= kGameVersion_260)
+    if (data_ver >= kGameVersion_255)
     {
         err = ReadPlugins(ents.PluginInfos, in);
         if (!err)
@@ -922,7 +1080,7 @@ HGameFileError ReadGameData(LoadedGameEntities &ents, Stream *in, GameDataVersio
     //-------------------------------------------------------------------------
     // All the extended data, for AGS > 3.5.0.
     //-------------------------------------------------------------------------
-    GameDataExtReader reader(ents, data_ver, in);
+    GameDataExtReader reader(ents, data_ver, std::move(s_in));
     HError ext_err = reader.Read();
     return ext_err ? HGameFileError::None() : new MainGameFileError(kMGFErr_ExtListFailed, ext_err);
 }
@@ -931,45 +1089,33 @@ HGameFileError UpdateGameData(LoadedGameEntities &ents, GameDataVersion data_ver
 {
     GameSetupStruct &game = ents.Game;
     ApplySpriteData(game, ents, data_ver);
+    UpgradeGame(game, data_ver);
     UpgradeFonts(game, data_ver);
     UpgradeAudio(game, ents, data_ver);
     UpgradeCharacters(game, data_ver);
-    UpgradeGUI(game, data_ver);
+    UpgradeGUI(game, ents, data_ver);
     UpgradeMouseCursors(game, data_ver);
     SetDefaultGlobalMessages(game);
-    // Global talking animation speed
-    if (data_ver < kGameVersion_312)
-    {
-        // Fix animation speed for old formats
-        game.options[OPT_GLOBALTALKANIMSPD] = 5;
-    }
-    else if (data_ver < kGameVersion_330)
-    {
-        // Convert game option for 3.1.2 - 3.2 games
-        game.options[OPT_GLOBALTALKANIMSPD] = game.options[OPT_GLOBALTALKANIMSPD] != 0 ? 5 : (-5 - 1);
-    }
-    // Old dialog options API for pre-3.4.0.2 games
-    if (data_ver < kGameVersion_340_2)
-    {
-        game.options[OPT_DIALOGOPTIONSAPI] = -1;
-    }
-    // Relative asset resolution in pre-3.5.0.8 (always enabled)
-    if (data_ver < kGameVersion_350)
-    {
-        game.options[OPT_RELATIVEASSETRES] = 1;
-    }
     FixupSaveDirectory(game);
     return HGameFileError::None();
 }
 
-void PreReadGameData(GameSetupStruct &game, Stream *in, GameDataVersion data_ver)
+void PreReadGameData(GameSetupStruct &game, std::unique_ptr<Stream> &&s_in, GameDataVersion data_ver)
 {
+    Stream *in = s_in.get(); // for convenience
     GameSetupStruct::SerializeInfo sinfo;
-    {
-        AlignedStream align_s(in, Common::kAligned_Read);
-        game.ReadFromFile(&align_s, data_ver, sinfo);
-    }
-    game.read_savegame_info(in, data_ver);
+    game.GameSetupStructBase::ReadFromFile(in, data_ver, sinfo);
+    game.read_savegame_info(in, data_ver); // here we also read GUID in v3.* games
+
+    // Check for particular expansions that might have data necessary
+    // for "preload" purposes
+    if (sinfo.ExtensionOffset == 0u)
+        return; // either no extensions, or data version is too early
+
+    in->Seek(sinfo.ExtensionOffset, kSeekBegin);
+    LoadedGameEntities ents(game);
+    GameDataExtPreloader reader(ents, data_ver, std::move(s_in));
+    reader.Read();
 }
 
 } // namespace Common

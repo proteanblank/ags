@@ -18,11 +18,11 @@ namespace AGS.Editor
     public class ScriptEditorBase : EditorContentPanel
     {
         // Common Edit menu commands
-        private const string CUT_COMMAND = "ScriptCut";
-        private const string COPY_COMMAND = "ScriptCopy";
-        private const string PASTE_COMMAND = "ScriptPaste";
-        private const string UNDO_COMMAND = "ScriptUndo";
-        private const string REDO_COMMAND = "ScriptRedo";
+        protected const string CUT_COMMAND = "ScriptCut";
+        protected const string COPY_COMMAND = "ScriptCopy";
+        protected const string PASTE_COMMAND = "ScriptPaste";
+        protected const string UNDO_COMMAND = "ScriptUndo";
+        protected const string REDO_COMMAND = "ScriptRedo";
         private const string SHOW_AUTOCOMPLETE_COMMAND = "ScriptShowAutoComplete";
         private const string MATCH_BRACE_COMMAND = "MatchBrace";
         private const string FIND_COMMAND = "ScriptFind";
@@ -31,10 +31,9 @@ namespace AGS.Editor
         private const string FIND_ALL_COMMAND = "ScriptFindAll";
         private const string REPLACE_ALL_COMMAND = "ScriptReplaceAll";
         private const string GOTO_LINE_COMMAND = "ScriptGotoLine";
-        // Common Context menu commands
-        private const string CONTEXT_MENU_GO_TO_DEFINITION = "CtxGoToDefiniton";
-        private const string CONTEXT_MENU_FIND_ALL_USAGES = "CtxFindAllUsages";
-        private const string CONTEXT_MENU_GO_TO_SPRITE = "CtxGoToSprite";
+        private const string GO_TO_DEFINITION_COMMAND = "ScriptGoToDefiniton";
+        private const string FIND_ALL_USAGES_COMMAND = "ScriptFindAllUsages";
+        private const string GO_TO_SPRITE_COMMAND = "ScriptGoToSprite";
 
         protected AGSEditor _agsEditor;
         // Loaded script reference, is assigned by the child class.
@@ -49,8 +48,14 @@ namespace AGS.Editor
         private MenuCommands _extraMenu = new MenuCommands("&Edit", GUIController.FILE_MENU_ID);
         private List<MenuCommand> _toolbarIcons = new List<MenuCommand>();
         // Menu item refs, for tracking their state
-        private MenuCommand _menuCmdUndo, _menuCmdRedo,
-            _menuCmdCut, _menuCmdCopy, _menuCmdPaste;
+        private MenuCommand _menuCmdUndo,
+             _menuCmdRedo,
+            _menuCmdCut,
+            _menuCmdCopy,
+            _menuCmdPaste,
+            _menuCmdGoToDefinition,
+            _menuCmdFindAllUsages,
+            _menuCmdGoToSprite;
 
         // Find/replace data
         // TODO: pick this out into a separate Find/Replace class?
@@ -113,12 +118,14 @@ namespace AGS.Editor
             _scintilla = scintilla;
             _scintilla.ConstructContextMenu += scintilla_ConstructContextMenu;
             _scintilla.ActivateContextMenu += scintilla_ActivateContextMenu;
+            _scintilla.UpdateUI += scintilla_UpdateUI;
         }
 
         private void DisconnectScintilla()
         {
             _scintilla.ConstructContextMenu -= scintilla_ConstructContextMenu;
             _scintilla.ActivateContextMenu -= scintilla_ActivateContextMenu;
+            _scintilla.UpdateUI -= scintilla_UpdateUI;
             _scintilla = null;
         }
 
@@ -126,11 +133,16 @@ namespace AGS.Editor
 
         private void InitEditorMenus()
         {
-            _menuCmdUndo = new MenuCommand(UNDO_COMMAND, "Undo", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Z, "UndoMenuIcon");
-            _menuCmdRedo = new MenuCommand(REDO_COMMAND, "Redo", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Y, "RedoMenuIcon");
-            _menuCmdCut = new MenuCommand(CUT_COMMAND, "Cut", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.X, "CutMenuIcon");
-            _menuCmdCopy = new MenuCommand(COPY_COMMAND, "Copy", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.C, "CopyMenuIcon");
-            _menuCmdPaste = new MenuCommand(PASTE_COMMAND, "Paste", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.V, "PasteMenuIcon");
+            _menuCmdUndo = new MenuCommand(UNDO_COMMAND, "Undo", "UndoMenuIcon");
+            _menuCmdUndo.ShortcutKeyDisplayString = "Ctrl+Z";
+            _menuCmdRedo = new MenuCommand(REDO_COMMAND, "Redo", "RedoMenuIcon");
+            _menuCmdRedo.ShortcutKeyDisplayString = "Ctrl+Y";
+            _menuCmdCut = new MenuCommand(CUT_COMMAND, "Cut", "CutMenuIcon");
+            _menuCmdCut.ShortcutKeyDisplayString = "Ctrl+X";
+            _menuCmdCopy = new MenuCommand(COPY_COMMAND, "Copy", "CopyMenuIcon");
+            _menuCmdCopy.ShortcutKeyDisplayString = "Ctrl+C";
+            _menuCmdPaste = new MenuCommand(PASTE_COMMAND, "Paste", "PasteMenuIcon");
+            _menuCmdPaste.ShortcutKeyDisplayString = "Ctrl+V";
             _extraMenu.Commands.Add(_menuCmdUndo);
             _extraMenu.Commands.Add(_menuCmdRedo);
             _extraMenu.Commands.Add(MenuCommand.Separator);
@@ -138,16 +150,29 @@ namespace AGS.Editor
             _extraMenu.Commands.Add(_menuCmdCopy);
             _extraMenu.Commands.Add(_menuCmdPaste);
             _extraMenu.Commands.Add(MenuCommand.Separator);
-            _extraMenu.Commands.Add(new MenuCommand(FIND_COMMAND, "Find...", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.F, "FindMenuIcon"));
-            _extraMenu.Commands.Add(new MenuCommand(FIND_NEXT_COMMAND, "Find next", System.Windows.Forms.Keys.F3, "FindNextMenuIcon"));
-            _extraMenu.Commands.Add(new MenuCommand(REPLACE_COMMAND, "Replace...", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.E));
+            _extraMenu.Commands.Add(new MenuCommand(FIND_COMMAND, "Find...", Keys.Control | Keys.F, "FindMenuIcon"));
+            _extraMenu.Commands.Add(new MenuCommand(FIND_NEXT_COMMAND, "Find next", Keys.F3, "FindNextMenuIcon"));
+            _extraMenu.Commands.Add(new MenuCommand(REPLACE_COMMAND, "Replace...", Keys.Control | Keys.E));
             _extraMenu.Commands.Add(MenuCommand.Separator);
-            _extraMenu.Commands.Add(new MenuCommand(FIND_ALL_COMMAND, "Find All...", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift | System.Windows.Forms.Keys.F, "FindMenuIcon"));
-            _extraMenu.Commands.Add(new MenuCommand(REPLACE_ALL_COMMAND, "Replace All...", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Shift | System.Windows.Forms.Keys.E));
+            _extraMenu.Commands.Add(new MenuCommand(FIND_ALL_COMMAND, "Find All...", Keys.Control | Keys.Shift | Keys.F, "FindMenuIcon"));
+            _extraMenu.Commands.Add(new MenuCommand(REPLACE_ALL_COMMAND, "Replace All...", Keys.Control | Keys.Shift | Keys.E));
             _extraMenu.Commands.Add(MenuCommand.Separator);
-            _extraMenu.Commands.Add(new MenuCommand(SHOW_AUTOCOMPLETE_COMMAND, "Show Autocomplete", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.Space, "ShowAutocompleteMenuIcon"));
-            _extraMenu.Commands.Add(new MenuCommand(MATCH_BRACE_COMMAND, "Match Brace", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.B));
-            _extraMenu.Commands.Add(new MenuCommand(GOTO_LINE_COMMAND, "Go to Line...", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.G));
+            _extraMenu.Commands.Add(new MenuCommand(SHOW_AUTOCOMPLETE_COMMAND, "Show Autocomplete", Keys.Control | Keys.Space, "ShowAutocompleteMenuIcon"));
+            _extraMenu.Commands.Add(new MenuCommand(MATCH_BRACE_COMMAND, "Match Brace", Keys.Control | Keys.B));
+            _extraMenu.Commands.Add(new MenuCommand(GOTO_LINE_COMMAND, "Go to Line...", Keys.Control | Keys.G));
+
+            _menuCmdGoToDefinition = new MenuCommand(GO_TO_DEFINITION_COMMAND, "Go to Definition", Keys.F12);
+            _menuCmdGoToDefinition.Enabled = false;
+            _menuCmdFindAllUsages = new MenuCommand(FIND_ALL_USAGES_COMMAND, "Find All Usages", Keys.Shift | Keys.F12);
+            _menuCmdFindAllUsages.Enabled = false;
+            _menuCmdGoToSprite = new MenuCommand(GO_TO_SPRITE_COMMAND, "Go to Sprite", Keys.Shift | Keys.F7);
+            _menuCmdGoToSprite.Enabled = false;
+
+            _extraMenu.Commands.Add(MenuCommand.Separator);
+            _extraMenu.Commands.Add(_menuCmdGoToDefinition);
+            _extraMenu.Commands.Add(_menuCmdFindAllUsages);
+            _extraMenu.Commands.Add(_menuCmdGoToSprite);
+
             AddEditMenuCommands(_extraMenu);
 
             _toolbarIcons.Add(_menuCmdCut);
@@ -189,184 +214,241 @@ namespace AGS.Editor
         /// <param name="command"></param>
         protected override void OnCommandClick(string command)
         {
-            if (command == CUT_COMMAND)
+            if (IsStandardEditCommand(command))
             {
-                _scintilla.Cut();
-            }
-            else if (command == COPY_COMMAND)
-            {
-                _scintilla.Copy();
-            }
-            else if (command == PASTE_COMMAND)
-            {
-                _scintilla.Paste();
-            }
-            else if (command == UNDO_COMMAND)
-            {
-                if (_scintilla.CanUndo())
+                if (!_scintilla.ContainsFocus) return;
+                if (command == CUT_COMMAND)
                 {
-                    _scintilla.Undo();
+                    _scintilla.Cut();
+                }
+                else if (command == COPY_COMMAND)
+                {
+                    _scintilla.Copy();
+                }
+                else if (command == PASTE_COMMAND)
+                {
+                    _scintilla.Paste();
+                }
+                else if (command == UNDO_COMMAND)
+                {
+                    if (_scintilla.CanUndo())
+                    {
+                        _scintilla.Undo();
+                    }
+                }
+                else if (command == REDO_COMMAND)
+                {
+                    if (_scintilla.CanRedo())
+                    {
+                        _scintilla.Redo();
+                    }
                 }
             }
-            else if (command == REDO_COMMAND)
+            else if (IsContextCommand(command))
             {
-                if (_scintilla.CanRedo())
+                if (command == GO_TO_DEFINITION_COMMAND ||
+                    command == FIND_ALL_USAGES_COMMAND)
                 {
-                    _scintilla.Redo();
+                    string[] structAndMember = _goToDefinition.Split('.');
+                    string structName = null;
+                    string memberName = structAndMember[0];
+                    if (structAndMember.Length > 1)
+                    {
+                        structName = structAndMember[0];
+                        memberName = structAndMember[1];
+                    }
+
+                    if (command == GO_TO_DEFINITION_COMMAND)
+                    {
+                        GoToDefinition(structName, memberName);
+                    }
+                    else
+                    {
+                        FindAllUsages(structName, memberName);
+                    }
+                }
+                else if (command == GO_TO_SPRITE_COMMAND)
+                {
+                    if (!Factory.Events.OnShowSpriteManager(_goToSprite.Value))
+                    {
+                        Factory.GUIController.ShowMessage("Unable to display sprite " + _goToSprite + ". Could not find a sprite with that number.", MessageBoxIcon.Warning);
+                    }
                 }
             }
-            else if (command == SHOW_AUTOCOMPLETE_COMMAND)
+            else 
             {
-                _scintilla.ShowAutocompleteNow();
-            }
-            else if (command == MATCH_BRACE_COMMAND)
-            {
-                _scintilla.ShowMatchingBraceIfPossible();
-            }
-            else if (command == GOTO_LINE_COMMAND)
-            {
-                GotoLineDialog gotoLineDialog = new GotoLineDialog
+                _scintilla.Focus();
+                if (command == SHOW_AUTOCOMPLETE_COMMAND)
                 {
-                    Minimum = 1,
-                    Maximum = _scintilla.LineCount,
-                    LineNumber = _scintilla.CurrentLine + 1
-                };
-                if (gotoLineDialog.ShowDialog() != DialogResult.OK) return;
-                GoToLine(gotoLineDialog.LineNumber);
-            }
-            else if ((command == FIND_COMMAND) || (command == REPLACE_COMMAND)
-                || (command == FIND_ALL_COMMAND) || (command == REPLACE_ALL_COMMAND))
-            {
-                if (_scintilla.IsSomeSelectedText())
-                {
-                    _lastSearchText = _scintilla.SelectedText;
+                    _scintilla.ShowAutocompleteNow();
                 }
-                else _lastSearchText = string.Empty;
-                ShowFindReplaceDialog(command == REPLACE_COMMAND || command == REPLACE_ALL_COMMAND,
-                    command == FIND_ALL_COMMAND || command == REPLACE_ALL_COMMAND);
-            }
-            else if (command == FIND_NEXT_COMMAND)
-            {
-                if (_lastSearchText.Length > 0)
+                else if (command == MATCH_BRACE_COMMAND)
                 {
-                    _scintilla.FindNextOccurrence(_lastSearchText, _lastCaseSensitive, true);
+                    _scintilla.ShowMatchingBraceIfPossible();
+                }
+                else if (command == GOTO_LINE_COMMAND)
+                {
+                    GotoLineDialog gotoLineDialog = new GotoLineDialog
+                    {
+                        Minimum = 1,
+                        Maximum = _scintilla.LineCount,
+                        LineNumber = _scintilla.CurrentLine + 1
+                    };
+                    if (gotoLineDialog.ShowDialog() != DialogResult.OK) return;
+                    GoToLine(gotoLineDialog.LineNumber);
+                }
+                else if ((command == FIND_COMMAND) || (command == REPLACE_COMMAND)
+                    || (command == FIND_ALL_COMMAND) || (command == REPLACE_ALL_COMMAND))
+                {
+                    if (_scintilla.IsSomeSelectedText())
+                    {
+                        _lastSearchText = _scintilla.SelectedText;
+                    }
+                    else _lastSearchText = string.Empty;
+                    ShowFindReplaceDialog(command == REPLACE_COMMAND || command == REPLACE_ALL_COMMAND,
+                        command == FIND_ALL_COMMAND || command == REPLACE_ALL_COMMAND);
+                }
+                else if (command == FIND_NEXT_COMMAND)
+                {
+                    if (_lastSearchText.Length > 0)
+                    {
+                        _scintilla.FindNextOccurrence(_lastSearchText, _lastCaseSensitive, true);
+                    }
                 }
             }
+            UpdateUICommands();
         }
 
         /// <summary>
-        /// Updates the state of toolbar icons.
+        /// Updates the state of menu commands (this affects both menu and toolbar icons).
         /// May be overriden in derived classes for their specific commands.
         /// </summary>
-        protected virtual void UpdateToolbarButtonsIfNecessary()
+        protected virtual void UpdateUICommands()
         {
+            UpdateScriptDocumentContext(_scintilla.CurrentPos);
+
             bool canCutAndCopy = _scintilla.CanCutAndCopy();
             bool canPaste = _scintilla.CanPaste();
             bool canUndo = _scintilla.CanUndo();
             bool canRedo = _scintilla.CanRedo();
-            if ((_menuCmdCopy.Enabled != canCutAndCopy) ||
+            bool canGoToDefinition = _goToDefinition != null;
+            bool canGoToSprite = _goToSprite != null;
+
+            bool changed =
+                (_menuCmdCopy.Enabled != canCutAndCopy) ||
                 (_menuCmdPaste.Enabled != canPaste) ||
                 (_menuCmdUndo.Enabled != canUndo) ||
-                (_menuCmdRedo.Enabled != canRedo))
+                (_menuCmdRedo.Enabled != canRedo) ||
+                (_menuCmdGoToDefinition.Enabled != canGoToDefinition) ||
+                (_menuCmdFindAllUsages.Enabled != canGoToDefinition) ||
+                (_menuCmdGoToSprite.Enabled != canGoToSprite);
+
+            if (changed)
             {
                 _menuCmdCopy.Enabled = canCutAndCopy;
                 _menuCmdCut.Enabled = canCutAndCopy;
                 _menuCmdPaste.Enabled = canPaste;
                 _menuCmdUndo.Enabled = canUndo;
                 _menuCmdRedo.Enabled = canRedo;
+                _menuCmdGoToDefinition.Enabled = _menuCmdFindAllUsages.Enabled = canGoToDefinition;
+                _menuCmdGoToSprite.Enabled = canGoToSprite;
+
                 Factory.ToolBarManager.RefreshCurrentPane();
                 Factory.MenuManager.RefreshCurrentPane();
             }
         }
 
+        protected static bool IsStandardEditCommand(string c)
+        {
+            return (c == CUT_COMMAND) || (c == COPY_COMMAND) || (c == PASTE_COMMAND) || (c == UNDO_COMMAND) || (c == REDO_COMMAND);
+        }
+
+        protected static bool IsContextCommand(string c)
+        {
+            return (c == GO_TO_DEFINITION_COMMAND) || (c == FIND_ALL_USAGES_COMMAND) || (c == GO_TO_SPRITE_COMMAND);
+        }
+
+        protected void UpdateScriptDocumentContext(int clickedPositionInDocument)
+        {
+            _goToSprite = null;
+            _goToDefinition = null;
+
+            if (_scintilla.InsideStringOrComment(clickedPositionInDocument))
+            {
+                return;
+            }
+
+            string clickedOnType = _scintilla.GetFullTypeNameAtPosition(clickedPositionInDocument);
+            
+            // if on nothing, or a number, ignore
+            if (clickedOnType.Length > 0)
+            {
+                int temp;
+                float dummy;
+
+                if (int.TryParse(clickedOnType, out temp))
+                {
+                    _goToSprite = temp;
+                }
+                else if (!float.TryParse(clickedOnType, out dummy))
+                {
+                    _goToDefinition = clickedOnType;
+                }
+            }
+        }
+
+        protected void EnableStandardEditCommands(bool copy = true, bool cut = true, bool paste = true, bool undo = true, bool redo = true)
+        {
+            _menuCmdCopy.Enabled = copy;
+            _menuCmdCut.Enabled = cut;
+            _menuCmdPaste.Enabled = paste;
+            _menuCmdUndo.Enabled = undo;
+            _menuCmdRedo.Enabled = redo;
+            Factory.ToolBarManager.RefreshCurrentPane();
+            Factory.MenuManager.RefreshCurrentPane();
+        }
+
+        private void scintilla_UpdateUI(object sender, EventArgs e)
+        {
+            UpdateUICommands();
+        }
+
         private void scintilla_ConstructContextMenu(ContextMenuStrip menuStrip, int clickedPositionInDocument)
         {
             EventHandler onClick = new EventHandler(ContextMenuChooseOption);
+            ToolStripMenuItem menuItem;
 
-            _goToSprite = null;
-            string clickedOnType = string.Empty;
-            if (!_scintilla.InsideStringOrComment(clickedPositionInDocument))
-            {
-                float dummy;
-                clickedOnType = _scintilla.GetFullTypeNameAtPosition(clickedPositionInDocument);
-                // if on nothing, or a number, ignore
-                if (clickedOnType.Length > 0)
-                {
-                    int temp;
-                    if (int.TryParse(clickedOnType, out temp))
-                    {
-                        _goToSprite = temp;
-                        clickedOnType = string.Empty;
-                    }
-                    else if (!float.TryParse(clickedOnType, out dummy))
-                    {
-                        _goToDefinition = clickedOnType;
-                        clickedOnType = " of " + clickedOnType;
-                    }
-                }
-                else
-                {
-                    clickedOnType = string.Empty;
-                }
-            }
+            UpdateScriptDocumentContext(clickedPositionInDocument);
 
-            menuStrip.Items.Add(new ToolStripMenuItem("Go to Definition" + clickedOnType, null, onClick, CONTEXT_MENU_GO_TO_DEFINITION));
-            if (clickedOnType == string.Empty)
-            {
-                menuStrip.Items[menuStrip.Items.Count - 1].Enabled = false;
-            }
+            string typeName = _goToDefinition != null ? (" of " +  _goToDefinition) : string.Empty;
 
-            menuStrip.Items.Add(new ToolStripMenuItem("Find All Usages" + clickedOnType, null, onClick, CONTEXT_MENU_FIND_ALL_USAGES));
-            if (clickedOnType == string.Empty)
-            {
-                menuStrip.Items[menuStrip.Items.Count - 1].Enabled = false;
-            }
+            menuItem = new ToolStripMenuItem(_menuCmdGoToDefinition.Name + typeName, null, onClick, GO_TO_DEFINITION_COMMAND);
+            menuItem.ShortcutKeys = _menuCmdGoToDefinition.ShortcutKey;
+            menuItem.Enabled = (_goToDefinition != null);
+            menuStrip.Items.Add(menuItem);
 
-            menuStrip.Items.Add(new ToolStripMenuItem("Go to sprite " + (_goToSprite.HasValue ? _goToSprite.ToString() : ""), null, onClick, CONTEXT_MENU_GO_TO_SPRITE));
-            if (_goToSprite == null)
-            {
-                menuStrip.Items[menuStrip.Items.Count - 1].Enabled = false;
-            }
+            menuItem = new ToolStripMenuItem(_menuCmdFindAllUsages.Name + typeName, null, onClick, FIND_ALL_USAGES_COMMAND);
+            menuItem.ShortcutKeys = _menuCmdFindAllUsages.ShortcutKey;
+            menuItem.Enabled = (_goToDefinition != null);
+            menuStrip.Items.Add(menuItem);
+
+            menuItem = new ToolStripMenuItem(_menuCmdGoToSprite.Name + (_goToSprite.HasValue ? " " + _goToSprite.ToString() : ""), null, onClick, GO_TO_SPRITE_COMMAND);
+            menuItem.ShortcutKeys = _menuCmdGoToSprite.ShortcutKey;
+            menuItem.Enabled = (_goToSprite != null);
+            menuStrip.Items.Add(menuItem);
 
             AddCtxCommands(menuStrip);
         }
 
         private void scintilla_ActivateContextMenu(string commandName)
         {
-            UpdateToolbarButtonsIfNecessary();
+            UpdateUICommands();
         }
 
         private void ContextMenuChooseOption(object sender, EventArgs e)
         {
             ToolStripMenuItem item = (ToolStripMenuItem)sender;
-            if (item.Name == CONTEXT_MENU_GO_TO_DEFINITION ||
-                item.Name == CONTEXT_MENU_FIND_ALL_USAGES)
-            {
-                string[] structAndMember = _goToDefinition.Split('.');
-                string structName = null;
-                string memberName = structAndMember[0];
-                if (structAndMember.Length > 1)
-                {
-                    structName = structAndMember[0];
-                    memberName = structAndMember[1];
-                }
-
-                if (item.Name == CONTEXT_MENU_GO_TO_DEFINITION)
-                {
-                    GoToDefinition(structName, memberName);
-                }
-                else
-                {
-                    FindAllUsages(structName, memberName);
-                }
-            }
-            else if (item.Name == CONTEXT_MENU_GO_TO_SPRITE)
-            {
-                if (!Factory.Events.OnShowSpriteManager(_goToSprite.Value))
-                {
-                    Factory.GUIController.ShowMessage("Unable to display sprite " + _goToSprite + ". Could not find a sprite with that number.", MessageBoxIcon.Warning);
-                }
-            }
+            OnCommandClick(item.Name);
         }
 
         #endregion
@@ -378,8 +460,11 @@ namespace AGS.Editor
             GoToLine(lineNumber, false, false);
         }
 
-        public void GoToLine(int lineNumber, bool selectLine, bool goToLineAfterOpeningBrace)
+        public bool GoToLine(int lineNumber, bool selectLine, bool goToLineAfterOpeningBrace)
         {
+            if (lineNumber < 0 || lineNumber >= _scintilla.LineCount)
+                return false;
+
             if (goToLineAfterOpeningBrace)
             {
                 lineNumber = FindLineNumberAfterOpeningBrace(lineNumber);
@@ -391,6 +476,7 @@ namespace AGS.Editor
             {
                 _scintilla.SelectCurrentLine();
             }
+            return true;
         }
 
         private int FindLineNumberAfterOpeningBrace(int startFromLine)
@@ -539,23 +625,17 @@ namespace AGS.Editor
 
             if (found != null)
             {
-                if (foundInScript.FileName == AGSEditor.BUILT_IN_HEADER_FILE_NAME)
+                string scriptElementType = null;
+                if (found is ScriptVariable)
                 {
-                    Factory.GUIController.LaunchHelpForKeyword(_goToDefinition);
+                    scriptElementType = (found as ScriptVariable).Type;
                 }
-                else if (foundInScript.FileName == Tasks.AUTO_GENERATED_HEADER_NAME)
+                else if (found is ScriptEnumValue)
                 {
-                    Factory.GUIController.ShowMessage("This variable is internally defined by AGS and probably corresponds to an in-game entity such as a Character or Inventory Item.", MessageBoxIcon.Information);
+                    scriptElementType = (found as ScriptEnumValue).Type;
                 }
-                else if (foundInScript.FileName == GlobalVariablesComponent.GLOBAL_VARS_HEADER_FILE_NAME)
-                {
-                    IGlobalVariablesController globalVariables = (IGlobalVariablesController)Factory.ComponentController.FindComponentThatImplementsInterface(typeof(IGlobalVariablesController));
-                    globalVariables.SelectGlobalVariable(_goToDefinition);
-                }
-                else
-                {
-                    Factory.GUIController.ZoomToFile(foundInScript.FileName, ZoomToFileZoomType.ZoomToCharacterPosition, found.StartsAtCharacterIndex);
-                }
+
+                Factory.GUIController.ZoomToAnyScriptSymbol(foundInScript.FileName, _goToDefinition, scriptElementType, found.StartsAtCharacterIndex);
             }
         }
 

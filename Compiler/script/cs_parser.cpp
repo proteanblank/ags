@@ -1,8 +1,20 @@
-
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cerrno>
 #include <string>
 #include <vector>
 #include "script/cs_parser.h"
@@ -13,17 +25,17 @@
 #include "script/cc_internal.h"
 #include "cc_variablesymlist.h"
 #include "fmem.h"
+#include "util/string_utils.h"
 #include "util/utf8.h"
 
 extern int currentline;
 
-char ccCopyright[]="ScriptCompiler32 v" SCOM_VERSIONSTR " (c) 2000-2007 Chris Jones and 2011-2023 others";
-static char scriptNameBuffer[256];
+char ccCopyright[]="ScriptCompiler32 v" SCOM_VERSIONSTR " (c) 2000-2007 Chris Jones and 2011-2025 others";
 
 int  evaluate_expression(ccInternalList*,ccCompiledScript*,int,bool insideBracketedDeclaration);
-int  evaluate_assignment(ccInternalList *targ, ccCompiledScript *scrip, bool expectCloseBracket, int cursym, long lilen, long *vnlist, bool insideBracketedDeclaration);
-int  parse_sub_expr(long*,int,ccCompiledScript*);
-long extract_variable_name(int, ccInternalList*,long*, int*);
+int  evaluate_assignment(ccInternalList *targ, ccCompiledScript *scrip, bool expectCloseBracket, int cursym, int32_t lilen, int32_t *vnlist, bool insideBracketedDeclaration);
+int  parse_sub_expr(int32_t*, int, ccCompiledScript*);
+int32_t extract_variable_name(int, ccCompiledScript*, ccInternalList*, int32_t*, int*);
 int  check_type_mismatch(int typeIs, int typeWantsToBe, int orderMatters);
 int  check_operator_valid_for_type(int *vcpuOp, int type1, int type2);
 void yank_chunk(ccCompiledScript *scrip, std::vector<ccChunk> *list, int codeoffset, int fixupoffset);
@@ -32,35 +44,32 @@ void clear_chunk_list(std::vector<ccChunk> *list);
 int  is_any_type_of_string(int symtype);
 
 void yank_chunk(ccCompiledScript *scrip, std::vector<ccChunk> *list, int codeoffset, int fixupoffset) {
-    ccChunk item;
-    int index;
+    assert(codeoffset >= 0 && static_cast<size_t>(codeoffset) <= scrip->code.size());
+    assert(fixupoffset >= 0 && static_cast<size_t>(fixupoffset) <= scrip->fixups.size());
 
-    for(index = codeoffset; index < scrip->codesize; index++)
+    ccChunk item;
+    for (size_t index = codeoffset; index < scrip->code.size(); index++)
         item.code.push_back(scrip->code[index]);
-    for(index = fixupoffset; index < scrip->numfixups; index++) {
+    for (size_t index = fixupoffset; index < scrip->fixups.size(); index++) {
         item.fixups.push_back(scrip->fixups[index]);
         item.fixuptypes.push_back(scrip->fixuptypes[index]);
     }
     item.codeoffset = codeoffset;
     item.fixupoffset = fixupoffset;
     list->push_back(item);
-    scrip->codesize = codeoffset;
-    scrip->numfixups = fixupoffset;
+    scrip->code.resize(codeoffset);
+    scrip->fixups.resize(fixupoffset);
+    scrip->fixuptypes.resize(fixupoffset);
 }
 
 void write_chunk(ccCompiledScript *scrip, ccChunk item) {
-    int index;
-    int limit;
-    int adjust;
-
     scrip->flush_line_numbers();
-    adjust = scrip->codesize - item.codeoffset;
-    limit = item.code.size();
-    for(index = 0; index < limit; index++) {
+    int adjust = scrip->codesize_i32() - item.codeoffset;
+
+    for(size_t index = 0; index < item.code.size(); index++) {
         scrip->write_code(item.code[index]);
     }
-    limit = item.fixups.size();
-    for(index = 0; index < limit; index++)
+    for(size_t index = 0; index < item.fixups.size(); index++)
         scrip->add_fixup(item.fixups[index] + adjust, item.fixuptypes[index]);
 }
 
@@ -106,7 +115,7 @@ static int is_part_of_symbol(char thischar, char startchar) {
     if (((startchar >= 'a') && (startchar <= 'z')) ||
         ((startchar >= 'A') && (startchar <= 'Z')) ||
         (startchar == '_')) {
-            if (is_alphanum(thischar)) return 1;
+            if (IsScriptWordChar(thischar)) return 1;
             return 0;
     }
     // ==, >=, <=, !=, etc
@@ -194,7 +203,7 @@ int cc_tokenize(const char*inpl, ccInternalList*targ, ccCompiledScript*scrip) {
                 break;
             }
             thischar = fmem_getc(iii);
-        } while (is_whitespace(thischar));
+        } while (IsWhitespaceNoLineBreak(thischar));
         // if it was the end of file, abort
         if (waseof)
             break;
@@ -219,7 +228,9 @@ int cc_tokenize(const char*inpl, ccInternalList*targ, ccCompiledScript*scrip) {
         }
         if ((thissymbol[0] == '\'') && (thissymbol.back() == '\'')) {
             int chr = 0;
-            if (ccGetOption(SCOPT_UTF8)) {
+            if (thissymbol[1] == '\\') {
+                chr = GetEscapedChar(thissymbol[2]);
+            } else if (ccGetOption(SCOPT_UTF8)) {
                 Utf8::GetChar(&thissymbol[1], thissymbol.size() - 2, &chr);
             } else {
                 chr = thissymbol[1];
@@ -320,8 +331,10 @@ int cc_tokenize(const char*inpl, ccInternalList*targ, ccCompiledScript*scrip) {
 
             if (strncmp(thissymbol.c_str(), NEW_SCRIPT_TOKEN_PREFIX, 18) == 0)
             {
-                snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "%s", &thissymbol[18]);
-                ccCurScriptName = scriptNameBuffer;
+                // FIXME: ugly, but we must unescape the section name, to avoid reverse path separator duplications
+                AGS::Common::String unesc_name = AGS::Common::StrUtil::Unescape(&thissymbol[18]);
+                unesc_name.Trim('\"'); // strip any opening or closing quote chars
+                ccCurScriptName = unesc_name.GetCStr();
 
                 linenum = 0;
                 currentline = 0;
@@ -434,7 +447,7 @@ int remove_locals(int from_level, int just_count, ccCompiledScript *scrip) {
     return totalsub;
 }
 
-int deal_with_end_of_ifelse (char*nested_type,long*nested_info,long*nested_start,
+int deal_with_end_of_ifelse (char *nested_type, int32_t *nested_info, int32_t *nested_start,
                              ccCompiledScript*scrip,ccInternalList*targ,int*nestlevel, std::vector<ccChunk> *nested_chunk) {
      int nested_level = nestlevel[0];
      int is_else=0;
@@ -453,11 +466,11 @@ int deal_with_end_of_ifelse (char*nested_type,long*nested_info,long*nested_start
              clear_chunk_list(&nested_chunk[nested_level]);
          }
          // it's a while loop, so write a jump back to the check again
-        scrip->write_cmd1(SCMD_JMP,-((scrip->codesize+2) - nested_start[nested_level]) );
+        scrip->write_cmd1(SCMD_JMP,-((scrip->codesize_i32() + 2) - nested_start[nested_level]) );
      }
      // write the correct relative jump location
      scrip->code[nested_info[nested_level]] =
-         (scrip->codesize - nested_info[nested_level]) - 1;
+         (scrip->codesize_i32() - nested_info[nested_level]) - 1;
      if (is_else) {
          // convert the IF into an ELSE
          if (sym.get_type(targ->peeknext()) == SYM_OPENBRACE) {
@@ -466,7 +479,7 @@ int deal_with_end_of_ifelse (char*nested_type,long*nested_info,long*nested_start
          }
          else
              nested_type[nested_level] = NEST_ELSESINGLE;
-         nested_info[nested_level] = scrip->codesize-1;
+         nested_info[nested_level] = scrip->codesize_i32() - 1;
          return 1;
      }
      else
@@ -487,7 +500,7 @@ int deal_with_end_of_ifelse (char*nested_type,long*nested_info,long*nested_start
      return 0;
 }
 
-int deal_with_end_of_do (long *nested_info, long *nested_start, ccCompiledScript *scrip, ccInternalList *targ, int *nestlevel) {
+int deal_with_end_of_do (int32_t *nested_info, int32_t *nested_start, ccCompiledScript *scrip, ccInternalList *targ, int *nestlevel) {
     int cursym;
     int nested_level;
 
@@ -511,48 +524,48 @@ int deal_with_end_of_do (long *nested_info, long *nested_start, ccCompiledScript
     }
     targ->getnext();
     // Jump back to the start of the loop while the condition is true
-    scrip->write_cmd1(SCMD_JNZ, -((scrip->codesize + 2) - nested_start[nested_level]));
+    scrip->write_cmd1(SCMD_JNZ, -((scrip->codesize_i32() + 2) - nested_start[nested_level]));
     // Write the correct location for the end of the loop
-    scrip->code[nested_info[nested_level]] = (scrip->codesize - nested_info[nested_level]) - 1;
+    scrip->code[nested_info[nested_level]] = (scrip->codesize_i32() - nested_info[nested_level]) - 1;
     nestlevel[0]--;
 
     return 0;
 }
 
-int deal_with_end_of_switch (int32_t *nested_assign_addr, long *nested_start, std::vector<ccChunk> *nested_chunk, ccCompiledScript *scrip, ccInternalList *targ, int *nestlevel, long *nested_info) {
+int deal_with_end_of_switch (int32_t *nested_assign_addr, int32_t *nested_start, std::vector<ccChunk> *nested_chunk, ccCompiledScript *scrip, ccInternalList *targ, int *nestlevel, int32_t *nested_info) {
     int index;
     int limit = nested_chunk->size();
     int nested_level = nestlevel[0];
     int skip;
     int operation = is_any_type_of_string(nested_info[nested_level]) ? SCMD_STRINGSNOTEQ : SCMD_NOTEQUAL;
-    if(scrip->code[scrip->codesize - 2] != SCMD_JMP || scrip->code[scrip->codesize - 1] != nested_start[nested_level] - scrip->codesize + 2) {
+    if(scrip->code[scrip->code.size() - 2] != SCMD_JMP || scrip->code[scrip->code.size() - 1] != nested_start[nested_level] - scrip->codesize_i32() + 2) {
         // If there was no terminating break, write a jump at the end of the last case
         scrip->write_cmd1(SCMD_JMP, 0);
     }
-    skip = scrip->codesize;
+    skip = scrip->codesize_i32();
     // Write the location for the jump to this point (the jump table)
-    scrip->code[nested_start[nested_level] + 1] = (scrip->codesize - nested_start[nested_level]) - 2;
+    scrip->code[nested_start[nested_level] + 1] = (scrip->codesize_i32() - nested_start[nested_level]) - 2;
     for(index = 0; index < limit; index++) {
         // Put the result of the expression into AX
         write_chunk(scrip, (*nested_chunk)[index]);
         // Do the comparison
         scrip->write_cmd2(operation, SREG_AX, SREG_BX);
-        scrip->write_cmd1(SCMD_JZ, (*nested_chunk)[index].codeoffset - scrip->codesize - 2);
+        scrip->write_cmd1(SCMD_JZ, (*nested_chunk)[index].codeoffset - scrip->codesize_i32() - 2);
     }
     // Write the default jump if necessary
     if(nested_assign_addr[nested_level] != -1)
-        scrip->write_cmd1(SCMD_JMP, nested_assign_addr[nested_level] - scrip->codesize - 2);
+        scrip->write_cmd1(SCMD_JMP, nested_assign_addr[nested_level] - scrip->codesize_i32() - 2);
     // Write the location for the jump to the end of the switch block (for break statements)
-    scrip->code[nested_start[nested_level] + 3] = scrip->codesize - nested_start[nested_level] - 4;
+    scrip->code[nested_start[nested_level] + 3] = scrip->codesize_i32() - nested_start[nested_level] - 4;
     // Write the jump for the end of the switch block
-    scrip->code[skip - 1] = scrip->codesize - skip;
+    scrip->code[skip - 1] = scrip->codesize_i32() - skip;
     clear_chunk_list(nested_chunk);
     nestlevel[0]--;
 
     return 0;
 }
 
-int find_member_sym(int structSym, long *memSym, int allowProtected) {
+int find_member_sym(int structSym, int32_t *memSym, int allowProtected) {
     int oriname = *memSym;
     const char *possname = get_member_full_name(structSym, oriname);
 
@@ -667,7 +680,7 @@ int check_for_default_value(ccInternalList &targ, int funcsym, int numparams) {
 
         int defaultValue;
         if (strchr(sym.get_name(defValSym), '.') != NULL) {
-            float fval = atof(sym.get_name(defValSym));
+            float fval = static_cast<float>(atof(sym.get_name(defValSym)));
             isFloat = true;
             if (negateIt)
                 fval = -fval;
@@ -698,8 +711,8 @@ int check_for_default_value(ccInternalList &targ, int funcsym, int numparams) {
             }
         }
 
-        sym.entries[funcsym].funcParamDefaultValues[numparams % 100] = defaultValue;
-        sym.entries[funcsym].funcParamHasDefaultValues[numparams % 100] = true;
+        sym.entries[funcsym].funcparams[numparams % 100].DefaultValue = defaultValue;
+        sym.entries[funcsym].funcparams[numparams % 100].HasDefaultValue = true;
 
     }
 
@@ -849,19 +862,19 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
 
   sym.entries[funcsym].stype = SYM_FUNCTION;
   sym.entries[funcsym].ssize = varsize;  // save return type size
-  sym.entries[funcsym].funcparamtypes[0] = vtwas;  // return type
+  sym.entries[funcsym].funcparams[0].Type = vtwas;  // return type
 
   if (is_const)
   {
-    sym.entries[funcsym].funcparamtypes[0] |= STYPE_CONST;
+    sym.entries[funcsym].funcparams[0].Type |= STYPE_CONST;
   }
   if (returnsPointer)
   {
-    sym.entries[funcsym].funcparamtypes[0] |= STYPE_POINTER;
+    sym.entries[funcsym].funcparams[0].Type |= STYPE_POINTER;
   }
   if (returnsDynArray)
   {
-    sym.entries[funcsym].funcparamtypes[0] |= STYPE_DYNARRAY;
+    sym.entries[funcsym].funcparams[0].Type |= STYPE_DYNARRAY;
   }
 
   if ((!returnsPointer) && (!returnsDynArray) &&
@@ -893,7 +906,9 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
     return -1;
   }
   sym.entries[funcsym].soffs = in_func;  // save code offset of function
-  scrip->cur_sp += 4;  // the return address will be pushed
+
+  if (!next_is_import)
+    scrip->cur_sp += 4;  // the return address will be pushed
 
   int prototype = 0;
   bool next_is_const = false;
@@ -927,12 +942,12 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
       }
       int isPointerParam = 0;
       // save the parameter type (numparams starts from 1)
-      sym.entries[funcsym].funcparamtypes[numparams % 100] = cursym;
-      sym.entries[funcsym].funcParamDefaultValues[numparams % 100] = 0;
-      sym.entries[funcsym].funcParamHasDefaultValues[numparams % 100] = false;
+      sym.entries[funcsym].funcparams[numparams % 100].Type = cursym;
+      sym.entries[funcsym].funcparams[numparams % 100].DefaultValue = 0;
+      sym.entries[funcsym].funcparams[numparams % 100].HasDefaultValue = false;
 
       if (next_is_const)
-        sym.entries[funcsym].funcparamtypes[numparams % 100] |= STYPE_CONST;
+        sym.entries[funcsym].funcparams[numparams % 100].Type |= STYPE_CONST;
 
       functype[strlen(functype)+1] = 0;
       functype[strlen(functype)] = (char)cursym;  // save variable type
@@ -940,7 +955,7 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
         return -1;
       if (strcmp(sym.get_name(targ.peeknext()), "*") == 0) {
         // pointer
-        sym.entries[funcsym].funcparamtypes[numparams % 100] |= STYPE_POINTER;
+        sym.entries[funcsym].funcparams[numparams % 100].Type |= STYPE_POINTER;
         isPointerParam = 1;
         targ.getnext();
         if ((sym.entries[cursym].flags & SFLG_MANAGED) == 0) {
@@ -955,7 +970,7 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
       }
 
       if (sym.entries[cursym].flags & SFLG_AUTOPTR) {
-        sym.entries[funcsym].funcparamtypes[numparams % 100] |= STYPE_POINTER;
+        sym.entries[funcsym].funcparams[numparams % 100].Type |= STYPE_POINTER;
         isPointerParam = 1;
       }
 
@@ -1019,7 +1034,7 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
       }
       else if (dynArrayStatus > 0)
       {
-        sym.entries[funcsym].funcparamtypes[(numparams - 1) % 100] |= STYPE_DYNARRAY;
+        sym.entries[funcsym].funcparams[(numparams - 1) % 100].Type |= STYPE_DYNARRAY;
         if (createdLocalVar)
         {
           sym.entries[cursym].flags |= SFLG_DYNAMICARRAY | SFLG_ARRAY;
@@ -1056,13 +1071,15 @@ int process_function_declaration(ccInternalList &targ, ccCompiledScript*scrip,
   if (next_is_import) {
     sym.entries[funcsym].flags |= SFLG_IMPORTED;
 
-    if (isMemberFunction) {
-      // for imported member functions, append the number of parameters
-      // to the name of the import
-      char appendage[10];
-      sprintf(appendage, "^%d", sym.entries[funcsym].sscope);
-
-      strcat(scrip->imports[in_func], appendage);
+    // Append the number of parameters to the name of the import:
+    // this lets the engine to link different implementations depending on API
+    // which was used when compiling the script.
+    // (Sort of a limited "function overloading")
+    if (scrip->imports[in_func].find('^') == std::string::npos)
+    {
+        char appendage[10];
+        snprintf(appendage, sizeof(appendage), "^%d", sym.entries[funcsym].sscope);
+        scrip->imports[in_func].append(appendage);
     }
 
     int nextvar = targ.peeknext();
@@ -1103,7 +1120,7 @@ int isPartOfExpression(ccInternalList *targ, int j) {
 // return the index of the lowest priority operator in the list,
 // so that either side of it can be evaluated first.
 // returns -1 if no operator was found
-int find_lowest_bonding_operator(long*slist,int listlen) {
+int find_lowest_bonding_operator(int32_t *slist, int listlen) {
   int k,blevel=0,plevel=0;
   int lowestis = 0,lowestat = -1;
   for (k=0;k<listlen;k++) {
@@ -1358,7 +1375,40 @@ int isVCPUOperatorBoolean(int scmdtype) {
     return 0;
 }
 
-long extract_variable_name(int fsym, ccInternalList*targ,long*slist, int *funcAtOffs) {
+bool generate_dynarray_length(ccCompiledScript *scrip, int32_t &type_sym_index, int32_t mem_sym_index)
+{
+    const char *member_name = sym.get_name(mem_sym_index);
+    if (strcmp(member_name, ".Length") != 0)
+        return false; // not a supported pseudo-property
+
+    const char *type_name = sym.get_name(type_sym_index);
+    std::string arr_type_name = std::string(type_name) + "[]";
+    std::string property_name = arr_type_name + "::Length";
+    if (sym.find(property_name.c_str()) >= 0)
+    {
+        type_sym_index = sym.find(arr_type_name.c_str());
+        return true; // has already generated for this arr type
+    }
+    
+    sym.add("Length"); // Length keyword probably already exists, but try adding just in case
+    // generate "dynamic array of T" pseudo type
+    int struct_sym = sym.add(arr_type_name.c_str());
+    // generate "T::Length" pseudo attribute
+    int sym_index = sym.add(property_name.c_str());
+    auto &syment = sym.entries[sym_index];
+    syment.stype = SYM_STRUCTMEMBER;
+    syment.flags = SFLG_IMPORTED | SFLG_READONLY | SFLG_STRUCTMEMBER | SFLG_PROPERTY;
+    syment.vartype = sym.find("int");
+    // Getter is universal for all array.Length
+    int prop_get = scrip->find_or_add_import(BUILTIN_DYNAMIC_ARRAY_LENGTH);
+    syment.set_propfuncs(prop_get, 0xffff);
+    syment.ssize = 4; // sizeof int
+    syment.extends = struct_sym;
+    type_sym_index = struct_sym;
+    return true;
+}
+
+int32_t extract_variable_name(int fsym, ccCompiledScript *scrip, ccInternalList*targ, int32_t*slist, int *funcAtOffs) {
   *funcAtOffs = -1;
 
   int mustBeStaticMember = 0;
@@ -1373,7 +1423,7 @@ long extract_variable_name(int fsym, ccInternalList*targ,long*slist, int *funcAt
   }
 
   int oriOffs = targ->pos;
-  long sslen=1;
+  int32_t sslen=1;
   slist[0]=fsym;
   if (targ->peeknext() == SCODE_INVALID) return sslen;
   // it works like this:
@@ -1420,9 +1470,15 @@ long extract_variable_name(int fsym, ccInternalList*targ,long*slist, int *funcAt
         }
       }
 
+      // A dot after array name (not after brackets)
       if (((sym.entries[fsym].flags & SFLG_ARRAY) != 0) && (justHadBrackets == 0)) {
-        cc_error("'[' expected");
-        return -1;
+        if ((sym.entries[fsym].flags & SFLG_DYNAMICARRAY) != 0 &&
+                generate_dynarray_length(scrip, reallywant, slist[sslen])) {
+          // handle pseudo-property type[].Length, let it through
+        } else {
+          cc_error("'[' expected");
+          return -1;
+        }
       }
       justHadBrackets = 0;
 
@@ -1564,7 +1620,7 @@ void set_ax_scope(ccCompiledScript *scrip, int syoffs) {
     scrip->ax_val_scope = sym.entries[syoffs].stype;
 }
 
-int findClosingBracketOffs(int openBracketOffs, long *symlist, int slilen) {
+int findClosingBracketOffs(int openBracketOffs, int32_t *symlist, int slilen) {
   int endof,braclevel=0;
   for (endof = openBracketOffs + 1; endof < slilen; endof++) {
     int symtype = sym.get_type(symlist[endof]);
@@ -1578,7 +1634,7 @@ int findClosingBracketOffs(int openBracketOffs, long *symlist, int slilen) {
   return endof;
 }
 
-int findOpeningBracketOffs(int closeBracketOffs, long *symlist) {
+int findOpeningBracketOffs(int closeBracketOffs, int32_t *symlist) {
   int endof,braclevel=0;
   for (endof = closeBracketOffs - 1; endof >= 0; endof--) {
     int symtype = sym.get_type(symlist[endof]);
@@ -1592,7 +1648,7 @@ int findOpeningBracketOffs(int closeBracketOffs, long *symlist) {
   return endof;
 }
 
-int extractPathIntoParts(VariableSymlist *variablePath, int slilen, long *syml) {
+int extractPathIntoParts(VariableSymlist *variablePath, int slilen, int32_t *syml) {
   int variablePathSize = 0;
   int lastOffs = 0;
   int pp;
@@ -1657,7 +1713,7 @@ int get_readcmd_for_size(int sizz, int writeinstead) {
   }
 
 
-int get_array_index_into_ax(ccCompiledScript *scrip, long *symlist, int openBracketOffs, int closeBracketOffs, bool checkBounds, bool multiplySize) {
+int get_array_index_into_ax(ccCompiledScript *scrip, int32_t *symlist, int openBracketOffs, int closeBracketOffs, bool checkBounds, bool multiplySize) {
 
   // "push" the ax val type (because this is just an array index,
   // we're actually interested in the type of the variable being read)
@@ -2027,7 +2083,7 @@ int do_variable_memory_access(ccCompiledScript *scrip, int variableSym,
 // member variable, then read_variable_into_ax sets this
 int readonly_cannot_cause_error = 0;
 
-int do_variable_ax(int slilen,long*syml,ccCompiledScript*scrip,int writing, int mustBeWritable, bool negateLiteral = false) {
+int do_variable_ax(int slilen, int32_t *syml, ccCompiledScript*scrip, int writing, int mustBeWritable, bool negateLiteral = false) {
   // read the various types of values into AX
   int ee;
 
@@ -2383,19 +2439,19 @@ int do_variable_ax(int slilen,long*syml,ccCompiledScript*scrip,int writing, int 
 }
 
 
-int read_variable_into_ax(int slilen,long*syml,ccCompiledScript*scrip, int mustBeWritable = 0, bool negateLiteral = false) {
+int read_variable_into_ax(int slilen, int32_t *syml, ccCompiledScript *scrip, int mustBeWritable = 0, bool negateLiteral = false) {
 
   return do_variable_ax(slilen,syml,scrip, 0, mustBeWritable, negateLiteral);
 }
 
-int write_ax_to_variable(int slilen,long*syml,ccCompiledScript*scrip) {
+int write_ax_to_variable(int slilen, int32_t *syml, ccCompiledScript *scrip) {
 
   return do_variable_ax(slilen,syml,scrip, 1, 0);
 }
 
 
 
-int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
+int parse_sub_expr(int32_t *symlist, int listlen, ccCompiledScript*scrip) {
   if (listlen == 0) {
     cc_error("Empty sub-expression?");
     return -1;
@@ -2541,7 +2597,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
       // AX will still be 0 so that will do as the result of the
       // calculation
       scrip->write_cmd1(SCMD_JZ, 0);
-      jumpLocationOffset = scrip->codesize;
+      jumpLocationOffset = scrip->codesize_i32();
     }
     else if (vcpuOperator == SCMD_OR) {
       // || operator lazy evaluation ... if AX is non-zero then
@@ -2549,7 +2605,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
       // instruction; AX will still be non-zero so that will do as
       // the result of the calculation
       scrip->write_cmd1(SCMD_JNZ, 0);
-      jumpLocationOffset = scrip->codesize;
+      jumpLocationOffset = scrip->codesize_i32();
     }
 
     int valtypewas = scrip->ax_val_type;
@@ -2569,7 +2625,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
 
     if (jumpLocationOffset > 0) {
       // write the jump offset
-      scrip->code[jumpLocationOffset - 1] = scrip->codesize - jumpLocationOffset;
+      scrip->code[jumpLocationOffset - 1] = scrip->codesize_i32() - jumpLocationOffset;
     }
 
     // Operators like == return a bool (in our case, that's an int);
@@ -2583,14 +2639,14 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
   // There is no operator in the expression -- therefore, there will
   // just be a variable name or function call
 
-  long vnlist[TEMP_SYMLIST_LENGTH],lilen;
+  int32_t vnlist[TEMP_SYMLIST_LENGTH],lilen;
   int funcAtOffs = 0;
   ccInternalList tlist;
   tlist.pos=0;
   tlist.length=listlen;
   tlist.script=symlist;
   tlist.cancelCurrentLine = 0;
-  lilen=extract_variable_name(tlist.getnext(),&tlist,&vnlist[0], &funcAtOffs);
+  lilen=extract_variable_name(tlist.getnext(), scrip, &tlist, &vnlist[0], &funcAtOffs);
   // stop it trying to free the memory
   tlist.script=NULL;
   tlist.length=0;
@@ -2646,7 +2702,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
     return -1;
     }
   else if ((sym.get_type(symlist[0]) == SYM_FUNCTION) || (funcAtOffs > 0)) {
-    long *usingList;
+    int32_t *usingList;
     int usingListLen;
     int using_op = 0;
 
@@ -2726,13 +2782,13 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
       // not enough arguments -- see if we can supply default values
       for (int ii = func_args; ii > num_supplied_args; ii--) {
 
-        if (!sym.entries[funcsym].funcParamHasDefaultValues[ii]) {
+        if (!sym.entries[funcsym].funcparams[ii].HasDefaultValue) {
           cc_error("Not enough parameters in call to function");
           return -1;
         }
 
         // push the default value onto the stack
-        scrip->write_cmd2(SCMD_LITTOREG, SREG_AX, sym.entries[funcsym].funcParamDefaultValues[ii]);
+        scrip->write_cmd2(SCMD_LITTOREG, SREG_AX, sym.entries[funcsym].funcparams[ii].DefaultValue);
 
         if (sym.entries[funcsym].flags & SFLG_IMPORTED)
           scrip->write_cmd1(SCMD_PUSHREAL, SREG_AX);
@@ -2772,7 +2828,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
 
       if (num_supplied_args - numargs <= func_args) {
         // if non-variable arguments, check types
-        int parameterType = sym.entries[funcsym].funcparamtypes[num_supplied_args - numargs];
+        int parameterType = sym.entries[funcsym].funcparams[num_supplied_args - numargs].Type;
 
         PerformStringConversionInAX(scrip, &scrip->ax_val_type, parameterType);
 
@@ -2843,7 +2899,7 @@ int parse_sub_expr(long*symlist,int listlen,ccCompiledScript*scrip) {
       }
     }
     // function return type
-    scrip->ax_val_type = sym.entries[funcsym].funcparamtypes[0];
+    scrip->ax_val_type = sym.entries[funcsym].funcparams[0].Type;
     scrip->ax_val_scope = SYM_LOCALVAR;
 
     if (using_op)
@@ -2920,8 +2976,8 @@ int evaluate_expression(ccInternalList*targ,ccCompiledScript*scrip,int countbrac
         cc_error("PE01: Parse error at '%s'",sym.get_friendly_name(targ->script[j]).c_str());
         return -1;
         }
-      ours.script = (long*)malloc(ourlen * sizeof(long));
-      memcpy(ours.script,&targ->script[targ->pos],ourlen*sizeof(long));
+      ours.script = (int32_t*)malloc(ourlen * sizeof(int32_t));
+      memcpy(ours.script,&targ->script[targ->pos],ourlen*sizeof(int32_t));
       int k,l;
       for (k=0;k<ourlen;k++) {
         if (ours.script[k] == SCODE_META) {
@@ -2957,7 +3013,7 @@ int evaluate_expression(ccInternalList*targ,ccCompiledScript*scrip,int countbrac
   return retcode;
   }
 
-int evaluate_assignment(ccInternalList *targ, ccCompiledScript *scrip, bool expectCloseBracket, int cursym, long lilen, long *vnlist, bool insideBracketedDeclaration) {
+int evaluate_assignment(ccInternalList *targ, ccCompiledScript *scrip, bool expectCloseBracket, int cursym, int32_t lilen, int32_t *vnlist, bool insideBracketedDeclaration) {
     if (!sym.entries[cursym].is_loadable_variable()) {
         // allow through static properties
         if ((sym.get_type(cursym) == SYM_VARTYPE) && (lilen > 2) &&
@@ -3069,12 +3125,12 @@ int evaluate_assignment(ccInternalList *targ, ccCompiledScript *scrip, bool expe
     return 0;
 }
 
-int parse_variable_declaration(long cursym,int *next_type,int isglobal,
+int parse_variable_declaration(int32_t cursym,int *next_type,int isglobal,
     int varsize,ccCompiledScript*scrip,ccInternalList*targ, int vtwas,
     int isPointer) {
-  long lbuffer = 0;
+  int32_t lbuffer = 0;
   std::vector<char> xbuffer;
-  long *getsvalue = &lbuffer;
+  int32_t *getsvalue = &lbuffer;
   int need_fixup = 0;
   int array_size = 1;
   if (sym.get_type(cursym) != 0) {
@@ -3153,11 +3209,11 @@ int parse_variable_declaration(long cursym,int *next_type,int isglobal,
 
     next_type[0] = sym.get_type(targ->peeknext());
     xbuffer.resize(varsize + 1);
-    getsvalue = (long*)&xbuffer.front();
+    getsvalue = (int32_t*)&xbuffer.front();
   }
   else if (varsize > 4) {
     xbuffer.resize(varsize + 1);
-    getsvalue = (long*)&xbuffer.front();
+    getsvalue = (int32_t*)&xbuffer.front();
   }
 
   if (strcmp(sym.get_name(vtwas),"string")==0) {
@@ -3186,17 +3242,14 @@ int parse_variable_declaration(long cursym,int *next_type,int isglobal,
       need_fixup = 1;
     }
     else if (isglobal == 0) {
-      //getsvalue[0] = scrip->cur_sp;
       getsvalue = NULL;
       // save the address of this bit of memory to assign the pointer to it
       // we can't use scrip->cur_sp since we don't know if we'll be in
       // a nested function call at the time
       scrip->write_cmd2(SCMD_REGTOREG, SREG_SP, SREG_CX);
-      //scrip->add_fixup(scrip->codesize-2,FIXUP_STACK);
       scrip->cur_sp += STRING_LENGTH;
       scrip->write_cmd2(SCMD_ADD,SREG_SP,STRING_LENGTH);
       sym.entries[cursym].flags |= SFLG_STRBUFFER;
-      //need_fixup = 1;
     }
   }
 
@@ -3253,7 +3306,7 @@ int parse_variable_declaration(long cursym,int *next_type,int isglobal,
         if (accept_literal_or_constant_value(targ->getnext(), getsvalue_int, is_neg, "Expected integer value after '='") < 0) {
           return -1;
         }
-        getsvalue[0] = (long)getsvalue_int;
+        getsvalue[0] = (int32_t)getsvalue_int;
 
       }
     }
@@ -3345,8 +3398,8 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
     int isMemberFunction = 0;
     int inFuncSym = -1;
     char nested_type[MAX_NESTED_LEVEL];
-    long nested_info[MAX_NESTED_LEVEL];
-    long nested_start[MAX_NESTED_LEVEL];
+    int32_t nested_info[MAX_NESTED_LEVEL];
+    int32_t nested_start[MAX_NESTED_LEVEL];
     std::vector<ccChunk> nested_chunk[MAX_NESTED_LEVEL];
     int32_t nested_assign_addr[MAX_NESTED_LEVEL];
     char next_is_import = 0, next_is_readonly = 0;
@@ -3375,7 +3428,7 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
             return -1;
         }
         else if (cursym == SCODE_META) {
-            long metatype = targ.getnext();
+            int32_t metatype = targ.getnext();
             if (metatype==SMETA_END) break;
             else if (metatype==SMETA_LINENUM) {
                 cc_error("Internal errror: unexpected meta tag");
@@ -3389,11 +3442,12 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
 
         if (strncmp(sym.get_name(cursym), NEW_SCRIPT_TOKEN_PREFIX, 18) == 0)
         {
-            snprintf(scriptNameBuffer, sizeof(scriptNameBuffer), "%s", &sym.get_name(cursym)[18]);
-            scriptNameBuffer[strlen(scriptNameBuffer) - 1] = 0;  // strip closing speech mark
-            ccCurScriptName = scriptNameBuffer;
+            // FIXME: ugly, but we must unescape the section name, to avoid reverse path separator duplications
+            AGS::Common::String unesc_name = AGS::Common::StrUtil::Unescape(&sym.get_name(cursym)[18]);
+            unesc_name.Trim('\"'); // strip any opening or closing quote chars
+            ccCurScriptName = unesc_name.GetCStr();
 
-            scrip->start_new_section(scriptNameBuffer);
+            scrip->start_new_section(ccCurScriptName.c_str());
             currentline = 0;
             continue;
         }
@@ -3415,14 +3469,14 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
             if (nested_level == 1) {
                 nested_type[nested_level]=NEST_FUNCTION;
                 // write base address of function for any relocation needed later
-                scrip->write_cmd1(SCMD_THISBASE, scrip->codesize);
+                scrip->write_cmd1(SCMD_THISBASE, scrip->codesize_i32());
                 if (next_is_noloopcheck)
                     scrip->write_cmd(SCMD_LOOPCHECKOFF);
 
                 // loop through all parameters and check if they are pointers
                 // the first entry is the return value
-                for (int pa = 1; pa <= sym.entries[inFuncSym].sscope; pa++) {
-                    if (sym.entries[inFuncSym].funcparamtypes[pa] & (STYPE_POINTER | STYPE_DYNARRAY)) {
+                for (int pa = 1; pa <= sym.entries[inFuncSym].get_num_args(); pa++) {
+                    if (sym.entries[inFuncSym].funcparams[pa].Type & (STYPE_POINTER | STYPE_DYNARRAY)) {
                         // pointers are passed in on the stack with the real
                         // memory address -- convert this to the mem handle
                         // since params are pushed backwards, this works
@@ -3749,7 +3803,7 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
                     if (extendsWhat > 0) {
                         // check that we haven't already inherited a member
                         // with the same name
-                        long member = vname;
+                        int32_t member = vname;
                         if (memberExt == NULL) {
                             cc_error("Internal compiler error dbc");
                             return -1;
@@ -3824,7 +3878,7 @@ int __cc_compile_file(const char*inpl,ccCompiledScript*scrip) {
                         sym.entries[vname].extends = stname;  // save which struct it belongs to
                         sym.entries[vname].ssize = sym.entries[cursym].ssize;
                         sym.entries[vname].soffs = size_so_far;
-                        sym.entries[vname].vartype = (short)cursym;
+                        sym.entries[vname].vartype = (int16_t)cursym;
                         if (member_is_readonly)
                             sym.entries[vname].flags |= SFLG_READONLY;
                         if (member_is_const)
@@ -4354,12 +4408,12 @@ startvarbit:
                     else {
                         // this is <= because the return type is the first one
                         for (int ii = 0; ii <= sym.entries[cursym].get_num_args(); ii++) {
-                            if (oldDefinition.funcparamtypes[ii] != sym.entries[cursym].funcparamtypes[ii])
+                            if (oldDefinition.funcparams[ii].Type != sym.entries[cursym].funcparams[ii].Type)
                                 cc_error("Parameter type does not match prototype");
 
                             // copy the default values from the function prototype
-                            sym.entries[cursym].funcParamDefaultValues[ii] = oldDefinition.funcParamDefaultValues[ii];
-                            sym.entries[cursym].funcParamHasDefaultValues[ii] = oldDefinition.funcParamHasDefaultValues[ii];
+                            sym.entries[cursym].funcparams[ii].DefaultValue = oldDefinition.funcparams[ii].DefaultValue;
+                            sym.entries[cursym].funcparams[ii].HasDefaultValue = oldDefinition.funcparams[ii].HasDefaultValue;
                         }
                     }
                 }
@@ -4383,10 +4437,10 @@ startvarbit:
             return -1;
         }
         else {
-            long vnlist[TEMP_SYMLIST_LENGTH],lilen;
+            int32_t vnlist[TEMP_SYMLIST_LENGTH],lilen;
             int funcAtOffs;
             int targPosWas = targ.pos;
-            lilen = extract_variable_name(cursym, &targ, &vnlist[0], &funcAtOffs);
+            lilen = extract_variable_name(cursym, scrip, &targ, &vnlist[0], &funcAtOffs);
             if (lilen < 0)
                 return -1;
 
@@ -4421,7 +4475,7 @@ startvarbit:
             }
             else if (sym.get_type(cursym) == SYM_RETURN) {
 
-                int functionReturnType = sym.entries[inFuncSym].funcparamtypes[0];
+                int functionReturnType = sym.entries[inFuncSym].funcparams[0].Type;
 
                 if (sym.get_type(targ.peeknext()) != SYM_SEMICOLON) {
                     if (functionReturnType == sym.normalVoidSym) {
@@ -4473,7 +4527,7 @@ startvarbit:
                         cc_error("expected '('");
                         return -1;
                     }
-                    long oriaddr = scrip->codesize;
+                    int32_t oriaddr = scrip->codesize_i32();
 
                     if (evaluate_expression(&targ,scrip,1,false))
                         return -1;
@@ -4497,7 +4551,7 @@ startvarbit:
                         nested_type[nested_level] = NEST_IFSINGLE;
 
                     nested_start[nested_level] = 0;
-                    nested_info[nested_level] = scrip->codesize-1;
+                    nested_info[nested_level] = scrip->codesize_i32() - 1;
                     if (iswhile)
                         nested_start[nested_level] = oriaddr;
                     continue;
@@ -4515,8 +4569,8 @@ startvarbit:
                 else
                     nested_type[nested_level] = NEST_DOSINGLE;
 
-                nested_start[nested_level] = scrip->codesize;
-                nested_info[nested_level] = scrip->codesize - 1; // This is where we need to put the real address of the end of the loop
+                nested_start[nested_level] = scrip->codesize_i32();
+                nested_info[nested_level] = scrip->codesize_i32() - 1; // This is where we need to put the real address of the end of the loop
                 continue;
             }
             else if (sym.get_type(cursym) == SYM_FOR) {
@@ -4534,7 +4588,7 @@ startvarbit:
                         cc_error("Missing ';' inside for loop declaration");
                         return -1;
                     }
-                    lilen = extract_variable_name(cursym, &targ, &vnlist[0], &funcAtOffs);
+                    lilen = extract_variable_name(cursym, scrip, &targ, &vnlist[0], &funcAtOffs);
                     if (lilen < 0)
                         return -1;
                     if (sym.get_type(cursym) == SYM_VARTYPE) {
@@ -4610,7 +4664,7 @@ startvarbit:
                         if (evaluate_assignment(&targ, scrip, false, cursym, lilen, vnlist, false))
                             return -1;
                 }
-                long oriaddr = scrip->codesize;
+                int32_t oriaddr = scrip->codesize_i32();
                 bool hasLimitCheck;
                 if (sym.get_type(targ.peeknext()) != SYM_SEMICOLON) {
                     if(sym.get_type(targ.peeknext()) == SYM_CLOSEPARENTHESIS) {
@@ -4627,12 +4681,12 @@ startvarbit:
                 }
                 else
                     hasLimitCheck = false; // Allow for loops without limit checks
-                long assignaddr = scrip->codesize;
-                int pre_fixup_count = scrip->numfixups;
+                int32_t assignaddr = scrip->codesize_i32();
+                int pre_fixup_count = scrip->fixups.size();
                 targ.getnext(); // Skip the ;
                 cursym = targ.getnext();
                 if (sym.get_type(cursym) != SYM_CLOSEPARENTHESIS) {
-                    lilen = extract_variable_name(cursym, &targ, &vnlist[0], &funcAtOffs);
+                    lilen = extract_variable_name(cursym, scrip, &targ, &vnlist[0], &funcAtOffs);
                     if (lilen < 0)
                         return -1;
                     if (evaluate_assignment(&targ, scrip, true, cursym, lilen, vnlist, true))
@@ -4653,7 +4707,7 @@ startvarbit:
                 }
                 else
                     nested_type[nested_level] = NEST_ELSESINGLE;
-                nested_info[nested_level] = scrip->codesize-1;
+                nested_info[nested_level] = scrip->codesize_i32() - 1;
                 nested_start[nested_level] = oriaddr;
                 continue;
             }
@@ -4671,7 +4725,7 @@ startvarbit:
                 // Copy the result to the BX register, ready for case statements
                 scrip->write_cmd2(SCMD_REGTOREG, SREG_AX, SREG_BX);
                 scrip->flush_line_numbers();
-                nested_start[nested_level] = scrip->codesize;
+                nested_start[nested_level] = scrip->codesize_i32();
                 scrip->write_cmd1(SCMD_JMP, 0); // Placeholder for a jump to the lookup table
                 scrip->write_cmd1(SCMD_JMP, 0); // Placeholder for a jump to beyond the switch statement (for break)
                 if(sym.get_type(targ.peeknext()) != SYM_OPENBRACE) {
@@ -4701,11 +4755,11 @@ startvarbit:
                         cc_error("Multiple default labels in a switch statement block");
                         return -1;
                     }
-                    nested_assign_addr[nested_level] = scrip->codesize;
+                    nested_assign_addr[nested_level] = scrip->codesize_i32();
                 }
                 else {
-                    int oriaddr = scrip->codesize;
-                    int orifixupcount = scrip->numfixups;
+                    int oriaddr = scrip->codesize_i32();
+                    int orifixupcount = scrip->fixups.size();
                     int vcpuOperator = SCMD_ISEQUAL;
                     // Push the switch variable onto the stack
                     scrip->push_reg(SREG_BX);
@@ -4741,9 +4795,9 @@ startvarbit:
                     scrip->flush_line_numbers();
                     scrip->write_cmd2(SCMD_LITTOREG,SREG_AX,0); // Clear out the AX register so that the jump works correctly
                     if (nested_type[loop_level] == NEST_SWITCH)
-                        scrip->write_cmd1(SCMD_JMP, -(scrip->codesize - nested_start[loop_level])); // Jump to the known break point
+                        scrip->write_cmd1(SCMD_JMP, -((scrip->codesize_i32()) - nested_start[loop_level])); // Jump to the known break point
                     else
-                        scrip->write_cmd1(SCMD_JMP, -(scrip->codesize - nested_info[loop_level] + 3)); // Jump to the known break point
+                        scrip->write_cmd1(SCMD_JMP, -((scrip->codesize_i32()) - nested_info[loop_level] + 3)); // Jump to the known break point
                 }
                 else {
                     cc_error("Break only valid inside a loop or switch statement block");
@@ -4768,7 +4822,7 @@ startvarbit:
                         write_chunk(scrip, nested_chunk[loop_level][0]);
                     scrip->flush_line_numbers();
                     scrip->write_cmd2(SCMD_LITTOREG,SREG_AX,0); // Clear out the AX register so that the jump works correctly
-                    scrip->write_cmd1(SCMD_JMP, -((scrip->codesize+2) - nested_start[loop_level])); // Jump to the start of the loop
+                    scrip->write_cmd1(SCMD_JMP, -((scrip->codesize_i32() + 2) - nested_start[loop_level])); // Jump to the start of the loop
                 }
                 else {
                     cc_error("Continue not valid outside a loop");

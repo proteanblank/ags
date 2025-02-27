@@ -1,4 +1,16 @@
-
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include "script/runtimescriptvalue.h"
 #include <string.h> // for memcpy()
 #include "ac/dynobj/cc_scriptobject.h"
@@ -10,10 +22,6 @@ using namespace AGS::Common;
 // NOTE to future optimizers: I am using 'this' ptr here to better
 // distinguish Runtime Values.
 //
-
-// TODO: test again if stack entry really can hold an offset itself
-
-// TODO: use endian-agnostic method to access global vars
 
 uint8_t RuntimeScriptValue::ReadByte() const
 {
@@ -217,7 +225,7 @@ RuntimeScriptValue &RuntimeScriptValue::DirectPtrObj()
     return *this;
 }
 
-intptr_t RuntimeScriptValue::GetDirectPtr() const
+void *RuntimeScriptValue::GetDirectPtr() const
 {
     const RuntimeScriptValue *temp_val = this;
     int ival = temp_val->IValue;
@@ -227,7 +235,7 @@ intptr_t RuntimeScriptValue::GetDirectPtr() const
         ival     += temp_val->IValue;
     }
     if (temp_val->Type == kScValScriptObject)
-        return (intptr_t)temp_val->ObjMgr->GetFieldPtr(temp_val->Ptr, ival);
+        return temp_val->ObjMgr->GetFieldPtr(temp_val->Ptr, ival);
     else
-        return (intptr_t)(temp_val->PtrU8 + ival);
+        return temp_val->PtrU8 + ival;
 }

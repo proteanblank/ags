@@ -54,5 +54,15 @@ namespace AGS.Editor.Components
         public virtual void EditorShutdown()
         {
         }
+
+        public virtual bool ShowItemPaneByName(string name)
+        {
+            return false;
+        }
+
+        public virtual IList<string> GetManagedScriptElements()
+        {
+            return new string[] {};
+        }
     }
 }

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <cstdio>
@@ -91,6 +91,28 @@ void CfgReadString(char *cbuf, size_t buf_sz,
     snprintf(cbuf, buf_sz, "%s", str.GetCStr());
 }
 
+String CfgFindKey(const ConfigTree &cfg, const String &sectn, const String &item, bool nocase)
+{
+    const auto sec_it = cfg.find(sectn);
+    if (sec_it == cfg.end())
+        return "";
+    if (nocase)
+    {
+        for (auto item_it : sec_it->second)
+        {
+            if (item_it.first.CompareNoCase(item) == 0)
+                return item_it.first;
+        }
+    }
+    else
+    {
+        const auto item_it = sec_it->second.find(item);
+        if (item_it != sec_it->second.end())
+            return item_it->first;
+    }
+    return "";
+}
+
 //-----------------------------------------------------------------------------
 // ConfigWriter
 //-----------------------------------------------------------------------------
@@ -134,9 +156,9 @@ typedef IniFile::ConstItemIterator    CItemIterator;
 static bool ReadIni(const String &file, IniFile &ini)
 {
     UStream fs(File::OpenFileRead(file));
-    if (fs.get())
+    if (fs)
     {
-        ini.Read(fs.get());
+        ini.Read(std::move(fs));
         return true;
     }
     return false;
@@ -170,16 +192,16 @@ bool IniUtil::Read(const String &file, ConfigTree &tree)
     return true;
 }
 
-void IniUtil::Read(Stream *in, ConfigTree &tree)
+void IniUtil::Read(std::unique_ptr<Stream> &&in, ConfigTree &tree)
 {
     IniFile ini;
-    ini.Read(in);
+    ini.Read(std::move(in));
     CopyIniToTree(ini, tree);
 }
 
-void IniUtil::Write(Stream *out, const ConfigTree &tree)
+void IniUtil::Write(std::unique_ptr<Stream> &&out, const ConfigTree &tree)
 {
-    TextStreamWriter writer(out);
+    TextStreamWriter writer(std::move(out));
 
     for (ConfigNode it_sec = tree.begin(); it_sec != tree.end(); ++it_sec)
     {
@@ -204,8 +226,6 @@ void IniUtil::Write(Stream *out, const ConfigTree &tree)
             writer.WriteLineBreak();
         }
     }
-
-    writer.ReleaseStream();
 }
 
 void IniUtil::Write(const String &file, const ConfigTree &tree)
@@ -213,7 +233,7 @@ void IniUtil::Write(const String &file, const ConfigTree &tree)
     UStream fs(File::CreateFile(file));
     if (!fs)
         return;
-    IniUtil::Write(fs.get(), tree);
+    IniUtil::Write(std::move(fs), tree);
 }
 
 void IniUtil::WriteToString(String &s, const ConfigTree &tree)
@@ -311,7 +331,7 @@ bool IniUtil::Merge(const String &file, const ConfigTree &tree)
     UStream fs(File::CreateFile(file));
     if (!fs.get())
         return false;
-    ini.Write(fs.get());
+    ini.Write(std::move(fs));
     return true;
 }
 

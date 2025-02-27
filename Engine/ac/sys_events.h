@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -85,14 +85,16 @@ inline int make_sdl_merged_mod(int mod)
 InputType ags_inputevent_ready();
 // Queries for the next input event in buffer; returns uninitialized data if none was queued
 SDL_Event ags_get_next_inputevent();
+// Pops and drops next input event in buffer, if any
+void ags_drop_next_inputevent();
 // Tells if the key is currently down, provided AGS key.
 // NOTE: for particular script codes this function returns positive if either of two keys are down.
 int ags_iskeydown(eAGSKeyCode ags_key);
 // Simulates key press with the given AGS key
-void ags_simulate_keypress(eAGSKeyCode ags_key);
+void ags_simulate_keypress(eAGSKeyCode ags_key, bool old_keyhandle);
 
 // TODO: hide these later? (bad design with run_service_key_controls,
-// but also need to clear them in ags_clear_input_buffer())
+// but also need to clear them in ags_clear_input_state())
 extern int sys_modkeys; // accumulated mod flags
 extern bool sys_modkeys_fired; // tells whether mod combination had been used for action
 
@@ -143,9 +145,6 @@ void ags_touch_set_mouse_emulation(TouchMouseEmulation mode,
 // Clears buffered keypresses and mouse clicks;
 // resets current key/mb states
 void ags_clear_input_state();
-// Clears buffered keypresses and mouse clicks, if any;
-// does NOT reset current key/mb states
-void ags_clear_input_buffer();
 // Clears buffered mouse movement
 void ags_clear_mouse_movement();
 

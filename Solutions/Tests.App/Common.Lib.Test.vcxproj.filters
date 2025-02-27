@@ -43,16 +43,7 @@
     <ClCompile Include="..\..\Common\util\cmdlineopts.cpp">
       <Filter>Common</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\Common\util\alignedstream.cpp">
-      <Filter>Common</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Common\util\proxystream.cpp">
-      <Filter>Common</Filter>
-    </ClCompile>
     <ClCompile Include="..\..\Common\util\memorystream.cpp">
-      <Filter>Common</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Common\util\datastream.cpp">
       <Filter>Common</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Common\util\string_utils.cpp">
@@ -109,6 +100,9 @@
     <ClCompile Include="..\..\Common\util\path_ex.cpp">
       <Filter>Common</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Common\test\utf8_test.cpp">
+      <Filter>Test</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="Common">
@@ -152,16 +146,7 @@
     <ClInclude Include="..\..\Common\util\cmdlineopts.h">
       <Filter>Common</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Common\util\alignedstream.h">
-      <Filter>Common</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Common\util\proxystream.h">
-      <Filter>Common</Filter>
-    </ClInclude>
     <ClInclude Include="..\..\Common\util\memorystream.h">
-      <Filter>Common</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Common\util\datastream.h">
       <Filter>Common</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Common\util\string_utils.h">

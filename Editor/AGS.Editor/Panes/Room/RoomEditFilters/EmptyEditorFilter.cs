@@ -7,7 +7,7 @@ using AGS.Types;
 
 namespace AGS.Editor
 {
-    public class EmptyEditorFilter : IRoomEditorFilter
+    public class EmptyEditorFilter : BaseRoomEditorFilter, IRoomEditorFilter
     {
 		private Panel _panel;
         private Room _room;
@@ -102,6 +102,11 @@ namespace AGS.Editor
         }
 
         public bool KeyPressed(Keys key)
+        {
+            return false;
+        }
+
+        public bool KeyReleased(Keys key)
         {
             return false;
         }

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -18,9 +18,59 @@
 #ifndef __AGS_EE_SCRIPT__EXECUTINGSCRIPT_H
 #define __AGS_EE_SCRIPT__EXECUTINGSCRIPT_H
 
+#include <vector>
 #include "script/cc_instance.h"
+#include "gfx/bitmap.h"
 
-enum PostScriptAction {
+#define MAX_SCRIPT_EVT_PARAMS  4
+
+// A general script type, used to search for or run a function.
+// NOTE: "game" type may mean either "global script" or any script module,
+// depending on other circumstances.
+// TODO: get rid of this later, remains of old event function logic
+enum ScriptType
+{
+    kScTypeNone,
+    kScTypeGame,    // game script modules
+    kScTypeRoom     // room script
+};
+
+// ScriptFunctionRef - represents a *unresolved* reference to the script function.
+// This means that it has only script and function names, but not the actual
+// pointer to a loaded bytecode.
+struct ScriptFunctionRef
+{
+    AGS::Common::String ModuleName;
+    AGS::Common::String FuncName;
+ 
+    ScriptFunctionRef() = default;
+    ScriptFunctionRef(const AGS::Common::String &fn_name)
+        : FuncName(fn_name) {}
+    ScriptFunctionRef(const AGS::Common::String &module_name, const AGS::Common::String &fn_name)
+        : ModuleName(module_name), FuncName(fn_name) {}
+    bool IsEmpty() const { return FuncName.IsEmpty(); }
+    operator bool() const { return FuncName.IsEmpty(); }
+};
+
+struct QueuedScript
+{
+    ScriptType         ScType = kScTypeNone;
+    ScriptFunctionRef  Function;
+    size_t             ParamCount = 0u;
+    RuntimeScriptValue Params[MAX_SCRIPT_EVT_PARAMS];
+    // An optional shared pointer to the boolean variable which must receive
+    // a result of a function call (success or failure).
+    // (we have to use a shared ptr here in case the object which requested
+    // this call gets disposed before the result is received, so for safety).
+    std::weak_ptr<bool> Result;
+
+    QueuedScript() = default;
+};
+
+// Actions that can be scheduled for until the current script completes
+enum PostScriptActionType
+{
+    ePSAUndefined,
     ePSANewRoom,
     ePSAInvScreen,
     ePSARestoreGame,
@@ -29,47 +79,52 @@ enum PostScriptAction {
     ePSARunDialog,
     ePSARestartGame,
     ePSASaveGame,
-    ePSASaveGameDialog
+    ePSASaveGameDialog,
+    ePSAStopDialog,
+    ePSAScanSaves
 };
 
-#define MAX_QUEUED_SCRIPTS 4
-#define MAX_QUEUED_ACTIONS 5
-#define MAX_QUEUED_ACTION_DESC 100
-#define MAX_FUNCTION_NAME_LEN 60
-#define MAX_QUEUED_PARAMS  4
-
-enum ScriptInstType
+struct PostScriptAction
 {
-    kScInstGame,
-    kScInstRoom
+    // TODO: refactor this into a union of structs!
+    PostScriptActionType Type = ePSAUndefined;
+    int Data[6]{};
+    Common::String Name;
+    Common::String Text;
+    mutable std::unique_ptr<Common::Bitmap> Image;
+    ScriptPosition Position;
+
+    PostScriptAction() = default;
+    PostScriptAction(PostScriptActionType type, int data, const Common::String &name, const Common::String &text = {},
+        std::unique_ptr<Common::Bitmap> &&image = {})
+        : Type(type), Name(name), Text(text), Image(std::move(image)) { Data[0] = data; }
+    PostScriptAction(PostScriptActionType type, int data1, int data2, const Common::String &name)
+        : Type(type), Name(name) { Data[0] = data1; Data[1] = data2; }
+    PostScriptAction(PostScriptActionType type, int data1, int data2, int data3, const Common::String &name)
+        : Type(type), Name(name) { Data[0] = data1; Data[1] = data2; Data[2] = data3; }
+    PostScriptAction(PostScriptActionType type, int data1, int data2, int data3, int data4, int data5, int data6, const Common::String &name)
+        : Type(type), Name(name) { Data[0] = data1; Data[1] = data2; Data[2] = data3; Data[3] = data4; Data[4] = data5; Data[5] = data6; }
 };
 
-struct QueuedScript
+struct ExecutingScript
 {
-    Common::String     FnName;
-    ScriptInstType     Instance;
-    size_t             ParamCount;
-    RuntimeScriptValue Params[MAX_QUEUED_PARAMS];
+    // Some old games were (accidentally) relying on number of queued script calls being limited
+    static const int LEGACY_MAX_QUEUED_SCRIPTS = 4;
 
-    QueuedScript();
-};
-
-struct ExecutingScript {
-    ccInstance *inst = nullptr;
+    // Instance refers either to one of the global instances,
+    // or a ForkedInst created for this purpose
+    ccInstance *Inst = nullptr;
     // owned fork; CHECKME: this seem unused in the current engine
-    std::unique_ptr<ccInstance> forkedInst{};
-    PostScriptAction postScriptActions[MAX_QUEUED_ACTIONS]{};
-    const char *postScriptActionNames[MAX_QUEUED_ACTIONS]{};
-    ScriptPosition  postScriptActionPositions[MAX_QUEUED_ACTIONS]{};
-    char postScriptSaveSlotDescription[MAX_QUEUED_ACTIONS][MAX_QUEUED_ACTION_DESC]{};
-    int  postScriptActionData[MAX_QUEUED_ACTIONS]{};
-    int  numPostScriptActions = 0;
-    QueuedScript ScFnQueue[MAX_QUEUED_SCRIPTS]{};
-    int  numanother = 0;
+    std::unique_ptr<ccInstance> ForkedInst{};
+    std::vector<PostScriptAction> PostScriptActions;
+    std::vector<QueuedScript> ScFnQueue;
 
     ExecutingScript() = default;
-    int queue_action(PostScriptAction act, int data, const char *aname);
-    void run_another(const char *namm, ScriptInstType scinst, size_t param_count, const RuntimeScriptValue *params);
+    void QueueAction(PostScriptAction &&act);
+    void RunAnother(ScriptType scinst, const AGS::Common::String &fn_name,
+        size_t param_count, const RuntimeScriptValue *params, std::weak_ptr<bool> result = {});
+    void RunAnother(ScriptType scinst, const ScriptFunctionRef &fn_ref,
+        size_t param_count, const RuntimeScriptValue *params, std::weak_ptr<bool> result = {});
 };
 
 #endif // __AGS_EE_SCRIPT__EXECUTINGSCRIPT_H

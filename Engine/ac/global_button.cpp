@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -16,9 +16,8 @@
 #include "ac/common.h"
 #include "ac/button.h"
 #include "ac/gamesetupstruct.h"
+#include "ac/gui.h"
 #include "ac/string.h"
-#include "gui/guimain.h"
-#include "gui/guibutton.h"
 
 using namespace AGS::Common;
 
@@ -59,20 +58,20 @@ int GetButtonPic(int guin, int objn, int ptype) {
 
     if (ptype == 0) {
         // currently displayed pic
-        if (guil->CurrentImage < 0)
-            return guil->Image;
-        return guil->CurrentImage;
+        if (guil->GetCurrentImage() < 0)
+            return guil->GetNormalImage();
+        return guil->GetCurrentImage();
     }
     else if (ptype==1) {
         // nomal pic
-        return guil->Image;
+        return guil->GetNormalImage();
     }
     else if (ptype==2) {
         // mouseover pic
-        return guil->MouseOverImage;
+        return guil->GetMouseOverImage();
     }
     else { // pushed pic
-        return guil->PushedImage;
+        return guil->GetPushedImage();
     }
 }
 

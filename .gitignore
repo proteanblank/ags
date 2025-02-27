@@ -49,6 +49,12 @@ bin/
 gen/
 out/
 
+# ags game in Android single game project used for testing
+Android/mygame/app/src/main/assets
+
+# Ignore prebuilt libraries
+Android/library/runtime/libs/
+
 ## end Android related
 
 ## Xcode Build generated
@@ -99,6 +105,8 @@ Engine/ags
 **/.test
 
 # Force git to NOT ignore this source folder
+# this is necessary because some of the above patterns have "*Debug" in them
+!Common/debug
 !Engine/debug
 
 
@@ -169,3 +177,25 @@ libsrc/theora/
 libsrc/vorbis/
 
 libsrc/SDL2-Framework.dmg
+
+# ags game in ios game project
+iOS/Resources
+
+# ignore libraries dependencies manually placed in Editor
+Editor/References/**/*.dll
+
+# Plugins: MSVS solution output and temporary files
+/Plugins/ags_parallax/msvc/.build/
+/Plugins/ags_parallax/msvc/.temp/
+/Plugins/ags_snowrain/msvc/.build/
+/Plugins/ags_snowrain/msvc/.temp/
+/Plugins/agsblend/msvc/.build/
+/Plugins/agsblend/msvc/.temp/
+/Plugins/AGSflashlight/msvc/.build/
+/Plugins/AGSflashlight/msvc/.temp/
+/Plugins/agspalrender/msvc/.build/
+/Plugins/agspalrender/msvc/.temp/
+/Plugins/AGSSpriteFont/msvc/.build/
+/Plugins/AGSSpriteFont/msvc/.temp/
+/Plugins/agstouch/msvc/.build/
+/Plugins/agstouch/msvc/.temp/

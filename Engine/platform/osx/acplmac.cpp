@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -24,8 +24,11 @@
 #include "ac/common.h"
 #include "main/main.h"
 
+using namespace AGS::Common;
+
 void AGSMacInitPaths(char appdata[PATH_MAX]);
 void AGSMacGetBundleDir(char gamepath[PATH_MAX]);
+int AGSMacGetFreeSpaceInMB(const char *path);
 //bool PlayMovie(char const *name, int skipType);
 
 static char libraryApplicationSupport[PATH_MAX];
@@ -37,8 +40,7 @@ struct AGSMac : AGSPlatformDriver {
   void PreBackendInit() override;
 
   int  CDPlayerCommand(int cmdd, int datt) override;
-  void DisplayAlert(const char*, ...) override;
-  unsigned long GetDiskFreeSpaceMB() override;
+  uint64_t GetDiskFreeSpaceMB(const String &path) override;
   eScriptSystemOSID GetSystemOSID() override;
   int  InitializeCDPlayer() override;
   void ShutdownCDPlayer() override;
@@ -46,6 +48,7 @@ struct AGSMac : AGSPlatformDriver {
   FSLocation GetUserSavedgamesDirectory() override;
   FSLocation GetAllUsersDataDirectory() override;
   FSLocation GetUserConfigDirectory() override;
+  FSLocation GetUserGlobalConfigDirectory() override;
   FSLocation GetAppOutputDirectory() override;
   const char *GetIllegalFileChars() override;
 };
@@ -68,21 +71,8 @@ int AGSMac::CDPlayerCommand(int cmdd, int datt) {
   return 0;//cd_player_control(cmdd, datt);
 }
 
-void AGSMac::DisplayAlert(const char *text, ...) {
-  char displbuf[2000];
-  va_list ap;
-  va_start(ap, text);
-  vsprintf(displbuf, text, ap);
-  va_end(ap);
-  if (_logToStdErr)
-    fprintf(stderr, "%s\n", displbuf);
-  else
-    fprintf(stdout, "%s\n", displbuf);
-}
-
-unsigned long AGSMac::GetDiskFreeSpaceMB() {
-  // placeholder
-  return 100;
+uint64_t AGSMac::GetDiskFreeSpaceMB(const String &path) {
+  return AGSMacGetFreeSpaceInMB(path.GetCStr());
 }
 
 eScriptSystemOSID AGSMac::GetSystemOSID() {
@@ -112,6 +102,11 @@ FSLocation AGSMac::GetUserSavedgamesDirectory()
 FSLocation AGSMac::GetUserConfigDirectory()
 {
   return FSLocation(libraryApplicationSupport);
+}
+
+FSLocation AGSMac::GetUserGlobalConfigDirectory()
+{
+  return commonDataPath;
 }
 
 FSLocation AGSMac::GetAppOutputDirectory()

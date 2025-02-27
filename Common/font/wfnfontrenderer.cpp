@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "font/wfnfontrenderer.h"
@@ -114,7 +114,7 @@ static int RenderChar(Bitmap *ds, const int at_x, const int at_y, Rect clip,
 
 bool WFNFontRenderer::LoadFromDisk(int fontNumber, int fontSize)
 {
-  return LoadFromDiskEx(fontNumber, fontSize, nullptr, nullptr);
+  return LoadFromDiskEx(fontNumber, fontSize, nullptr, nullptr, nullptr);
 }
 
 bool WFNFontRenderer::IsBitmapFont()
@@ -123,25 +123,25 @@ bool WFNFontRenderer::IsBitmapFont()
 }
 
 bool WFNFontRenderer::LoadFromDiskEx(int fontNumber, int /*fontSize*/,
-    const FontRenderParams *params, FontMetrics *metrics)
+    String *src_filename, const FontRenderParams *params, FontMetrics *metrics)
 {
   String file_name;
-  Stream *ffi = nullptr;
 
   file_name.Format("agsfnt%d.wfn", fontNumber);
-  ffi = AssetMgr->OpenAsset(file_name);
+  auto ffi = _amgr->OpenAsset(file_name);
   if (ffi == nullptr)
   {
     // actual font not found, try font 0 instead
+    // FIXME: this should not be done here in this font renderer implementation,
+    // but somewhere outside, when whoever calls this method
     file_name = "agsfnt0.wfn";
-    ffi = AssetMgr->OpenAsset(file_name);
+    ffi = _amgr->OpenAsset(file_name);
     if (ffi == nullptr)
       return false;
   }
 
   WFNFont *font = new WFNFont();
-  WFNError err = font->ReadFromFile(ffi);
-  delete ffi;
+  WFNError err = font->ReadFromFile(ffi.get());
   if (err == kWFNErr_HasBadCharacters)
     Debug::Printf(kDbgMsg_Warn, "WARNING: font '%s' has mistakes in data format, some characters may be displayed incorrectly", file_name.GetCStr());
   else if (err != kWFNErr_NoError)
@@ -151,6 +151,8 @@ bool WFNFontRenderer::LoadFromDiskEx(int fontNumber, int /*fontSize*/,
   }
   _fontData[fontNumber].Font = font;
   _fontData[fontNumber].Params = params ? *params : FontRenderParams();
+  if (src_filename)
+    *src_filename = file_name;
   if (metrics)
     *metrics = FontMetrics();
   return true;

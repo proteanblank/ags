@@ -1,6 +1,20 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2024 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 //
 // Implementation from acgui.h and acgui.cpp specific to AGS.Native library
 //
+//=============================================================================
 
 #pragma unmanaged
 
@@ -77,15 +91,9 @@ String GUI::TransformTextForDrawing(const String &text, bool /*translate*/, bool
     return text;
 }
 
-size_t GUI::SplitLinesForDrawing(const char *text, bool /*apply_direction*/, SplitLines &lines, int font, int width, size_t max_lines)
+size_t GUI::SplitLinesForDrawing(const String &text, bool /*apply_direction*/, SplitLines &lines, int font, int width, size_t max_lines)
 {
-    return split_lines(text, lines, width, font, max_lines);
-}
-
-bool GUIObject::IsClickable() const
-{
-    // make sure the button can be selected in the editor
-    return true;
+    return split_lines(text.GetCStr(), lines, width, font, max_lines);
 }
 
 void GUIObject::MarkChanged()
@@ -93,7 +101,17 @@ void GUIObject::MarkChanged()
     // do nothing: in Editor "guis" array is not even guaranteed to be filled!
 }
 
-void GUIObject::NotifyParentChanged()
+void GUIObject::MarkParentChanged()
+{
+    // do nothing: in Editor "guis" array is not even guaranteed to be filled!
+}
+
+void GUIObject::MarkPositionChanged(bool)
+{
+    // do nothing: in Editor "guis" array is not even guaranteed to be filled!
+}
+
+void GUIObject::MarkStateChanged(bool, bool)
 {
     // do nothing: in Editor "guis" array is not even guaranteed to be filled!
 }
@@ -101,7 +119,7 @@ void GUIObject::NotifyParentChanged()
 int GUILabel::PrepareTextToDraw()
 {
     _textToDraw = Text;
-    return GUI::SplitLinesForDrawing(_textToDraw.GetCStr(), false, Lines, Font, Width);
+    return GUI::SplitLinesForDrawing(_textToDraw, false, Lines, Font, _width);
 }
 
 void GUITextBox::DrawTextBoxContents(Bitmap *ds, int x, int y, color_t text_color)
@@ -123,12 +141,20 @@ bool GUIInvWindow::HasAlphaChannel() const
 void GUIInvWindow::Draw(Bitmap *ds, int x, int y)
 {
     color_t draw_color = ds->GetCompatibleColor(15);
-    ds->DrawRect(RectWH(x, y, Width, Height), draw_color);
+    ds->DrawRect(RectWH(x, y, _width, _height), draw_color);
 }
 
 void GUIButton::PrepareTextToDraw()
 {
-    _textToDraw = _text;
+    if (IsWrapText())
+    {
+        _textToDraw = _text;
+        GUI::SplitLinesForDrawing(_text, false, Lines, Font, _width - TextPaddingHor * 2);
+    }
+    else
+    {
+        _textToDraw = _text;
+    }
 }
 
 } // namespace Common

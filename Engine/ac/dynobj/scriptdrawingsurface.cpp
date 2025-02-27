@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/dynobj/scriptdrawingsurface.h"
@@ -27,7 +27,6 @@ using namespace AGS::Common;
 
 extern RoomStruct thisroom;
 extern SpriteCache spriteset;
-extern GameState play;
 extern GameSetupStruct game;
 
 Bitmap* ScriptDrawingSurface::GetBitmapSurface()
@@ -74,12 +73,12 @@ const char *ScriptDrawingSurface::GetType() {
     return "DrawingSurface";
 }
 
-size_t ScriptDrawingSurface::CalcSerializeSize(void* /*address*/)
+size_t ScriptDrawingSurface::CalcSerializeSize(const void* /*address*/)
 {
     return sizeof(int32_t) * 9;
 }
 
-void ScriptDrawingSurface::Serialize(void* /*address*/, Stream *out) {
+void ScriptDrawingSurface::Serialize(const void* /*address*/, Stream *out) {
     // pack mask type in the last byte of a negative integer
     // note: (-1) is reserved for "unused", for backward compatibility
     if (roomMaskType > 0)

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_GUIDEFINES_H
@@ -42,7 +42,7 @@
 // 3.4.0      (118): Removed GUI limits
 // 3.5.0      (119): Game data contains GUI properties that previously
 //                   could be set only at runtime.
-//
+// Since then format value is defined as AGS version represented as NN,NN,NN,NN
 //=============================================================================
 
 enum GuiVersion
@@ -124,7 +124,8 @@ enum GUIControlType
     kGUIInvWindow   = 3,
     kGUISlider      = 4,
     kGUITextBox     = 5,
-    kGUIListBox     = 6
+    kGUIListBox     = 6,
+    kGUICtrlTypeNum
 };
 
 // GUIControl general style and behavior flags
@@ -138,6 +139,7 @@ enum GUIControlFlags
     kGUICtrl_Clip       = 0x0020, // only button
     kGUICtrl_Clickable  = 0x0040,
     kGUICtrl_Translated = 0x0080, // 3.3.0.1132
+    kGUICtrl_WrapText   = 0x0100, // 3.6.2
     kGUICtrl_Deleted    = 0x8000, // unused (probably remains from the old editor?)
 
     kGUICtrl_DefFlags   = kGUICtrl_Enabled | kGUICtrl_Visible | kGUICtrl_Clickable |
@@ -190,26 +192,19 @@ enum GuiSvgVersion
     kGuiSvgVersion_350,
     kGuiSvgVersion_36020,
     kGuiSvgVersion_36023,
-    kGuiSvgVersion_36025
+    kGuiSvgVersion_36025,
+    kGuiSvgVersion_36200    = 3060200, // re-added control refs
+    kGuiSvgVersion_36202    = 3060202
 };
 
+// Style of GUI drawing in disabled state
 enum GuiDisableStyle
 {
-    kGuiDis_Greyout   = 0,
-    kGuiDis_Blackout  = 1,
-    kGuiDis_Unchanged = 2,
-    kGuiDis_Off       = 3
-};
-
-// Global GUI options
-struct GuiOptions
-{
-    // Clip GUI control's contents to the control's rectangle
-    bool ClipControls = true;
-    // How the GUI controls are drawn when the interface is disabled
-    GuiDisableStyle DisabledStyle = kGuiDis_Unchanged;
-    // Whether to graphically outline GUI controls
-    bool OutlineControls = false;
+    kGuiDis_Undefined = -1, // this is for marking not-disabled state
+    kGuiDis_Greyout   = 0, // paint "gisabled" effect over controls
+    kGuiDis_Blackout  = 1, // invisible controls (but guis are shown
+    kGuiDis_Unchanged = 2, // no change, display normally
+    kGuiDis_Off       = 3  // fully invisible guis
 };
 
 } // namespace Common

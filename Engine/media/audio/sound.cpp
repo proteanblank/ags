@@ -2,19 +2,19 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "media/audio/sound.h"
-#include <cmath>
 #include <list>
 #include <unordered_map>
+#include "ac/game.h"
 #include "core/assetmanager.h"
 #include "debug/out.h"
 #include "media/audio/audio_core.h"
@@ -25,6 +25,7 @@
 #include "util/string_types.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 static int GuessSoundTypeFromExt(const String &extension)
 {
@@ -97,7 +98,25 @@ void soundcache_clear()
     SndCache.Clear();
 }
 
-SOUNDCLIP *load_sound_clip(const AssetPath &apath, const char *extension_hint, bool loop)
+void soundcache_precache(const AssetPath &apath)
+{
+    if (SndCache.GetMaxCacheSize() == 0)
+        return; // cache is disabled
+    if (SndCache.Exists(apath.Name))
+        return; // already in cache
+    auto s_in = AssetMgr->OpenAsset(apath);
+    if (!s_in)
+        return; // failed to open asset
+    size_t asset_size = static_cast<size_t>(s_in->GetLength());
+    if (asset_size > MaxLoadAtOnce)
+        return; // too big for the cache
+    // Read and put into the cache
+    auto sounddata = std::make_shared<std::vector<uint8_t>>(asset_size);
+    s_in->Read(sounddata->data(), asset_size);
+    SndCache.Put(apath.Name, sounddata);
+}
+
+std::unique_ptr<SoundClip> load_sound_clip(const AssetPath &apath, const char *extension_hint, bool loop)
 {
     size_t asset_size;
     std::unique_ptr<Stream> s_in;
@@ -108,7 +127,7 @@ SOUNDCLIP *load_sound_clip(const AssetPath &apath, const char *extension_hint, b
     }
     else
     {
-        s_in.reset(AssetMgr->OpenAsset(apath));
+        s_in = AssetMgr->OpenAsset(apath);
         if (!s_in)
             return nullptr;
         asset_size = static_cast<size_t>(s_in->GetLength());
@@ -139,11 +158,5 @@ SOUNDCLIP *load_sound_clip(const AssetPath &apath, const char *extension_hint, b
     if (slot < 0) { return nullptr; }
 
     const auto sound_type = GuessSoundTypeFromExt(ext_hint);
-    const auto lengthMs = (int)std::round(audio_core_slot_get_duration(slot));
-
-    auto clip = new SOUNDCLIP(slot);
-    clip->repeat = loop;
-    clip->soundType = sound_type;
-    clip->lengthMs = lengthMs;
-    return clip;
+    return std::unique_ptr<SoundClip>(new SoundClip(slot, sound_type, loop));
 }

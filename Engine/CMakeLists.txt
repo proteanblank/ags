@@ -108,6 +108,7 @@ target_sources(engine
     ac/dynobj/scriptoverlay.cpp
     ac/dynobj/scriptoverlay.h
     ac/dynobj/scriptregion.h
+    ac/dynobj/scriptrestoredsaveinfo.h
     ac/dynobj/scriptset.cpp
     ac/dynobj/scriptset.h
     ac/dynobj/scriptstring.cpp
@@ -126,7 +127,6 @@ target_sources(engine
     ac/file.h
     ac/game.cpp
     ac/game.h
-    ac/gamesetup.cpp
     ac/gamesetup.h
     ac/gamestate.cpp
     ac/gamestate.h
@@ -275,7 +275,6 @@ target_sources(engine
     ac/textbox.h
     ac/timer.cpp
     ac/timer.h
-    ac/topbarsettings.h
     ac/translation.cpp
     ac/translation.h
     ac/viewframe.cpp
@@ -286,8 +285,6 @@ target_sources(engine
     ac/walkbehind.cpp
     ac/walkbehind.h
     debug/agseditordebugger.h
-    debug/consoleoutputtarget.cpp
-    debug/consoleoutputtarget.h
     debug/debug.cpp
     debug/debug_log.h
     debug/debugger.h
@@ -296,11 +293,8 @@ target_sources(engine
     debug/filebasedagsdebugger.h
     debug/logfile.cpp
     debug/logfile.h
-    debug/messagebuffer.cpp
-    debug/messagebuffer.h
     device/mousew32.cpp
     device/mousew32.h
-    font/fonts_engine.cpp
     game/game_init.cpp
     game/game_init.h
     game/savegame.cpp
@@ -308,7 +302,6 @@ target_sources(engine
     game/savegame_components.cpp
     game/savegame_components.h
     game/savegame_internal.h
-    game/savegame_v321.cpp
     game/viewport.cpp
     game/viewport.h
     gfx/ali3dexception.h
@@ -318,7 +311,6 @@ target_sources(engine
     gfx/ali3dsw.h
     gfx/blender.cpp
     gfx/blender.h
-    gfx/color_engine.cpp
     gfx/ddb.h
     gfx/gfx_util.cpp
     gfx/gfx_util.h
@@ -352,7 +344,6 @@ target_sources(engine
     gui/guidialog.cpp
     gui/guidialog.h
     gui/guidialogdefines.h
-    gui/guidialoginternaldefs.h
     gui/mycontrols.h
     gui/mylabel.cpp
     gui/mylabel.h
@@ -392,6 +383,8 @@ target_sources(engine
     media/audio/audio.h
     media/audio/audio_system.h
     media/audio/audiodefines.h
+    media/audio/audioplayer.cpp
+    media/audio/audioplayer.h
     media/audio/sdldecoder.cpp
     media/audio/sdldecoder.h
     media/audio/openalsource.cpp
@@ -403,8 +396,14 @@ target_sources(engine
     media/audio/sound.h
     media/audio/soundclip.cpp
     media/audio/soundclip.h
+    media/video/flic_player.cpp
+    media/video/flic_player.h
+    media/video/theora_player.cpp
+    media/video/theora_player.h
     media/video/video.cpp
     media/video/video.h
+    media/video/videoplayer.cpp
+    media/video/videoplayer.h
     platform/base/agsplatformdriver.cpp
     platform/base/agsplatformdriver.h
     platform/base/agsplatform_xdg_unix.cpp
@@ -414,7 +413,6 @@ target_sources(engine
     platform/util/libc.c
     plugin/agsplugin.cpp
     plugin/agsplugin.h
-    plugin/agsplugin_evts.h
     plugin/plugin_builtin.h
     plugin/plugin_engine.h
     plugin/plugin_stubs.cpp
@@ -425,7 +423,6 @@ target_sources(engine
     script/executingscript.h
     script/exports.cpp
     script/exports.h
-    script/nonblockingscriptfunction.h
     script/runtimescriptvalue.cpp
     script/runtimescriptvalue.h
     script/script.cpp
@@ -446,6 +443,17 @@ target_sources(engine
     platform/windows/debug/namedpipesagsdebugger.cpp
     platform/windows/gfx/ali3dd3d.cpp
     platform/windows/setup/winsetup.cpp
+    platform/windows/setup/winsetup.h
+    platform/windows/setup/winapihelpers.cpp
+    platform/windows/setup/winapihelpers.h
+    platform/windows/setup/windialog.cpp
+    platform/windows/setup/windialog.h
+    platform/windows/setup/winpagedialog.cpp
+    platform/windows/setup/winpagedialog.h
+    platform/windows/setup/basicpagedialog.cpp
+    platform/windows/setup/basicpagedialog.h
+    platform/windows/setup/advancedpagedialog.cpp
+    platform/windows/setup/advancedpagedialog.h
     platform/windows/minidump.cpp
     platform/windows/win_ex_handling.cpp
 
@@ -485,17 +493,17 @@ if (AGS_BUILTIN_PLUGINS)
     target_compile_definitions(engine PRIVATE BUILTIN_PLUGINS)
 
     target_sources(engine PRIVATE 
-        ../Plugins/agsblend/AGSBlend.cpp
-        ../Plugins/agsblend/agsblend.h
+        ../Plugins/agsblend/agsblend/AGSBlend.cpp
+        ../Plugins/agsblend/agsblend/agsblend.h
 
-        ../Plugins/AGSflashlight/agsflashlight.cpp
-        ../Plugins/AGSflashlight/agsflashlight.h
+        ../Plugins/agsflashlight/agsflashlight/agsflashlight.cpp
+        ../Plugins/agsflashlight/agsflashlight/agsflashlight.h
 
-        ../Plugins/ags_parallax/ags_parallax.cpp
-        ../Plugins/ags_parallax/ags_parallax.h
+        ../Plugins/ags_parallax/ags_parallax/ags_parallax.cpp
+        ../Plugins/ags_parallax/ags_parallax/ags_parallax.h
 
-        ../Plugins/ags_snowrain/ags_snowrain.cpp
-        ../Plugins/ags_snowrain/ags_snowrain.h
+        ../Plugins/ags_snowrain/ags_snowrain/ags_snowrain.cpp
+        ../Plugins/ags_snowrain/ags_snowrain/ags_snowrain.h
 
         ../Plugins/AGSSpriteFont/AGSSpriteFont/AGSSpriteFont.cpp
         ../Plugins/AGSSpriteFont/AGSSpriteFont/AGSSpriteFont.h
@@ -516,13 +524,13 @@ if (AGS_BUILTIN_PLUGINS)
         ../Plugins/AGSSpriteFont/AGSSpriteFont/color.cpp
         ../Plugins/AGSSpriteFont/AGSSpriteFont/color.h
 
-        ../Plugins/agstouch/agstouch.cpp
-        ../Plugins/agstouch/agstouch.h
+        ../Plugins/agstouch/agstouch/agstouch.cpp
+        ../Plugins/agstouch/agstouch/agstouch.h
 
-        ../Plugins/agspalrender/palrender.h
-        ../Plugins/agspalrender/ags_palrender.cpp
-        ../Plugins/agspalrender/raycast.cpp
-        ../Plugins/agspalrender/raycast.h
+        ../Plugins/agspalrender/agspalrender/palrender.h
+        ../Plugins/agspalrender/agspalrender/ags_palrender.cpp
+        ../Plugins/agspalrender/agspalrender/raycast.cpp
+        ../Plugins/agspalrender/agspalrender/raycast.h
     )
 endif()
 
@@ -538,7 +546,6 @@ target_link_libraries(engine PUBLIC
     Cda::Cda
     External::OpenAL
     ${SDL2_LIBRARY}
-    ${SDL2_LIBRARIES}
     SDL2_sound::SDL2_sound
 )
 
@@ -566,9 +573,6 @@ if (AGS_NO_VIDEO_PLAYER)
     target_compile_definitions(engine PRIVATE AGS_NO_VIDEO_PLAYER)
 else()
     target_link_libraries(engine PUBLIC Apeg::Apeg)
-    if (WIN32)
-        target_link_libraries(engine PUBLIC amstrmid quartz)
-    endif()
 endif()
 
 if (WIN32)
@@ -625,6 +629,15 @@ if (WIN32)
     set_target_properties(ags PROPERTIES
         WIN32_EXECUTABLE TRUE
     )
+    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
+        # enable more than 2 GB in a 32-bit application
+        if (MINGW)
+            target_link_options(ags PUBLIC "-Wl,--large-address-aware")
+        endif ()
+        if (MSVC)
+            target_link_options(ags PUBLIC "/LARGEADDRESSAWARE")
+        endif ()
+    endif ()
 endif()
 
 # Test
@@ -633,6 +646,7 @@ if(AGS_TESTS)
     add_executable(
         engine_test
         test/scsprintf_test.cpp
+        test/systemimports_test.cpp
     )
     set_target_properties(engine_test PROPERTIES
         CXX_STANDARD 11
@@ -644,6 +658,7 @@ if(AGS_TESTS)
     target_link_libraries(
         engine_test
         engine
+        common
         gtest_main
     )
 
@@ -673,6 +688,7 @@ if (MACOS)
         ../OSX/Resources/music.vox
         ../OSX/Resources/speech.vox
         ../OSX/Resources/*.vox
+        ../OSX/Resources/PrivacyInfo.xcprivacy
     )
 
     target_sources(ags-app
@@ -706,7 +722,7 @@ if (MACOS)
         MACOSX_BUNDLE_SHORT_VERSION_STRING  # CFBundleShortVersionString
             1.0.0
         MACOSX_BUNDLE_COPYRIGHT             # NSHumanReadableCopyright
-            "Copyright (C) 1999-2011 Chris Jones and 2011-20xx others"
+            "Copyright (C) 1999-2011 Chris Jones and 2011-2025 others"
         MACOSX_BUNDLE_INFO_STRING           # CFBundleGetInfoString
             "Created by Adventure Game Studio"
     )

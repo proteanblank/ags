@@ -2,71 +2,24 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-
 #include "ac/characterinfo.h"
 #include "ac/gamesetupstructbase.h"
 #include "ac/game_version.h"
 #include "ac/wordsdictionary.h"
 #include "script/cc_script.h"
 #include "util/stream.h"
+#include "util/string_utils.h"
 
-using AGS::Common::Stream;
-
-GameSetupStructBase::GameSetupStructBase()
-    : numviews(0)
-    , numcharacters(0)
-    , playercharacter(-1)
-    , totalscore(0)
-    , numinvitems(0)
-    , numdialog(0)
-    , numdlgmessage(0)
-    , numfonts(0)
-    , color_depth(0)
-    , target_win(0)
-    , dialog_bullet(0)
-    , hotdot(0)
-    , hotdotouter(0)
-    , uniqueid(0)
-    , numgui(0)
-    , numcursors(0)
-    , default_lipsync_frame(0)
-    , invhotdotsprite(0)
-    , _resolutionType(kGameResolution_Undefined)
-    , _dataUpscaleMult(1)
-    , _screenUpscaleMult(1)
-{
-    memset(gamename, 0, sizeof(gamename));
-    memset(options, 0, sizeof(options));
-    memset(paluses, 0, sizeof(paluses));
-    memset(defpal, 0, sizeof(defpal));
-    memset(reserved, 0, sizeof(reserved));
-}
-
-GameSetupStructBase::~GameSetupStructBase()
-{
-    Free();
-}
-
-void GameSetupStructBase::Free()
-{
-    for (int i = 0; i < MAXGLOBALMES; ++i)
-    {
-        messages[i].Free();
-    }
-    dict.reset();
-    chars.clear();
-
-    numcharacters = 0;
-}
+using namespace AGS::Common;
 
 void GameSetupStructBase::SetDefaultResolution(GameResolutionType type)
 {
@@ -136,7 +89,11 @@ void GameSetupStructBase::OnResolutionSet()
 
 void GameSetupStructBase::ReadFromFile(Stream *in, GameDataVersion game_ver, SerializeInfo &info)
 {
-    in->Read(&gamename[0], GAME_NAME_LENGTH);
+    // NOTE: historically the struct was saved by dumping whole memory
+    // into the file stream, which added padding from memory alignment;
+    // here we mark the padding bytes, as they do not belong to actual data.
+    gamename.ReadCount(in, LEGACY_GAME_NAME_LENGTH);
+    in->ReadInt16(); // alignment padding to int32 (gamename: 50 -> 52 bytes)
     in->ReadArrayOfInt32(options, MAX_OPTIONS);
     if (game_ver < kGameVersion_340_4)
     { // TODO: this should probably be possible to deduce script API level
@@ -152,14 +109,15 @@ void GameSetupStructBase::ReadFromFile(Stream *in, GameDataVersion game_ver, Ser
     playercharacter = in->ReadInt32();
     totalscore = in->ReadInt32();
     numinvitems = in->ReadInt16();
+    in->ReadInt16(); // alignment padding to int32
     numdialog = in->ReadInt32();
     numdlgmessage = in->ReadInt32();
     numfonts = in->ReadInt32();
     color_depth = in->ReadInt32();
     target_win = in->ReadInt32();
     dialog_bullet = in->ReadInt32();
-    hotdot = in->ReadInt16();
-    hotdotouter = in->ReadInt16();
+    hotdot = static_cast<uint16_t>(in->ReadInt16());
+    hotdotouter = static_cast<uint16_t>(in->ReadInt16());
     uniqueid = in->ReadInt32();
     numgui = in->ReadInt32();
     numcursors = in->ReadInt32();
@@ -175,7 +133,9 @@ void GameSetupStructBase::ReadFromFile(Stream *in, GameDataVersion game_ver, Ser
     default_lipsync_frame = in->ReadInt32();
     invhotdotsprite = in->ReadInt32();
     in->ReadArrayOfInt32(reserved, NUM_INTS_RESERVED);
-    in->ReadArrayOfInt32(&info.HasMessages.front(), MAXGLOBALMES);
+
+    info.ExtensionOffset = static_cast<uint32_t>(in->ReadInt32());
+    in->ReadArrayOfInt32(info.HasMessages.data(), MAXGLOBALMES);
 
     info.HasWordsDict = in->ReadInt32() != 0;
     in->ReadInt32(); // globalscript (dummy 32-bit pointer value)
@@ -185,7 +145,11 @@ void GameSetupStructBase::ReadFromFile(Stream *in, GameDataVersion game_ver, Ser
 
 void GameSetupStructBase::WriteToFile(Stream *out, const SerializeInfo &info) const
 {
-    out->Write(&gamename[0], GAME_NAME_LENGTH);
+    // NOTE: historically the struct was saved by dumping whole memory
+    // into the file stream, which added padding from memory alignment;
+    // here we mark the padding bytes, as they do not belong to actual data.
+    gamename.WriteCount(out, LEGACY_GAME_NAME_LENGTH);
+    out->WriteInt16(0); // alignment padding to int32
     out->WriteArrayOfInt32(options, MAX_OPTIONS);
     out->Write(&paluses[0], sizeof(paluses));
     // colors are an array of chars
@@ -195,14 +159,15 @@ void GameSetupStructBase::WriteToFile(Stream *out, const SerializeInfo &info) co
     out->WriteInt32(playercharacter);
     out->WriteInt32(totalscore);
     out->WriteInt16(numinvitems);
+    out->WriteInt16(0); // alignment padding to int32
     out->WriteInt32(numdialog);
     out->WriteInt32(numdlgmessage);
     out->WriteInt32(numfonts);
     out->WriteInt32(color_depth);
     out->WriteInt32(target_win);
     out->WriteInt32(dialog_bullet);
-    out->WriteInt16(hotdot);
-    out->WriteInt16(hotdotouter);
+    out->WriteInt16(static_cast<uint16_t>(hotdot));
+    out->WriteInt16(static_cast<uint16_t>(hotdotouter));
     out->WriteInt32(uniqueid);
     out->WriteInt32(numgui);
     out->WriteInt32(numcursors);
@@ -265,6 +230,7 @@ const char *GetScriptAPIName(ScriptAPIVersion v)
     case kScriptAPI_v360: return "v3.6.0-alpha";
     case kScriptAPI_v36026: return "v3.6.0-final";
     case kScriptAPI_v361: return "v3.6.1";
+    case kScriptAPI_v362: return "v3.6.2";
     default: return "unknown";
     }
 }

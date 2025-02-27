@@ -2,19 +2,19 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "cc_dynamicarray.h"
 #include <string.h>
 #include "ac/dynobj/dynobj_manager.h"
-#include "util/memorystream.h"
+#include "ac/dynobj/scriptstring.h"
 
 using namespace AGS::Common;
 
@@ -52,13 +52,13 @@ int CCDynamicArray::Dispose(void *address, bool force)
     return 1;
 }
 
-size_t CCDynamicArray::CalcSerializeSize(void *address)
+size_t CCDynamicArray::CalcSerializeSize(const void *address)
 {
     const Header &hdr = GetHeader(address);
     return hdr.TotalSize + FileHeaderSz;
 }
 
-void CCDynamicArray::Serialize(void *address, AGS::Common::Stream *out)
+void CCDynamicArray::Serialize(const void *address, Stream *out)
 {
     const Header &hdr = GetHeader(address);
     out->WriteInt32(hdr.ElemCount);
@@ -76,19 +76,24 @@ void CCDynamicArray::Unserialize(int index, Stream *in, size_t data_sz)
     ccRegisterUnserializedObject(index, &new_arr[MemHeaderSz], this);
 }
 
-/* static */ DynObjectRef CCDynamicArray::Create(int numElements, int elementSize, bool isManagedType)
+/* static */ DynObjectRef CCDynamicArray::Create(uint32_t elem_count, uint32_t elem_size, bool is_managed)
 {
-    uint8_t *new_arr = new uint8_t[numElements * elementSize + MemHeaderSz];
-    memset(new_arr, 0, numElements * elementSize + MemHeaderSz);
+    assert(elem_count <= INT32_MAX);
+    assert(!is_managed || elem_size == sizeof(int32_t));
+    if (elem_count > INT32_MAX || (is_managed && elem_size != sizeof(int32_t)))
+        return {};
+
+    uint8_t *new_arr = new uint8_t[elem_count * elem_size + MemHeaderSz];
+    memset(new_arr, 0, elem_count * elem_size + MemHeaderSz);
     Header &hdr = reinterpret_cast<Header&>(*new_arr);
-    hdr.ElemCount = numElements | (ARRAY_MANAGED_TYPE_FLAG * isManagedType);
-    hdr.TotalSize = elementSize * numElements;
+    hdr.ElemCount = elem_count | (ARRAY_MANAGED_TYPE_FLAG * is_managed);
+    hdr.TotalSize = elem_size * elem_count;
     void *obj_ptr = &new_arr[MemHeaderSz];
     int32_t handle = ccRegisterManagedObject(obj_ptr, &globalDynamicArray);
     if (handle == 0)
     {
         delete[] new_arr;
-        return DynObjectRef();
+        return {};
     }
     return DynObjectRef(handle, obj_ptr, &globalDynamicArray);
 }
@@ -97,7 +102,7 @@ void CCDynamicArray::Unserialize(int index, Stream *in, size_t data_sz)
 CCDynamicArray globalDynamicArray;
 
 
-DynObjectRef DynamicArrayHelpers::CreateStringArray(const std::vector<const char*> items)
+DynObjectRef DynamicArrayHelpers::CreateStringArray(const std::vector<const char*> &items)
 {
     // NOTE: we need element size of "handle" for array of managed pointers
     DynObjectRef arr = globalDynamicArray.Create(items.size(), sizeof(int32_t), true);
@@ -107,11 +112,50 @@ DynObjectRef DynamicArrayHelpers::CreateStringArray(const std::vector<const char
     int32_t *slots = static_cast<int32_t*>(arr.Obj);
     for (auto s : items)
     {
-        DynObjectRef str = stringClassImpl->CreateString(s);
+        DynObjectRef str = ScriptString::Create(s);
         // We must add reference count, because the string is going to be saved
         // within another object (array), not returned to script directly
         ccAddObjectReference(str.Handle);
         *(slots++) = str.Handle;
     }
     return arr;
+}
+
+DynObjectRef DynamicArrayHelpers::CreateStringArray(const std::vector<String> &items)
+{
+    // NOTE: we need element size of "handle" for array of managed pointers
+    DynObjectRef arr = globalDynamicArray.Create(items.size(), sizeof(int32_t), true);
+    if (!arr.Obj)
+        return arr;
+    // Create script strings and put handles into array
+    int32_t *slots = static_cast<int32_t*>(arr.Obj);
+    for (auto s : items)
+    {
+        DynObjectRef str = ScriptString::Create(s.GetCStr());
+        // We must add reference count, because the string is going to be saved
+        // within another object (array), not returned to script directly
+        ccAddObjectReference(str.Handle);
+        *(slots++) = str.Handle;
+    }
+    return arr;
+}
+
+
+#include "script/script_api.h"
+#include "script/script_runtime.h"
+
+int32_t DynamicArray_Length(void *untyped_dynarray)
+{
+    const CCDynamicArray::Header &hdr = CCDynamicArray::GetHeader(untyped_dynarray);
+    return hdr.GetElemCount();
+}
+
+RuntimeScriptValue Sc_DynamicArray_Length(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT(void, DynamicArray_Length);
+}
+
+void RegisterDynamicArrayAPI()
+{
+    ccAddExternalObjectFunction("__Builtin_DynamicArray::get_Length", Sc_DynamicArray_Length);
 }

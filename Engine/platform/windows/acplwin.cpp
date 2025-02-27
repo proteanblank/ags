@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -20,7 +20,6 @@
 #include "platform/windows/windows.h"
 #include <shlobj.h>
 #include <shlwapi.h>
-#include <gameux.h>
 #include <libcda.h>
 
 #include "platform/base/agsplatformdriver.h"
@@ -32,6 +31,7 @@
 struct BITMAP; // we need it only as a placeholder here
 #include "plugin/agsplugin.h"
 #include "resource/resource.h"
+#include "util/string_utils.h"
 #include "util/stdio_compat.h"
 
 
@@ -56,34 +56,37 @@ struct AGSWin32 : AGSPlatformDriver {
 
   int  CDPlayerCommand(int cmdd, int datt) override;
   void AttachToParentConsole() override;
-  void DisplayAlert(const char*, ...) override;
   int  GetLastSystemError() override;
   FSLocation GetAllUsersDataDirectory() override;
   FSLocation GetUserSavedgamesDirectory() override;
   FSLocation GetUserConfigDirectory() override;
   FSLocation GetUserGlobalConfigDirectory() override;
   FSLocation GetAppOutputDirectory() override;
+  bool IsLocalDirRestricted() override;
   const char *GetIllegalFileChars() override;
   const char *GetGraphicsTroubleshootingText() override;
-  unsigned long GetDiskFreeSpaceMB() override;
+  uint64_t GetDiskFreeSpaceMB(const String &path) override;
   const char* GetBackendFailUserHint() override;
   eScriptSystemOSID GetSystemOSID() override;
   int  InitializeCDPlayer() override;
   void PostBackendInit() override;
   void PostBackendExit() override;
-  SetupReturnValue RunSetup(const ConfigTree &cfg_in, ConfigTree &cfg_out) override;
+  SetupReturnValue RunSetup(const ConfigTree &cfg_in, const ConfigTree &def_cfg_in, ConfigTree &cfg_out) override;
   void ShutdownCDPlayer() override;
   void WriteStdOut(const char *fmt, ...) override;
   void WriteStdErr(const char *fmt, ...) override;
+  void DisplayMessageBox(const char *text) override;
   void PauseApplication() override;
   void ResumeApplication() override;
-  Size ValidateWindowSize(const Size &sz, bool borderless) const override;
+  Size ValidateWindowSize(int display_index, const Size &sz, bool borderless) const override;
   SDL_Surface *CreateWindowIcon() override;
 
   // Returns command line argument in a UTF-8 format
   String GetCommandArg(size_t arg_index) override;
 
 private:
+  void WriteStdOutImpl(FILE *file, const char *prefix, const char *fmt, va_list args);
+
   bool _isDebuggerPresent; // indicates if the win app is running in the context of a debugger
   bool _isAttachedToParentConsole; // indicates if the win app is attached to the parent console
 };
@@ -238,6 +241,12 @@ FSLocation AGSWin32::GetAppOutputDirectory()
   return win32OutputDirectory;
 }
 
+bool AGSWin32::IsLocalDirRestricted()
+{
+  // Let them to create temp files in the current working dir
+  return false;
+}
+
 const char *AGSWin32::GetIllegalFileChars()
 {
     return "\\/:?\"<>|*";
@@ -299,47 +308,28 @@ void AGSWin32::AttachToParentConsole() {
     }
 }
 
-void AGSWin32::DisplayAlert(const char *text, ...) {
-  char displbuf[2500];
-  va_list ap;
-  va_start(ap, text);
-  vsnprintf(displbuf, sizeof(displbuf), text, ap);
-  va_end(ap);
-  if (_guiMode)
-    MessageBox((HWND)sys_win_get_window(), displbuf, "Adventure Game Studio", MB_OK | MB_ICONEXCLAMATION);
-
-  // Always write to either stderr or stdout, even if message boxes are enabled.
-  if (_logToStdErr)
-    AGSWin32::WriteStdErr("%s", displbuf);
-  else
-    AGSWin32::WriteStdOut("%s", displbuf);
-}
-
 int AGSWin32::GetLastSystemError()
 {
   return ::GetLastError();
 }
 
-unsigned long AGSWin32::GetDiskFreeSpaceMB() {
-  DWORD returnMb = 0;
-  BOOL fResult;
-
+uint64_t AGSWin32::GetDiskFreeSpaceMB(const String &path)
+{
   // On Win9x, the last 3 params cannot be null, so need to supply values for all
   __int64 i64FreeBytesToCaller, i64Unused1, i64Unused2;
 
   // Win95 OSR2 or higher - use GetDiskFreeSpaceEx, since the
   // normal GetDiskFreeSpace returns erroneous values if the
   // free space is > 2 GB
-  fResult = GetDiskFreeSpaceEx(NULL,
+  WCHAR wstr[MAX_PATH_SZ] = L"";
+  StrUtil::ConvertUtf8ToWstr(path.GetCStr(), wstr, MAX_PATH_SZ);
+  BOOL fResult = GetDiskFreeSpaceExW(wstr,
              (PULARGE_INTEGER)&i64FreeBytesToCaller,
              (PULARGE_INTEGER)&i64Unused1,
              (PULARGE_INTEGER)&i64Unused2);
 
-  // convert down to MB so we can fit it in a 32-bit long
   i64FreeBytesToCaller /= 1000000;
-  returnMb = i64FreeBytesToCaller;
-
-  return returnMb;
+  return static_cast<uint64_t>(i64FreeBytesToCaller);
 }
 
 const char* AGSWin32::GetBackendFailUserHint()
@@ -364,65 +354,72 @@ void AGSWin32::PostBackendExit() {
   timeEndPeriod(win32TimerPeriod);
 }
 
-SetupReturnValue AGSWin32::RunSetup(const ConfigTree &cfg_in, ConfigTree &cfg_out)
+SetupReturnValue AGSWin32::RunSetup(const ConfigTree &cfg_in, const ConfigTree &def_cfg_in, ConfigTree &cfg_out)
 {
   String version_str = String::FromFormat("Adventure Game Studio v%s setup", get_engine_version());
-  return AGS::Engine::WinSetup(cfg_in, cfg_out, usetup.main_data_dir, version_str);
+  return AGS::Engine::WinSetup(cfg_in, def_cfg_in, cfg_out, usetup.MainDataDir, version_str);
 }
 
-void AGSWin32::WriteStdOut(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  if (_isDebuggerPresent)
-  {
-    // Add "AGS:" prefix when outputting to debugger, to make it clear that this
-    // is a text from the program log
-    char buf[1024] = "AGS: ";
-    vsnprintf(buf + 5, 1024 - 5, fmt, ap);
-    OutputDebugString(buf);
-    OutputDebugString("\n");
-  }
-  else
-  {
-    vprintf(fmt, ap);
-    printf("\n");
-  }
-  va_end(ap);
+void AGSWin32::WriteStdOut(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    WriteStdOutImpl(stdout, "AGS: ", fmt, args);
+    va_end(args);
 }
 
-void AGSWin32::WriteStdErr(const char *fmt, ...) {
-  va_list ap;
-  va_start(ap, fmt);
-  if (_isDebuggerPresent)
-  {
-    // Add "AGS:" prefix when outputting to debugger, to make it clear that this
-    // is a text from the program log
-    char buf[1024] = "AGS ERR: ";
-    vsnprintf(buf + 9, 1024 - 9, fmt, ap);
-    OutputDebugString(buf);
-    OutputDebugString("\n");
-  }
-  else
-  {
-    vfprintf(stderr, fmt, ap);
-    fprintf(stderr, "\n");
-  }
-  va_end(ap);
+void AGSWin32::WriteStdErr(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+    WriteStdOutImpl(stderr, "AGS ERR:", fmt, args);
+    va_end(args);
+}
+
+void AGSWin32::WriteStdOutImpl(FILE *file, const char *prefix, const char *fmt, va_list args)
+{
+    va_list args_cpy;
+    va_copy(args_cpy, args);
+    if (_isDebuggerPresent)
+    {
+        // Add "AGS:" prefix when outputting to debugger, to make it clear that this
+        // is a text from the program log
+        char buf[2048];
+        char *pbuf = buf + snprintf(buf, sizeof(buf), "%s", prefix);
+        vsnprintf(pbuf, sizeof(buf) - (pbuf - buf), fmt, args_cpy);
+        OutputDebugString(buf);
+        OutputDebugString("\n");
+    }
+    else
+    {
+        vfprintf(file, fmt, args_cpy);
+        fprintf(file, "\n");
+    }
+    va_end(args_cpy);
+}
+
+void AGSWin32::DisplayMessageBox(const char *text)
+{
+    if (_guiMode)
+        MessageBox((HWND)sys_win_get_window(), text, "Adventure Game Studio", MB_OK | MB_ICONEXCLAMATION);
 }
 
 void AGSWin32::ShutdownCDPlayer() {
   cd_exit();
 }
 
-Size AGSWin32::ValidateWindowSize(const Size &sz, bool borderless) const
+Size AGSWin32::ValidateWindowSize(int display_index, const Size &sz, bool borderless) const
 {
     // Limit the window's client size by the two metrics:
     // * system's window size limit,
     // * work space (visible area);
     // if the window style includes a border, then subtract it from the limits
-    RECT wa_rc, nc_rc;
+    SDL_Rect bounds_rc;
+    RECT nc_rc;
     // This is the size of the available workspace on user's desktop
-    SystemParametersInfo(SPI_GETWORKAREA, 0, &wa_rc, 0);
+    // NOTE: using SDL here, because WinAPI monitor enumeration may have different order
+    // (SDL deals with this by registering monitors in its own list, but we'd like to avoid a hassle)
+    SDL_GetDisplayUsableBounds(display_index, &bounds_rc);
     // This is the maximal size that OS can reliably resize the window to (including any frame)
     const Size max_win(GetSystemMetrics(SM_CXMAXTRACK), GetSystemMetrics(SM_CYMAXTRACK));
     // This is the size of window's non-client area (frame, caption, etc)
@@ -430,8 +427,8 @@ Size AGSWin32::ValidateWindowSize(const Size &sz, bool borderless) const
     SetRectEmpty(&nc_rc);
     AdjustWindowRect(&nc_rc, winstyle, FALSE);
     // Calculate the clamped size
-    Size win_ceil(std::min(static_cast<int>(wa_rc.right - wa_rc.left), (max_win.Width)),
-                  std::min(static_cast<int>(wa_rc.bottom - wa_rc.top), (max_win.Height)));
+    Size win_ceil(std::min(bounds_rc.w, (max_win.Width)),
+                  std::min(bounds_rc.h, (max_win.Height)));
     win_ceil = win_ceil - Size(nc_rc.right - nc_rc.left, nc_rc.bottom - nc_rc.top);
     return Size::Clamp(sz, Size(1, 1), win_ceil);
 }

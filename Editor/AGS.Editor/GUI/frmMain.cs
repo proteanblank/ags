@@ -87,6 +87,7 @@ namespace AGS.Editor
             if (!DesignMode)
             {
                 LoadLayout();
+                Factory.GUIController.LoadWindowConfig();
                 Factory.GUIController.ColorThemes.Apply(LoadColorTheme);
             }
         }
@@ -126,11 +127,11 @@ namespace AGS.Editor
                 // Remember which pane and item were selected on the property grid,
                 // so that we can restore them later
                 tabbedDocumentContainer1.ActiveDocument.SelectedPropertyGridTab = 
-                    propertiesPanel.propertiesGrid.SelectedTab.TabName;
-                if (propertiesPanel.propertiesGrid.SelectedGridItem != null)
+                    propertiesPanel.SelectedTab.TabName;
+                if (propertiesPanel.SelectedGridItem != null)
                 {
                     tabbedDocumentContainer1.ActiveDocument.SelectedPropertyGridItem = 
-                        propertiesPanel.propertiesGrid.SelectedGridItem.Label;
+                        propertiesPanel.SelectedGridItem.Label;
                 }                
             }
         }
@@ -159,7 +160,7 @@ namespace AGS.Editor
 
         private GridItem FindPropertyGridItemForType(string fullTypeName)
         {
-            GridItem startFromHere = propertiesPanel.propertiesGrid.SelectedGridItem;
+            GridItem startFromHere = propertiesPanel.SelectedGridItem;
             if (startFromHere == null)
             {
                 return null;
@@ -186,9 +187,9 @@ namespace AGS.Editor
                 {
                     if ((itemToSelect.Parent != null) && (!itemToSelect.Parent.Expanded))
                     {
-                        propertiesPanel.propertiesGrid.ExpandAllGridItems();
+                        propertiesPanel.ExpandAllGridItems();
                     }
-                    propertiesPanel.propertiesGrid.SelectedGridItem = itemToSelect;
+                    propertiesPanel.SelectedGridItem = itemToSelect;
                 }
             }
         }
@@ -295,7 +296,7 @@ namespace AGS.Editor
             propertiesPanel.Focus();
             // The property grid provides no RootGridItem property,
             // so we must find it manually
-            GridItem rootItem = propertiesPanel.propertiesGrid.SelectedGridItem;
+            GridItem rootItem = propertiesPanel.SelectedGridItem;
             while (rootItem.GridItemType != GridItemType.Root)
             {
                 rootItem = rootItem.Parent;
@@ -362,29 +363,37 @@ namespace AGS.Editor
 
         public void SetPropertyObject(object propertiesObject)
         {
-            propertiesPanel.propertiesGrid.SelectedObject = propertiesObject;
+            propertiesPanel.SelectedObject = propertiesObject;
             SelectObjectInPropertyList(propertiesObject);
         }
 
         public void SetPropertyObjects(object[] propertiesObjects)
         {
-            propertiesPanel.propertiesGrid.SelectedObjects = propertiesObjects;
-
+            propertiesPanel.SelectedObjects = propertiesObjects;
             propertiesPanel.propertyObjectCombo.SelectedIndex = -1;
         }
 
         private void SelectObjectInPropertyList(object propertiesObject)
         {
-            if (_propertyObjectList != null)
+            try
             {
-                foreach (string name in _propertyObjectList.Keys)
+                _ignorePropertyListChange = true;
+                if (_propertyObjectList != null)
                 {
-                    if (_propertyObjectList[name] == propertiesObject)
+                    foreach (string name in _propertyObjectList.Keys)
                     {
-                        propertiesPanel.propertyObjectCombo.SelectedIndex =
-                            propertiesPanel.propertyObjectCombo.Items.IndexOf(name);
+                        if (_propertyObjectList[name] == propertiesObject)
+                        {
+                            propertiesPanel.propertyObjectCombo.SelectedIndex =
+                                propertiesPanel.propertyObjectCombo.Items.IndexOf(name);
+                            break;
+                        }
                     }
                 }
+            }
+            finally
+            {
+                _ignorePropertyListChange = false;
             }
         }
 
@@ -396,6 +405,10 @@ namespace AGS.Editor
             }
             if (!e.Cancel)
             {
+                // Explicitly remove all document panes in order to trigger their OnPanelClosing,
+                // where they possibly save their states to a WindowConfig.
+                tabbedDocumentContainer1.RemoveAllDocuments(false);
+                Factory.GUIController.SaveWindowConfig();
                 _layoutManager.SaveLayout();
             }
         }
@@ -413,12 +426,8 @@ namespace AGS.Editor
         private void frmMain_Shown(object sender, EventArgs e)
         {
             this.tabbedDocumentContainer1.Init();
-            
-            if (AGS.Types.Version.IS_BETA_VERSION)
-			{
-				Factory.GUIController.ShowMessage("This is a BETA version of AGS. BE VERY CAREFUL and MAKE SURE YOU BACKUP YOUR GAME before loading it in this editor.", MessageBoxIcon.Warning);
-			}
 
+            ShowTabIcons = Factory.AGSEditor.Settings.ShowIconInTab;
             Factory.GUIController.ShowWelcomeScreen();
         }
 
@@ -507,6 +516,12 @@ namespace AGS.Editor
 			// you click in the tree. It's an unpopular feature!
             //SetPropertyObjectList(null);
             //SetPropertyObject(null);
+        }
+
+        public bool ShowTabIcons
+        {
+            get { return mainContainer.ShowDocumentIcon; }
+            set { mainContainer.ShowDocumentIcon = value; }
         }
 
         private void LoadColorTheme(ColorTheme t)

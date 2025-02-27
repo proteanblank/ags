@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -34,6 +34,7 @@
 #include "gfx/gfxdriverfactorybase.h"
 #include "gfx/gfxdriverbase.h"
 #include "util/library.h"
+#include "util/smart_ptr.h"
 #include "util/string.h"
 
 namespace AGS
@@ -47,23 +48,31 @@ using AGS::Common::Bitmap;
 using AGS::Common::String;
 class D3DGfxFilter;
 
+// Declare smart ptr for common IDirect3D interfaces
+typedef ComPtr<IDirect3D9> D3DPtr;
+typedef ComPtr<IDirect3DDevice9> D3DDevicePtr;
+typedef ComPtr<IDirect3DSurface9> D3DSurfacePtr;
+typedef ComPtr<IDirect3DTexture9> D3DTexturePtr;
+typedef ComPtr<IDirect3DVertexBuffer9> D3DVertexBufferPtr;
+typedef ComPtr<IDirect3DPixelShader9> D3DPixelShaderPtr;
+
+
 struct D3DTextureTile : public TextureTile
 {
-    IDirect3DTexture9 *texture = nullptr;
+    D3DTexturePtr texture;
 };
 
 // Full Direct3D texture data
 struct D3DTexture : Texture
 {
-    IDirect3DVertexBuffer9 *_vertex = nullptr;
-    D3DTextureTile *_tiles = nullptr;
-    size_t _numTiles = 0;
+    D3DVertexBufferPtr _vertex;
+    std::vector<D3DTextureTile> _tiles;
 
     D3DTexture(const GraphicResolution &res, bool rt)
         : Texture(res, rt) {}
     D3DTexture(uint32_t id, const GraphicResolution &res, bool rt)
         : Texture(id, res, rt) {}
-    ~D3DTexture();
+    ~D3DTexture() = default;
     size_t GetMemSize() const override;
 };
 
@@ -112,7 +121,7 @@ public:
     // Direct3D texture data
     std::shared_ptr<D3DTexture> _data;
     // Optional surface for rendering onto a texture
-    IDirect3DSurface9 *_renderSurface {};
+    D3DSurfacePtr _renderSurface;
     TextureHint _renderHint = kTxHint_Normal;
 
     // Drawing parameters
@@ -144,25 +153,14 @@ public:
     // Releases internal texture data only, keeping the base struct
     void ReleaseTextureData();
 
-    ~D3DBitmap() override;
+    ~D3DBitmap() override = default;
 };
 
 class D3DGfxModeList : public IGfxModeList
 {
 public:
-    D3DGfxModeList(IDirect3D9 *direct3d, D3DFORMAT d3dformat)
-        : _direct3d(direct3d)
-        , _pixelFormat(d3dformat)
-    {
-        _direct3d->AddRef();
-        _modeCount = _direct3d->GetAdapterModeCount(D3DADAPTER_DEFAULT, _pixelFormat);
-    }
-
-    ~D3DGfxModeList() override
-    {
-        if (_direct3d)
-            _direct3d->Release();
-    }
+    D3DGfxModeList(const D3DPtr &direct3d, int display_index, D3DFORMAT d3dformat);
+    ~D3DGfxModeList() = default;
 
     int GetModeCount() const override
     {
@@ -172,7 +170,9 @@ public:
     bool GetMode(int index, DisplayMode &mode) const override;
 
 private:
-    IDirect3D9 *_direct3d = nullptr;
+    D3DPtr      _direct3d;
+    int         _displayIndex = 0;
+    UINT        _adapterIndex = 0u;
     D3DFORMAT   _pixelFormat;
     int         _modeCount = 0;
 };
@@ -189,8 +189,7 @@ struct D3DSpriteBatch : VMSpriteBatch
 {
     // Add anything D3D specific here
     // Optional render target's surface
-    // FIXME: implement a C++ (template) wrapper around IUnknown, handle AddRef/Release auto!!
-    IDirect3DSurface9 *RenderSurface = nullptr;
+    D3DSurfacePtr RenderSurface;
 
     D3DSpriteBatch() = default;
     D3DSpriteBatch(uint32_t id, const Rect &view, const glm::mat4 &matrix,
@@ -200,7 +199,10 @@ struct D3DSpriteBatch : VMSpriteBatch
         const glm::mat4 &matrix, const glm::mat4 &vp_matrix,
         const SpriteColorTransform &color)
         : VMSpriteBatch(id, render_target, view, matrix, vp_matrix, color)
-        , RenderSurface(render_target ? render_target->_renderSurface : nullptr) {}
+    {
+        if (render_target)
+            RenderSurface = render_target->_renderSurface;
+    }
 };
 
 typedef SpriteDrawListEntry<D3DBitmap> D3DDrawListEntry;
@@ -210,8 +212,8 @@ typedef std::vector<D3DSpriteBatch>    D3DSpriteBatches;
 class D3DGraphicsDriver : public VideoMemoryGraphicsDriver
 {
 public:
-    const char*GetDriverName() override { return "Direct3D 9"; }
-    const char*GetDriverID() override { return "D3D9"; }
+    const char *GetDriverID() override { return "D3D9"; }
+    const char *GetDriverName() override { return "Direct3D 9"; }
 
     bool ShouldReleaseRenderTargets() override { return true; }
 
@@ -221,38 +223,42 @@ public:
     bool SetNativeResolution(const GraphicResolution &native_res) override;
     bool SetRenderFrame(const Rect &dst_rect) override;
     int  GetDisplayDepthForNativeDepth(int native_color_depth) const override;
-    IGfxModeList *GetSupportedModeList(int color_depth) override;
+    IGfxModeList *GetSupportedModeList(int display_index, int color_depth) override;
     bool IsModeSupported(const DisplayMode &mode) override;
     PGfxFilter GetGraphicsFilter() const override;
     // Clears the screen rectangle. The coordinates are expected in the **native game resolution**.
     void ClearRectangle(int x1, int y1, int x2, int y2, RGB *colorToUse) override;
     int  GetCompatibleBitmapFormat(int color_depth) override;
-    size_t GetAvailableTextureMemory() override;
+    // Returns available texture memory in bytes, or 0 if this query is not supported
+    uint64_t GetAvailableTextureMemory() override;
 
     IDriverDependantBitmap* CreateDDB(int width, int height, int color_depth, bool opaque) override;
     IDriverDependantBitmap* CreateRenderTargetDDB(int width, int height, int color_depth, bool opaque) override;
-    void UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, Bitmap *bitmap, bool has_alpha) override;
+    void UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, const Bitmap *bitmap, bool has_alpha) override;
     void DestroyDDB(IDriverDependantBitmap* ddb) override;
 
     // Create texture data with the given parameters
     Texture *CreateTexture(int width, int height, int color_depth, bool opaque = false, bool as_render_target = false) override;
     // Update texture data from the given bitmap
-    void UpdateTexture(Texture *txdata, Bitmap *bitmap, bool has_alpha, bool opaque) override;
+    void UpdateTexture(Texture *txdata, const Bitmap *bitmap, bool has_alpha, bool opaque) override;
     // Retrieve shared texture data object from the given DDB
     std::shared_ptr<Texture> GetTexture(IDriverDependantBitmap *ddb) override;
 
     void DrawSprite(int x, int y, IDriverDependantBitmap* ddb) override;
     void SetScreenFade(int red, int green, int blue) override;
     void SetScreenTint(int red, int green, int blue) override;
+    // Redraw saved draw lists, optionally filtering specific batches
+    void RedrawLastFrame(uint32_t batch_skip_filter) override;
+
     void RenderToBackBuffer() override;
     void Render() override;
     void Render(int xoff, int yoff, Common::GraphicFlip flip) override;
-    bool GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_native_res, GraphicResolution *want_fmt) override;
+    void Render(IDriverDependantBitmap *target) override;
+    void GetCopyOfScreenIntoDDB(IDriverDependantBitmap *target, uint32_t batch_skip_filter = 0u) override;
+    bool GetCopyOfScreenIntoBitmap(Bitmap *destination, const Rect *src_rect, bool at_native_res,
+        GraphicResolution *want_fmt, uint32_t batch_skip_filter = 0u) override;
     bool DoesSupportVsyncToggle() override { return _capsVsync; }
-    void RenderSpritesAtScreenResolution(bool enabled, int /*supersampling*/) override { _renderSprAtScreenRes = enabled; };
-    void FadeOut(int speed, int targetColourRed, int targetColourGreen, int targetColourBlue) override;
-    void FadeIn(int speed, PALETTE p, int targetColourRed, int targetColourGreen, int targetColourBlue) override;
-    void BoxOutEffect(bool blackingOut, int speed, int delay) override;
+    void RenderSpritesAtScreenResolution(bool enabled) override { _renderAtScreenRes = enabled; };
     bool SupportsGammaControl() override;
     void SetGamma(int newGamma) override;
     void UseSmoothScaling(bool enabled) override { _smoothScaling = enabled; }
@@ -264,7 +270,7 @@ public:
     void UnInit();
     void SetGraphicsFilter(PD3DFilter filter);
 
-    D3DGraphicsDriver(IDirect3D9 *d3d);
+    D3DGraphicsDriver(const D3DPtr &d3d);
     ~D3DGraphicsDriver() override;
 
 protected:
@@ -278,24 +284,58 @@ protected:
 private:
     PD3DFilter _filter;
 
-    IDirect3D9 *direct3d;
+    D3DPtr direct3d;
     D3DPRESENT_PARAMETERS d3dpp;
-    IDirect3DDevice9* direct3ddevice;
+    D3DDevicePtr direct3ddevice;
+    D3DDEVICE_CREATION_PARAMETERS direct3dcreateparams;
+    D3DCAPS9 direct3ddevicecaps;
     D3DGAMMARAMP defaultgammaramp;
     D3DGAMMARAMP currentgammaramp;
-    D3DCAPS9 direct3ddevicecaps;
-    IDirect3DVertexBuffer9* vertexbuffer;
-    IDirect3DSurface9 *pNativeSurface;
-    IDirect3DTexture9 *pNativeTexture;
-    RECT viewport_rect;
+    // Default vertex buffer, for textures that don't have one
+    D3DVertexBufferPtr vertexbuffer;
+    // Texture for rendering in native resolution
+    D3DBitmap *_nativeSurface = nullptr;
     CUSTOMVERTEX defaultVertices[4];
     String previousError;
-    IDirect3DPixelShader9* pixelShader;
+    D3DPixelShaderPtr pixelShader;
+    int _fullscreenDisplay = -1; // a display where exclusive fullscreen was created
     bool _smoothScaling;
     bool _legacyPixelShader;
     float _pixelRenderXOffset;
     float _pixelRenderYOffset;
-    bool _renderSprAtScreenRes;
+    bool _renderAtScreenRes;
+
+    // TODO: find a way to merge this with Render Targets from sprite batches,
+    // have a SINGLE STACK of "render target states", where backbuffer is at the bottom
+    struct BackbufferState
+    {
+        D3DSurfacePtr Surface;
+        // FIXME: replace RendSize with explicit render coordinate offset? merge with ortho matrix?
+        Size SurfSize; // actual surface size
+        Size RendSize; // coordinate grid size (for centering sprites)
+        Rect Viewport;
+        glm::mat4 Projection;
+        PlaneScaling Scaling;
+        int Filter = 0;
+
+        BackbufferState() = default;
+        BackbufferState(const D3DSurfacePtr &surface, const Size &surf_size, const Size &rend_size,
+            const Rect &view, const glm::mat4 &proj,
+            const PlaneScaling &scale, int filter);
+        BackbufferState(D3DSurfacePtr &&surface, const Size &surf_size, const Size &rend_size,
+            const Rect &view, const glm::mat4 &proj,
+            const PlaneScaling &scale, int filter);
+        BackbufferState(const BackbufferState &state) = default;
+        BackbufferState(BackbufferState &&state) = default;
+        ~BackbufferState() = default;
+
+        BackbufferState &operator = (const BackbufferState &state) = default;
+        BackbufferState &operator = (BackbufferState &&state) = default;
+    };
+
+    BackbufferState _screenBackbuffer;
+    BackbufferState _nativeBackbuffer;
+    const BackbufferState *_currentBackbuffer = nullptr;
 
     // Render target DDB references, for keeping track of them,
     // and resetting during device reset.
@@ -322,8 +362,9 @@ private:
     void InitializeD3DState();
     // Resets
     void ResetDeviceIfNecessary();
-    void SetupViewport();
+    HRESULT ResetDeviceAndRestore();
     HRESULT ResetD3DDevice();
+    void SetupViewport();
     // For tracked render targets, disposes only the internal texture data
     void ReleaseRenderTargetData();
     // For tracked render targets, recreates the internal texture data
@@ -332,19 +373,24 @@ private:
     void ReleaseDisplayMode();
     void set_up_default_vertices();
     void AdjustSizeToNearestSupportedByCard(int *width, int *height);
-    void UpdateTextureRegion(D3DTextureTile *tile, Bitmap *bitmap, bool has_alpha, bool opaque);
+    void UpdateTextureRegion(D3DTextureTile *tile, const Bitmap *bitmap, bool has_alpha, bool opaque);
     void CreateVirtualScreen();
-    void do_fade(bool fadingOut, int speed, int targetColourRed, int targetColourGreen, int targetColourBlue);
-    bool IsTextureFormatOk( D3DFORMAT TextureFormat, D3DFORMAT AdapterFormat );
+    bool IsTextureFormatOk(D3DFORMAT TextureFormat, D3DFORMAT AdapterFormat);
+
     // Backup all draw lists in the temp storage
     void BackupDrawLists();
     // Restore draw lists from the temp storage
     void RestoreDrawLists();
     // Deletes draw list backups
     void ClearDrawBackups();
-    void _renderAndPresent(bool clearDrawListAfterwards);
-    void _render(bool clearDrawListAfterwards);
-    void _reDrawLastFrame();
+    // Mark certain sprite batches to be skipped at the next render
+    void FilterSpriteBatches(uint32_t skip_filter);
+
+    void RenderAndPresent(bool clearDrawListAfterwards);
+    void RenderImpl(bool clearDrawListAfterwards);
+    void RenderToSurface(BackbufferState *state, bool clearDrawListAfterwards);
+    // Set current backbuffer state, which properties are used when refering to backbuffer
+    void SetBackbufferState(BackbufferState *state, bool clear);
     // Sets a Direct3D viewport for the current render target.
     void SetD3DViewport(const Rect &rc);
     // Sets the scissor (render clip), clip rect is passed in the "native" coordinates.
@@ -352,12 +398,15 @@ private:
     // otherwise we assume it is set on a whole screen, scaled to the screen coords.
     void SetScissor(const Rect &clip, bool render_on_texture = false);
     // Configures rendering mode for the render target, depending on its properties
-    void SetRenderTarget(const D3DSpriteBatch *batch, IDirect3DSurface9 *back_buffer, Size &surface_sz);
+    // TODO: find a good way to merge with SetRenderTarget
+    void SetRenderTarget(const D3DSpriteBatch *batch, Size &surface_sz, bool clear);
     void RenderSpriteBatches();
-    size_t RenderSpriteBatch(const D3DSpriteBatch &batch, size_t from, const Size &surface_size);
-    void _renderSprite(const D3DDrawListEntry *entry, const glm::mat4 &matGlobal,
-        const SpriteColorTransform &color, const Size &surface_size);
-    void _renderFromTexture();
+    size_t RenderSpriteBatch(const D3DSpriteBatch &batch, size_t from, const Size &rend_sz);
+    void RenderSprite(const D3DDrawListEntry *entry, const glm::mat4 &matGlobal,
+        const SpriteColorTransform &color, const Size &rend_sz);
+    // Renders given texture onto the current render target
+    void RenderTexture(D3DBitmap *bitmap, int draw_x, int draw_y, const glm::mat4 &matGlobal,
+        const SpriteColorTransform &color, const Size &rend_sz);
     // Helper method for setting blending parameters
     void SetBlendOp(D3DBLENDOP blend_op, D3DBLEND src_factor, D3DBLEND dst_factor);
     // Helper method for setting exclusive alpha blending parameters
@@ -378,7 +427,7 @@ public:
     static D3DGraphicsDriver    *GetD3DDriver();
 
 private:
-    D3DGraphicsFactory();
+    D3DGraphicsFactory() = default;
 
     D3DGraphicsDriver   *EnsureDriverCreated() override;
     D3DGfxFilter        *CreateFilter(const String &id) override;
@@ -403,8 +452,8 @@ private:
     //
     // TODO: find out if there is better solution.
     // 
-    static Library      _library;
-    IDirect3D9         *_direct3d;
+    static Library _library;
+    D3DPtr         _direct3d;
 };
 
 } // namespace D3D

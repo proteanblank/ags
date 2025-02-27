@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <stdio.h>
@@ -56,8 +56,7 @@ int TextBox_GetFont(GUITextBox *guit) {
 }
 
 void TextBox_SetFont(GUITextBox *guit, int fontnum) {
-    if ((fontnum < 0) || (fontnum >= game.numfonts))
-        quit("!SetTextBoxFont: invalid font number.");
+    fontnum = ValidateFontNumber("TextBox.Font", fontnum);
 
     if (guit->Font != fontnum) {
         guit->Font = fontnum;
@@ -88,8 +87,6 @@ void TextBox_SetShowBorder(GUITextBox *guit, bool on)
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 // void (GUITextBox *texbox, char *buffer)
 RuntimeScriptValue Sc_TextBox_GetText(void *self, const RuntimeScriptValue *params, int32_t param_count)

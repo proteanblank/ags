@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <limits>
@@ -29,7 +29,6 @@
 #include "debug/debugger.h"
 #include "debug/debugmanager.h"
 #include "debug/out.h"
-#include "debug/consoleoutputtarget.h"
 #include "debug/logfile.h"
 #include "debug/messagebuffer.h"
 #include "main/config.h"
@@ -40,6 +39,7 @@
 #include "plugin/plugin_engine.h"
 #include "script/script.h"
 #include "script/cc_common.h"
+#include "util/memory_compat.h"
 #include "util/path.h"
 #include "util/string_utils.h"
 #include "util/textstreamwriter.h"
@@ -83,10 +83,6 @@ IAGSEditorDebugger *GetEditorDebugger(const char* /*instanceToken*/)
 
 int debug_flags=0;
 
-String debug_line[DEBUG_CONSOLE_NUMLINES];
-int first_debug_line = 0, last_debug_line = 0, display_console = 0;
-
-float fps = std::numeric_limits<float>::quiet_NaN();
 FPSDisplayMode display_fps = kFPS_Hide;
 
 void send_message_to_debugger(IAGSEditorDebugger *ide_debugger,
@@ -115,6 +111,11 @@ public:
         : _ideDebugger(ide_debugger) {};
     virtual ~DebuggerLogOutputTarget() {};
 
+    void OnRegister() override
+    {
+        // do nothing
+    }
+
     void PrintMessage(const DebugMessage &msg) override
     {
         assert(_ideDebugger);
@@ -130,16 +131,9 @@ private:
     IAGSEditorDebugger *_ideDebugger = nullptr;
 };
 
-std::unique_ptr<MessageBuffer> DebugMsgBuff;
-std::unique_ptr<LogFile> DebugLogFile;
-std::unique_ptr<ConsoleOutputTarget> DebugConsole;
-std::unique_ptr<DebuggerLogOutputTarget> DebuggerLog;
-
-const String OutputMsgBufID = "buffer";
 const String OutputFileID = "file";
 const String OutputSystemID = "stdout";
 const String OutputDebuggerLogID = "debugger";
-const String OutputGameConsoleID = "console";
 
 
 // ----------------------------------------------------------------------------
@@ -168,39 +162,40 @@ void SDL_Log_Output(void* /*userdata*/, int category, SDL_LogPriority priority, 
 // Log configuration
 // ----------------------------------------------------------------------------
 
-PDebugOutput create_log_output(const String &name, const String &path = "", LogFile::OpenMode open_mode = LogFile::kLogFile_Overwrite)
+// Create a new log output by ID
+static std::unique_ptr<IOutputHandler> create_log_output(const String &name,
+    const String &dir = "", const String &filename = "", LogFile::OpenMode open_mode = LogFile::kLogFile_Overwrite)
 {
-    // Else create new one, if we know this ID
     if (name.CompareNoCase(OutputSystemID) == 0)
     {
-        return DbgMgr.RegisterOutput(OutputSystemID, AGSPlatformDriver::GetDriver(), kDbgMsg_None);
+        return platform->GetStdOut();
     }
     else if (name.CompareNoCase(OutputFileID) == 0)
     {
-        DebugLogFile.reset(new LogFile());
-        String logfile_path = path;
-        if (logfile_path.IsEmpty())
+        auto log_file = std::make_unique<LogFile>();
+        String logfile_dir = dir;
+        if (dir.IsEmpty())
         {
             FSLocation fs = platform->GetAppOutputDirectory();
             CreateFSDirs(fs);
-            logfile_path = Path::ConcatPaths(fs.FullDir, "ags.log");
+            logfile_dir = fs.FullDir;
         }
-        if (!DebugLogFile->OpenFile(logfile_path, open_mode))
+        else if (Path::IsRelativePath(dir) && platform->IsLocalDirRestricted())
+        {
+            FSLocation fs = GetGameUserDataDir();
+            CreateFSDirs(fs);
+            logfile_dir = fs.FullDir;
+        }
+        String logfilename = filename.IsEmpty() ? "ags.log" : filename;
+        String logfile_path = Path::ConcatPaths(logfile_dir, logfilename);
+        if (!log_file->OpenFile(logfile_path, open_mode))
             return nullptr;
-        Debug::Printf(kDbgMsg_Info, "Logging to %s", logfile_path.GetCStr());
-        auto dbgout = DbgMgr.RegisterOutput(OutputFileID, DebugLogFile.get(), kDbgMsg_None);
-        return dbgout;
-    }
-    else if (name.CompareNoCase(OutputGameConsoleID) == 0)
-    {
-        DebugConsole.reset(new ConsoleOutputTarget());
-        return DbgMgr.RegisterOutput(OutputGameConsoleID, DebugConsole.get(), kDbgMsg_None);
+        return std::move(log_file);
     }
     else if (name.CompareNoCase(OutputDebuggerLogID) == 0 &&
         editor_debugger != nullptr)
     {
-        DebuggerLog.reset(new DebuggerLogOutputTarget(editor_debugger));
-        return DbgMgr.RegisterOutput(OutputDebuggerLogID, DebuggerLog.get(), kDbgMsg_All);
+        return std::make_unique<DebuggerLogOutputTarget>(editor_debugger);
     }
     return nullptr;
 }
@@ -219,6 +214,7 @@ std::vector<String> parse_log_multigroup(const String &group_str)
         case 'c': grplist.emplace_back("sprcache"); break;
         case 'o': grplist.emplace_back("manobj"); break;
         case 'l': grplist.emplace_back("sdl"); break;
+        case 'p': grplist.emplace_back("plugin"); break;
         }
     }
     return grplist;
@@ -229,35 +225,26 @@ MessageType get_messagetype_from_string(const String &option)
     if (option.CompareNoCase("all") == 0) return kDbgMsg_All;
     return StrUtil::ParseEnumAllowNum<MessageType>(option,
         CstrArr<kNumDbgMsg>{"", "alert", "fatal", "error", "warn", "info", "debug"},
-        kDbgMsg_None);
+        kDbgMsg_None, kDbgMsg_None);
 }
 
 typedef std::pair<CommonDebugGroup, MessageType> DbgGroupOption;
 
-void apply_log_config(const ConfigTree &cfg, const String &log_id,
+static void apply_log_config(const ConfigTree &cfg, const String &log_id,
                       bool def_enabled,
                       std::initializer_list<DbgGroupOption> def_opts)
 {
-    String value = CfgReadString(cfg, "log", log_id);
+    const String value = CfgReadString(cfg, "log", log_id);
     if (value.IsEmpty() && !def_enabled)
         return;
 
-    // First test if already registered, if not then try create it
-    auto dbgout = DbgMgr.GetOutput(log_id);
-    const bool was_created_earlier = dbgout != nullptr;
-    if (!dbgout)
-    {
-        String path = CfgReadString(cfg, "log", String::FromFormat("%s-path", log_id.GetCStr()));
-        dbgout = create_log_output(log_id, path);
-        if (!dbgout)
-            return; // unknown output type
-    }
-    dbgout->ClearGroupFilters();
-
+    // Setup message group filters
+    MessageType def_verbosity = kDbgMsg_None;
+    std::vector<std::pair<DebugGroupID, MessageType>> group_filters;
     if (value.IsEmpty() || value.CompareNoCase("default") == 0)
     {
         for (const auto &opt : def_opts)
-            dbgout->SetGroupFilter(opt.first, opt.second);
+            group_filters.push_back(std::make_pair(opt.first, opt.second));
     }
     else
     {
@@ -276,24 +263,35 @@ void apply_log_config(const ConfigTree &cfg, const String &log_id,
             groupname.Trim();
             if (groupname.CompareNoCase("all") == 0 || groupname.IsEmpty())
             {
-                dbgout->SetAllGroupFilters(msgtype);
+                def_verbosity = msgtype;
             }
             else if (groupname[0u] != '+')
             {
-                dbgout->SetGroupFilter(groupname, msgtype);
+                group_filters.push_back(std::make_pair(groupname, msgtype));
             }
             else
             {
                 const auto groups = parse_log_multigroup(groupname);
                 for (const auto &g : groups)
-                    dbgout->SetGroupFilter(g, msgtype);
+                    group_filters.push_back(std::make_pair(g, msgtype));
             }
         }
     }
 
-    // Delegate buffered messages to this new output
-    if (DebugMsgBuff && !was_created_earlier)
-        DebugMsgBuff->Send(log_id);
+    // Test if already registered, if not then try create it,
+    // if it exists, then reset the filter settings
+    if (DbgMgr.HasOutput(log_id))
+    {
+        DbgMgr.SetOutputFilters(log_id, def_verbosity, &group_filters);
+    }
+    else
+    {
+        String path = CfgReadString(cfg, "log", String::FromFormat("%s-path", log_id.GetCStr()));
+        auto dbgout = create_log_output(log_id, path);
+        if (!dbgout)
+            return;
+        DbgMgr.RegisterOutput(log_id, std::move(dbgout), def_verbosity, &group_filters);
+    }
 }
 
 void init_debug(const ConfigTree &cfg, bool stderr_only)
@@ -302,26 +300,23 @@ void init_debug(const ConfigTree &cfg, bool stderr_only)
     SDL_LogSetOutputFunction(SDL_Log_Output, nullptr);
     String sdl_log = CfgReadString(cfg, "log", "sdl");
     SDL_LogPriority priority = StrUtil::ParseEnumAllowNum<SDL_LogPriority>(sdl_log,
-        CstrArr<SDL_NUM_LOG_PRIORITIES>{"", "verbose", "debug", "info", "warn", "error", "critical"}, SDL_LOG_PRIORITY_INFO);
+        CstrArr<SDL_NUM_LOG_PRIORITIES>{"all", "verbose", "debug", "info", "warn", "error", "critical"},
+        static_cast<SDL_LogPriority>(0), SDL_LOG_PRIORITY_INFO);
     SDL_LogSetAllPriority(priority);
 
-    // Register outputs
-    apply_debug_config(cfg);
+    // Init platform's stdout setting
     platform->SetOutputToErr(stderr_only);
 
-    if (stderr_only)
-        return;
-
-    // Message buffer to save all messages in case we read different log settings from config file
-    DebugMsgBuff.reset(new MessageBuffer());
-    DbgMgr.RegisterOutput(OutputMsgBufID, DebugMsgBuff.get(), kDbgMsg_All);
+    // Register outputs
+    apply_debug_config(cfg, false);
 }
 
-void apply_debug_config(const ConfigTree &cfg)
+void apply_debug_config(const ConfigTree &cfg, bool finalize)
 {
     apply_log_config(cfg, OutputSystemID, /* defaults */ true,
         { DbgGroupOption(kDbgGroup_Main, kDbgMsg_Info),
           DbgGroupOption(kDbgGroup_SDL, kDbgMsg_Info),
+          DbgGroupOption(kDbgGroup_Plugin, kDbgMsg_Info)
         });
     bool legacy_log_enabled = CfgReadBoolInt(cfg, "misc", "log", false);
 
@@ -330,6 +325,7 @@ void apply_debug_config(const ConfigTree &cfg)
         legacy_log_enabled,
         { DbgGroupOption(kDbgGroup_Main, kDbgMsg_All),
           DbgGroupOption(kDbgGroup_SDL, kDbgMsg_Info),
+          DbgGroupOption(kDbgGroup_Plugin, kDbgMsg_Info),
           DbgGroupOption(kDbgGroup_Game, kDbgMsg_Info),
           DbgGroupOption(kDbgGroup_Script, kDbgMsg_All),
 #if DEBUG_SPRITECACHE
@@ -344,28 +340,17 @@ void apply_debug_config(const ConfigTree &cfg)
 #endif
         });
 
-    // Init game console if the game was compiled in Debug mode or is run in test mode
-    if (game.options[OPT_DEBUGMODE] != 0 || (debug_flags & DBG_DEBUGMODE) != 0)
-    {
-        apply_log_config(cfg, OutputGameConsoleID,
-            /* defaults */
-            true,
-            { DbgGroupOption(kDbgGroup_Main, kDbgMsg_All),
-              DbgGroupOption(kDbgGroup_Game, kDbgMsg_All),
-              DbgGroupOption(kDbgGroup_Script, kDbgMsg_All)
-            });
-        debug_set_console(true);
-    }
-
     // If the game was compiled in Debug mode *and* there's no regular file log,
     // then open "warnings.log" for printing script warnings.
-    if (game.options[OPT_DEBUGMODE] != 0 && !DebugLogFile)
+    if (game.options[OPT_DEBUGMODE] != 0 && !DbgMgr.HasOutput(OutputFileID))
     {
-        auto dbgout = create_log_output(OutputFileID, "warnings.log", LogFile::kLogFile_OverwriteAtFirstMessage);
+        auto dbgout = create_log_output(OutputFileID, "./", "warnings.log", LogFile::kLogFile_OverwriteAtFirstMessage);
         if (dbgout)
         {
-            dbgout->SetGroupFilter(kDbgGroup_Game, kDbgMsg_Warn);
-            dbgout->SetGroupFilter(kDbgGroup_Script, kDbgMsg_Warn);
+            std::vector<std::pair<DebugGroupID, MessageType>> group_filters;
+            group_filters.push_back(std::make_pair(kDbgGroup_Game, kDbgMsg_Warn));
+            group_filters.push_back(std::make_pair(kDbgGroup_Script, kDbgMsg_Warn));
+            DbgMgr.RegisterOutput(OutputFileID, std::move(dbgout), kDbgMsg_None, &group_filters);
         }
     }
 
@@ -376,25 +361,14 @@ void apply_debug_config(const ConfigTree &cfg)
     }
 
     // We don't need message buffer beyond this point
-    DbgMgr.UnregisterOutput(OutputMsgBufID);
-    DebugMsgBuff.reset();
+    if (finalize)
+        DbgMgr.StopMessageBuffering();
 }
 
 void shutdown_debug()
 {
     // Shutdown output subsystem
     DbgMgr.UnregisterAll();
-
-    DebugMsgBuff.reset();
-    DebugLogFile.reset();
-    DebugConsole.reset();
-    DebuggerLog.reset();
-}
-
-void debug_set_console(bool enable)
-{
-    if (DebugConsole)
-        DbgMgr.GetOutput(OutputGameConsoleID)->SetEnabled(enable);
 }
 
 // Prepends message text with current room number and running script info, then logs result
@@ -404,11 +378,11 @@ static void debug_script_print_impl(const String &msg, MessageType mt)
     ccInstance *curinst = ccInstance::GetCurrentInstance();
     if (curinst != nullptr) {
         String scriptname;
-        if (curinst->instanceof == gamescript)
+        if (curinst->GetScript() == gamescript)
             scriptname = "G ";
-        else if (curinst->instanceof == thisroom.CompiledScript)
+        else if (curinst->GetScript() == thisroom.CompiledScript)
             scriptname = "R ";
-        else if (curinst->instanceof == dialogScriptsScript)
+        else if (curinst->GetScript() == dialogScriptsScript)
             scriptname = "D ";
         else
             scriptname = "? ";
@@ -524,8 +498,8 @@ int check_for_messages_from_debugger()
 
         if (strncmp(msg, "<Engine Command=\"", 17) != 0) 
         {
-            //Debug::Printf("Faulty message received from editor:");
-            //Debug::Printf(msg);
+            Debug::Printf(kDbgMsg_Warn, "Debugger: faulty message received:");
+            Debug::Printf(kDbgMsg_Warn, "Debugger: %s", msg);
             free(msg);
             return 0;
         }
@@ -538,6 +512,7 @@ int check_for_messages_from_debugger()
             const char *windowHandle = strstr(msgPtr, "EditorWindow") + 14;
             editor_window_handle = (HWND)atoi(windowHandle);
 #endif
+            Debug::Printf(kDbgMsg_Info, "Debugger: session start");
         }
         else if (strncmp(msgPtr, "READY", 5) == 0)
         {
@@ -567,6 +542,7 @@ int check_for_messages_from_debugger()
                     if ((breakpoints[i].lineNumber == lineNumber) &&
                         (strcmp(breakpoints[i].scriptName, scriptNameBuf) == 0))
                     {
+                        Debug::Printf("Debugger: breakpoint del at %s : %d", scriptNameBuf, lineNumber);
                         breakpoints.erase(breakpoints.begin() + i);
                         break;
                     }
@@ -578,19 +554,23 @@ int check_for_messages_from_debugger()
                 snprintf(bp.scriptName, sizeof(Breakpoint::scriptName), "%s", scriptNameBuf);
                 bp.lineNumber = lineNumber;
                 breakpoints.push_back(bp);
+                Debug::Printf("Debugger: breakpoint set at %s : %d", scriptNameBuf, lineNumber);
             }
         }
         else if (strncmp(msgPtr, "RESUME", 6) == 0) 
         {
+            Debug::Printf("Debugger: resume engine");
             game_paused_in_debugger = 0;
         }
         else if (strncmp(msgPtr, "STEP", 4) == 0) 
         {
+            Debug::Printf("Debugger: step script");
             game_paused_in_debugger = 0;
             break_on_next_script_step = 1;
         }
         else if (strncmp(msgPtr, "EXIT", 4) == 0) 
         {
+            Debug::Printf(kDbgMsg_Info, "Debugger: shutdown engine");
             want_exit = true;
             abort_engine = true;
             check_dynamic_sprites_at_exit = 0;
@@ -632,10 +612,12 @@ void break_into_debugger()
 {
 #if AGS_PLATFORM_OS_WINDOWS
 
+    if (!send_state_to_debugger("BREAK"))
+        return;
+
     if (editor_window_handle != NULL)
         SetForegroundWindow(editor_window_handle);
 
-    send_state_to_debugger("BREAK");
     game_paused_in_debugger = 1;
 
     while (game_paused_in_debugger) 
@@ -655,8 +637,8 @@ void scriptDebugHook (ccInstance *ccinst, int linenum) {
 
     if (pluginsWantingDebugHooks > 0) {
         // a plugin is handling the debugging
-        String scname = GetScriptName(ccinst);
-        pl_run_plugin_debug_hooks(scname.GetCStr(), linenum);
+        const char *scname = ccinst ? ccinst->GetScript()->GetScriptName().c_str() : "(Not in script)";
+        pl_run_plugin_debug_hooks(scname, linenum);
         return;
     }
 
@@ -675,12 +657,11 @@ void scriptDebugHook (ccInstance *ccinst, int linenum) {
         return;
     }
 
-    const char *scriptName = ccinst->runningInst->instanceof->GetSectionName(ccinst->pc);
-
+    String scriptName = ccinst->GetRunningInst()->GetScript()->GetSectionName(ccinst->GetPC());
     for (const auto & breakpoint : breakpoints)
     {
         if ((breakpoint.lineNumber == linenum) &&
-            (strcmp(breakpoint.scriptName, scriptName) == 0))
+            (scriptName.Compare(breakpoint.scriptName) == 0))
         {
             break_into_debugger();
             break;

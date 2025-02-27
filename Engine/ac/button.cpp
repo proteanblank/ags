@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
@@ -39,14 +39,9 @@ std::vector<AnimatingGUIButton> animbuts;
 // Update the actual button's image from the current animation frame
 void UpdateButtonState(const AnimatingGUIButton &abtn)
 {
-    guibuts[abtn.buttonid].Image = views[abtn.view].loops[abtn.loop].frames[abtn.frame].pic;
-    if (guibuts[abtn.buttonid].CurrentImage != guibuts[abtn.buttonid].Image)
-    {
-        guibuts[abtn.buttonid].CurrentImage = guibuts[abtn.buttonid].Image;
-        guibuts[abtn.buttonid].MarkChanged();
-    }
-    guibuts[abtn.buttonid].PushedImage = 0;
-    guibuts[abtn.buttonid].MouseOverImage = 0;
+    // Assign view frame as normal image and reset all the rest
+    guibuts[abtn.buttonid].SetImages(
+        views[abtn.view].loops[abtn.loop].frames[abtn.frame].pic, 0, 0);
 }
 
 void Button_Animate(GUIButton *butt, int view, int loop, int speed, int repeat,
@@ -72,7 +67,7 @@ void Button_Animate(GUIButton *butt, int view, int loop, int speed, int repeat,
     abtn.view = view;
     abtn.loop = loop;
     abtn.speed = speed;
-    abtn.repeat = static_cast<bool>(repeat) ? ANIM_REPEAT : ANIM_ONCE; // for now, clamp to supported modes
+    abtn.repeat = (repeat != 0) ? ANIM_REPEAT : ANIM_ONCE; // for now, clamp to supported modes
     abtn.blocking = blocking;
     abtn.direction = direction;
     abtn.frame = SetFirstAnimFrame(view, loop, sframe, direction);
@@ -114,8 +109,7 @@ void Button_SetText(GUIButton *butt, const char *newtx) {
 }
 
 void Button_SetFont(GUIButton *butt, int newFont) {
-    if ((newFont < 0) || (newFont >= game.numfonts))
-        quit("!Button.Font: invalid font number.");
+    newFont = ValidateFontNumber("Button.Font", newFont);
 
     if (butt->Font != newFont) {
         butt->Font = newFont;
@@ -140,73 +134,54 @@ void Button_SetClipImage(GUIButton *butt, int newval) {
 
 int Button_GetGraphic(GUIButton *butt) {
     // return currently displayed pic
-    if (butt->CurrentImage < 0)
-        return butt->Image;
-    return butt->CurrentImage;
+    if (butt->GetCurrentImage() < 0)
+        return butt->GetNormalImage();
+    return butt->GetCurrentImage();
 }
 
 int Button_GetMouseOverGraphic(GUIButton *butt) {
-    return butt->MouseOverImage;
+    return butt->GetMouseOverImage();
 }
 
 void Button_SetMouseOverGraphic(GUIButton *guil, int slotn) {
     debug_script_log("GUI %d Button %d mouseover set to slot %d", guil->ParentId, guil->Id, slotn);
-
-    if ((guil->IsMouseOver != 0) && (guil->IsPushed == 0) && (guil->CurrentImage != slotn))
-    {
-        guil->CurrentImage = slotn;
-        guil->MarkChanged();
-    }
-    guil->MouseOverImage = slotn;
+    slotn = std::max(0, slotn);
+    guil->SetMouseOverImage(slotn);
     FindAndRemoveButtonAnimation(guil->ParentId, guil->Id);
 }
 
 int Button_GetNormalGraphic(GUIButton *butt) {
-    return butt->Image;
+    return butt->GetNormalImage();
 }
 
-void Button_SetNormalGraphic(GUIButton *guil, int slotn) {
-    debug_script_log("GUI %d Button %d normal set to slot %d", guil->ParentId, guil->Id, slotn);
-    // update the clickable area to the same size as the graphic
-    int width, height;
-    if (slotn < 0 || (size_t)slotn >= game.SpriteInfos.size())
+void Button_SetNormalGraphic(GUIButton *butt, int slotn) {
+    debug_script_log("GUI %d Button %d normal set to slot %d", butt->ParentId, butt->Id, slotn);
+    slotn = std::max(0, slotn);
+    // NormalGraphic = 0 will turn the Button into a standard colored button
+    if (slotn == 0)
     {
-        width = 0;
-        height = 0;
+        butt->SetNormalImage(slotn);
     }
+    // Any other sprite - update the clickable area to the same size as the graphic
     else
     {
-        width = game.SpriteInfos[slotn].Width;
-        height = game.SpriteInfos[slotn].Height;
+        const int width = slotn < game.SpriteInfos.size() ? game.SpriteInfos[slotn].Width : 0;
+        const int height = slotn < game.SpriteInfos.size() ? game.SpriteInfos[slotn].Height : 0;
+        butt->SetNormalImage(slotn);
+        butt->SetSize(width, height);
     }
 
-    if ((slotn != guil->Image) || (width != guil->Width) || (height != guil->Height))
-    {
-        // normal pic - update if mouse is not over, or if there's no MouseOverImage
-        if (((guil->IsMouseOver == 0) || (guil->MouseOverImage < 1)) && (guil->IsPushed == 0))
-            guil->CurrentImage = slotn;
-        guil->Image = slotn;
-        guil->Width = width;
-        guil->Height = height;
-        guil->MarkChanged();
-    }
-
-    FindAndRemoveButtonAnimation(guil->ParentId, guil->Id);
+    FindAndRemoveButtonAnimation(butt->ParentId, butt->Id);
 }
 
 int Button_GetPushedGraphic(GUIButton *butt) {
-    return butt->PushedImage;
+    return butt->GetPushedImage();
 }
 
 void Button_SetPushedGraphic(GUIButton *guil, int slotn) {
     debug_script_log("GUI %d Button %d pushed set to slot %d", guil->ParentId, guil->Id, slotn);
-
-    if (guil->IsPushed && (guil->CurrentImage != slotn))
-    {
-        guil->CurrentImage = slotn;
-        guil->MarkChanged();
-    }
-    guil->PushedImage = slotn;
+    slotn = std::max(0, slotn);
+    guil->SetPushedImage(slotn);
     FindAndRemoveButtonAnimation(guil->ParentId, guil->Id);
 }
 
@@ -329,6 +304,48 @@ void Button_SetTextAlignment(GUIButton *butt, int align)
     }
 }
 
+bool Button_GetWrapText(GUIButton *butt)
+{
+    return butt->IsWrapText();
+}
+
+void Button_SetWrapText(GUIButton *butt, bool wrap)
+{
+    if (butt->IsWrapText() != wrap)
+    {
+        butt->SetWrapText(wrap);
+        butt->MarkChanged();
+    }
+}
+
+int Button_GetTextPaddingHorizontal(GUIButton *butt)
+{
+    return butt->TextPaddingHor;
+}
+
+void Button_SetTextPaddingHorizontal(GUIButton *butt, int pad)
+{
+    if (butt->TextPaddingHor != pad)
+    {
+        butt->TextPaddingHor = pad;
+        butt->MarkChanged();
+    }
+}
+
+int Button_GetTextPaddingVertical(GUIButton *butt)
+{
+    return butt->TextPaddingVer;
+}
+
+void Button_SetTextPaddingVertical(GUIButton *butt, int pad)
+{
+    if (butt->TextPaddingVer != pad)
+    {
+        butt->TextPaddingVer = pad;
+        butt->MarkChanged();
+    }
+}
+
 //=============================================================================
 //
 // Script API Functions
@@ -339,8 +356,6 @@ void Button_SetTextAlignment(GUIButton *butt, int align)
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 // void | GUIButton *butt, int view, int loop, int speed, int repeat
 RuntimeScriptValue Sc_Button_Animate4(void *self, const RuntimeScriptValue *params, int32_t param_count)
@@ -474,6 +489,36 @@ RuntimeScriptValue Sc_Button_SetTextAlignment(void *self, const RuntimeScriptVal
     API_OBJCALL_VOID_PINT(GUIButton, Button_SetTextAlignment);
 }
 
+RuntimeScriptValue Sc_Button_GetWrapText(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_BOOL(GUIButton, Button_GetWrapText);
+}
+
+RuntimeScriptValue Sc_Button_SetWrapText(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_PBOOL(GUIButton, Button_SetWrapText);
+}
+
+RuntimeScriptValue Sc_Button_GetTextPaddingHorizontal(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT(GUIButton, Button_GetTextPaddingHorizontal);
+}
+
+RuntimeScriptValue Sc_Button_SetTextPaddingHorizontal(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_PINT(GUIButton, Button_SetTextPaddingHorizontal);
+}
+
+RuntimeScriptValue Sc_Button_GetTextPaddingVertical(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT(GUIButton, Button_GetTextPaddingVertical);
+}
+
+RuntimeScriptValue Sc_Button_SetTextPaddingVertical(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_PINT(GUIButton, Button_SetTextPaddingVertical);
+}
+
 RuntimeScriptValue Sc_Button_GetAnimFrame(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
     API_OBJCALL_INT(GUIButton, Button_GetAnimFrame);
@@ -500,6 +545,12 @@ void RegisterButtonAPI()
         { "Button::SetText^1",            API_FN_PAIR(Button_SetText) },
         { "Button::get_TextAlignment",    API_FN_PAIR(Button_GetTextAlignment) },
         { "Button::set_TextAlignment",    API_FN_PAIR(Button_SetTextAlignment) },
+        { "Button::get_TextPaddingHorizontal", API_FN_PAIR(Button_GetTextPaddingHorizontal) },
+        { "Button::set_TextPaddingHorizontal", API_FN_PAIR(Button_SetTextPaddingHorizontal) },
+        { "Button::get_TextPaddingVertical", API_FN_PAIR(Button_GetTextPaddingVertical) },
+        { "Button::set_TextPaddingVertical", API_FN_PAIR(Button_SetTextPaddingVertical) },
+        { "Button::get_WrapText",         API_FN_PAIR(Button_GetWrapText) },
+        { "Button::set_WrapText",         API_FN_PAIR(Button_SetWrapText) },
         { "Button::get_Animating",        API_FN_PAIR(Button_IsAnimating) },
         { "Button::get_ClipImage",        API_FN_PAIR(Button_GetClipImage) },
         { "Button::set_ClipImage",        API_FN_PAIR(Button_SetClipImage) },

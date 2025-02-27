@@ -2,25 +2,24 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-
 #include "ac/global_room.h"
 #include "ac/common.h"
 #include "ac/character.h"
 #include "ac/characterinfo.h"
+#include "ac/dialog.h"
 #include "ac/draw.h"
 #include "ac/event.h"
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
-#include "ac/global_character.h"
 #include "ac/global_game.h"
 #include "ac/movelist.h"
 #include "ac/properties.h"
@@ -32,7 +31,6 @@
 
 using namespace Common;
 
-extern GameState play;
 extern GameSetupStruct game;
 extern RoomStatus *croom;
 extern CharacterInfo*playerchar;
@@ -70,7 +68,6 @@ void SetAmbientLightLevel(int light_level)
     play.rtint_light = light_level;
 }
 
-extern ScriptPosition last_in_dialog_request_script_pos;
 void NewRoom(int nrnum) {
     if (nrnum < 0)
         quitprintf("!NewRoom: room change requested to invalid room number %d.", nrnum);
@@ -87,17 +84,8 @@ void NewRoom(int nrnum) {
 
     can_run_delayed_command();
 
-    if (play.stop_dialog_at_end != DIALOG_NONE) {
-        if (play.stop_dialog_at_end == DIALOG_RUNNING)
-            play.stop_dialog_at_end = DIALOG_NEWROOM + nrnum;
-        else {
-            quitprintf("!NewRoom: two NewRoom/RunDialog/StopDialog requests within dialog; last was called in \"%s\", line %d",
-                last_in_dialog_request_script_pos.Section.GetCStr(), last_in_dialog_request_script_pos.Line);
-        }
-        return;
-    }
-
-    get_script_position(last_in_dialog_request_script_pos);
+    if (handle_state_change_in_dialog_request("NewRoom", DIALOG_NEWROOM + nrnum))
+        return; // handled
 
     if (in_leaves_screen >= 0) {
         // NewRoom called from the Player Leaves Screen event -- just
@@ -105,7 +93,7 @@ void NewRoom(int nrnum) {
         in_leaves_screen = nrnum;
     }
     else if (in_enters_screen) {
-        setevent(EV_NEWROOM,nrnum);
+        setevent(AGSEvent_NewRoom(nrnum));
         return;
     }
     else if (in_inv_screen) {
@@ -126,14 +114,12 @@ void NewRoom(int nrnum) {
         return;
     }
     else if (inside_script) {
-        curscript->queue_action(ePSANewRoom, nrnum, "NewRoom");
+        get_executingscript()->QueueAction(PostScriptAction(ePSANewRoom, nrnum, "NewRoom"));
         // we might be within a MoveCharacterBlocking -- the room
         // change should abort it
         if (is_char_walking_ndirect(playerchar)) {
-            // nasty hack - make sure it doesn't move the character
-            // to a walkable area
-            mls[playerchar->walking].direct = 1;
-            StopMoving(game.playercharacter);
+            // stop the character, but doesn't fix the character to a walkable area
+            Character_StopMovingEx(playerchar, false);
         }
     }
     else if (in_graph_script)
@@ -188,7 +174,7 @@ void CallRoomScript (int value) {
 
     play.roomscript_finished = 0;
     RuntimeScriptValue params[]{ value , RuntimeScriptValue() };
-    curscript->run_another("on_call", kScInstRoom, 1, params);
+    get_executingscript()->RunAnother(kScTypeRoom, "on_call", 1, params);
 }
 
 int HasBeenToRoom (int roomnum) {

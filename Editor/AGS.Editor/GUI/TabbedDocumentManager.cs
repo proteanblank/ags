@@ -26,6 +26,7 @@ namespace AGS.Editor
         private const string MENU_ITEM_CLOSE_ALL = "CloseAll";
         private const string MENU_ITEM_CLOSE_ALL_BUT_THIS = "CloseAllOthers";
         private const string MENU_ITEM_NAVIGATE = "Navigate";
+        private const string MENU_ITEM_OPEN_IN_FILEXPLORER = "OpenItemInFileExplorer";
 
         private ContentDocument _currentPane;
         private List<ContentDocument> _panes;
@@ -232,15 +233,25 @@ namespace AGS.Editor
             else panel.DockingContainer.Refresh();
         }
 
+        public void RemoveAllDocuments(bool canCancel)
+        {
+            RemoveAllDocuments(null, canCancel);
+        }
+
         public void RemoveAllDocuments(ContentDocument except)
+        {
+            RemoveAllDocuments(except, true);
+        }
+
+        public void RemoveAllDocuments(ContentDocument except, bool canCancel)
         {
             ContentDocument[] copyOfPanesList = _panes.ToArray();
             foreach (ContentDocument pane in copyOfPanesList)
             {
-                if(pane != except)
+                if (pane != except)
                 {
                     bool cancelled = false;
-                    pane.Control.PanelClosing(true, ref cancelled);
+                    pane.Control.PanelClosing(canCancel, ref cancelled);
                     if(!cancelled)
                     {
                         pane.Control.DockingContainer.Hide();
@@ -251,7 +262,7 @@ namespace AGS.Editor
                 }
             }
 
-            if(except != null)
+            if (except != null)
             {
                 SetActiveDocument(except);
             }
@@ -307,7 +318,11 @@ namespace AGS.Editor
 
         public bool ProcessKeyDown(Keys key)
         {
-            if ((key == (Keys.Control | Keys.F4)) ||
+            if (_currentPane != null && _currentPane.Control.KeyPressed(key))
+            {
+                return true;
+            }
+            else if ((key == (Keys.Control | Keys.F4)) ||
 				(key == (Keys.Control | Keys.W)))
             {
                 if (_currentPane != null)
@@ -344,16 +359,16 @@ namespace AGS.Editor
                 }
                 return true;
             }
-			else if (_currentPane != null)
-			{
-				return _currentPane.Control.KeyPressed(key);
-			}
 			return false;
         }
 
         public bool ProcessKeyUp(Keys key)
         {
-            if (key == Keys.ControlKey)
+            if (_currentPane != null && _currentPane.Control.KeyReleased(key))
+            {
+                return true;
+            }
+            else if (key == Keys.ControlKey)
             {
                 if (_flipThroughPanesIndex < _panes.Count)
                 {
@@ -361,10 +376,6 @@ namespace AGS.Editor
                     _panesInOrderUsed.Insert(0, _currentPane);
                 }
                 _flipThroughPanesIndex = 0;
-            }
-            else if (_currentPane != null)
-            {
-                return _currentPane.Control.KeyReleased(key);
             }
             return false;
         }
@@ -481,7 +492,15 @@ namespace AGS.Editor
             if (document.TreeNodeID != null)
             {
                 menu.Items.Add(new ToolStripMenuItem("Navigate (In Tree)", null, onClick, MENU_ITEM_NAVIGATE));
+
+                if (document.Control is ScriptEditor)
+                {
+                    menu.Items.Add(new ToolStripSeparator());
+                    menu.Items.Add(new ToolStripMenuItem("Open Containing Folder", GUIController.Instance.ImageList.Images["OpenContainingFolderIcon"], onClick, MENU_ITEM_OPEN_IN_FILEXPLORER));                    
+                }
             }
+
+            menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Help", GUIController.Instance.ImageList.Images["MenuIconDynamicHelp"],
                 new EventHandler(TreeContextMenuOnHelp), Keys.F1));
             document.Control.DockingContainer.TabPageContextMenuStrip = menu;
@@ -512,6 +531,14 @@ namespace AGS.Editor
             else if (item.Name == MENU_ITEM_NAVIGATE)
             {
                 Factory.GUIController.ProjectTree.SelectNode(null, document.TreeNodeID);
+            }
+            else if (item.Name == MENU_ITEM_OPEN_IN_FILEXPLORER)
+            {
+
+                ScriptEditor scriptEditor = document.Control as ScriptEditor;
+                string proj_dir = Factory.AGSEditor.CurrentGame.DirectoryPath;
+                string script_path = Path.Combine(proj_dir, scriptEditor.Script.FileName);
+                Utilities.OpenFileOrDirInFileExplorer(script_path);
             }
         }
 

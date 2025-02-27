@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AC_DEFINES_H
@@ -82,7 +82,7 @@
 #endif
 
 // Script name length limit for some game objects
-#define MAX_SCRIPT_NAME_LEN 20
+#define LEGACY_MAX_SCRIPT_NAME_LEN 20
 // Number of state-saved rooms
 #define MAX_ROOMS 300
 // Some obsolete room data, likely pre-2.5
@@ -92,6 +92,11 @@
 // Max number of sprites in older versions
 #define LEGACY_MAX_SPRITES_V25  6000
 #define LEGACY_MAX_SPRITES      30000
+
+// Max number of old-style global interaction variables
+#define MAX_INTERACTION_VARIABLES 100
+// An offset for local room's interaction variable IDs
+#define LOCAL_INTER_VAR_OFFSET 10000
 
 // The game to screen coordinate conversion multiplier, was used in older high-res games
 #define HIRES_COORD_MULTIPLIER 2
@@ -115,5 +120,8 @@
 #define ANIM_REPEAT            1
 // Animates once and stops, resetting to the very first frame
 #define ANIM_ONCERESET         2
+
+// An identifier of a "null font", a pseudo font used when you don't want a text to be drawn
+#define FONT_NULL (-1)
 
 #endif // __AC_DEFINES_H

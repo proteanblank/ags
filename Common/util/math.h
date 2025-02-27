@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -23,6 +23,7 @@
 #undef max
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 
 #ifndef M_PI
@@ -77,14 +78,22 @@ namespace Math
             static_cast<T>(val) : def;
     }
 
-    inline float RadiansToDegrees(float rads)
+    inline double RadiansToDegrees(const double rads)
     {
-        return rads * (float)(180.0 / M_PI);
+        return rads * (180.0 / M_PI);
     }
 
-    inline float DegreesToRadians(float deg)
+    inline double DegreesToRadians(const double deg)
     {
-        return deg * (float)(M_PI / 180.0);
+        return deg * (M_PI / 180.0);
+    }
+
+    // Wraps the angle in degrees into [0;360) range
+    inline double ClampAngle360(const double degrees)
+    {
+        if (degrees >= 0.0)
+            return std::fmod(degrees, 360.0);
+        return std::fmod(360.0 + degrees, 360.0);
     }
 } // namespace Math
 

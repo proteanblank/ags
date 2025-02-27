@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using AGS.Types;
+using Version = System.Version;
 
 namespace AGS.CScript.Compiler
 {
@@ -9,7 +11,12 @@ namespace AGS.CScript.Compiler
 	{
 		private bool _inMultiLineComment = false;
 		private PreprocessorState _state = new PreprocessorState();
+		// Conditional statement stack remembers the results of all the nested conditions
+		// that we have entered.
 		private Stack<bool> _conditionalStatements = new Stack<bool>();
+		// Negative counter: it is incremented each time we enter a FALSE condition,
+		// and decremented each time we exit a previous FALSE condition.
+		private uint _negativeCounter = 0;
 		private CompileResults _results = new CompileResults();
 		private int _lineNumber;
 		private string _scriptName;
@@ -38,7 +45,7 @@ namespace AGS.CScript.Compiler
 		public string Preprocess(string script, string scriptName)
 		{
 			StringBuilder output = new StringBuilder(script.Length);
-			output.AppendLine(Constants.NEW_SCRIPT_MARKER + scriptName + "\"");
+			output.AppendLine(Constants.NEW_SCRIPT_MARKER + scriptName.Replace(@"\", @"\\") + "\"");
 			StringReader reader = new StringReader(script);
 			string thisLine;
 			_scriptName = scriptName;
@@ -92,14 +99,26 @@ namespace AGS.CScript.Compiler
 				int i = 0;
 				while ((i < line.Length) && (!Char.IsLetterOrDigit(line[i])))
 				{
-					if ((line[i] == '"') || (line[i] == '\''))
-					{
-						i = FindIndexOfMatchingCharacter(line.ToString(), i, line[i]);
-						if (i < 0)
-						{
-							i = line.Length;
-							break;
-						}
+                    if ((line[i] == '"') || (line[i] == '\''))
+                    {
+                        int end_of_literal = FindIndexOfMatchingCharacter(line.ToString(), i, line[i]);
+                        if (end_of_literal < 0)
+                        {
+                            i = line.Length;
+                            break;
+                        }
+                        if (i == 0 && line[0] == '"')
+                        {
+                            // '[end_of_literal]' contains the '"', we need the part before that
+                            FastString literal = line.Substring(0, end_of_literal);
+                            if (literal.StartsWith(Constants.NEW_SCRIPT_MARKER))
+                            {
+                                // Start the new script
+                                _scriptName = literal.Substring(Constants.NEW_SCRIPT_MARKER.Length).ToString();
+                                _lineNumber = 0;
+                            }
+                        }
+                        i = end_of_literal;
 					}
 					i++;
 				}
@@ -157,12 +176,21 @@ namespace AGS.CScript.Compiler
 		{
 			int i = 0;
 			while ((i < text.Length) && 
-				   ((Char.IsLetterOrDigit(text[i])) || (text[i] == '_') ||
+				   (text[i].IsScriptWordChar() ||
 				    (includeDots && (text[i] == '.')))
 				   )
 			{
 				i++;
 			}
+
+			if (i < text.Length && text[i] > 127)
+			{
+				RecordError(ErrorCode.InvalidCharacter, "Invalid character detected in script at position " + i.ToString() + " in '" + text + "'");
+				string res = text;
+				text = string.Empty; // need to end line
+				return res;
+			}
+
 			string word = text.Substring(0, i);
 			text = text.Substring(i);
 			if (trimText)
@@ -183,8 +211,7 @@ namespace AGS.CScript.Compiler
 
 			bool includeCodeBlock = true;
 
-			if ((_conditionalStatements.Count > 0) &&
-				(_conditionalStatements.Peek() == false))
+			if (_negativeCounter > 0)
 			{
 				includeCodeBlock = false;
 			}
@@ -221,12 +248,13 @@ namespace AGS.CScript.Compiler
 			}
 
 			_conditionalStatements.Push(includeCodeBlock);
+			if (!includeCodeBlock)
+				_negativeCounter++; // more negative conditions
 		}
 
 		private bool DeletingCurrentLine()
 		{
-			return ((_conditionalStatements.Count > 0) &&
-					(_conditionalStatements.Peek() == false));
+			return _negativeCounter > 0;
 		}
 
 		private string PreProcessDirective(string line)
@@ -239,11 +267,29 @@ namespace AGS.CScript.Compiler
 			{
 				ProcessConditionalDirective(directive, line, _results);
 			}
+			else if (directive == "else")
+			{
+				if (_conditionalStatements.Count > 0)
+				{
+					// Negate previous condition
+					bool prevCondition = _conditionalStatements.Pop();
+					_conditionalStatements.Push(!prevCondition);
+					if (prevCondition)
+						_negativeCounter++; // it was positive before, but is negative now
+					else
+						_negativeCounter--; // it was negative before, but no more
+				}
+				else
+				{
+					RecordError(ErrorCode.ElseWithoutIf, "#else has no matching #if");
+				}
+			}
 			else if (directive == "endif")
 			{
 				if (_conditionalStatements.Count > 0)
 				{
-					_conditionalStatements.Pop();
+					if (!_conditionalStatements.Pop())
+						_negativeCounter--; // less negative conditions
 				}
 				else
 				{
@@ -354,7 +400,9 @@ namespace AGS.CScript.Compiler
 						int endOfString = FindIndexOfMatchingCharacter(text, i, text[i]);
 						if (endOfString < 0)
 						{
-							RecordError(ErrorCode.UnterminatedString, "Unterminated string");
+                            RecordError(
+                                ErrorCode.UnterminatedString,
+                                $"Unterminated string: {text[i]} is missing");
 							break;
 						}
 						endOfString++;

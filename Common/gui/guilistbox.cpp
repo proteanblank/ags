@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
@@ -18,8 +18,6 @@
 #include "gui/guimain.h"
 #include "util/stream.h"
 #include "util/string_utils.h"
-
-std::vector<AGS::Common::GUIListBox> guilist;
 
 namespace AGS
 {
@@ -78,7 +76,7 @@ bool GUIListBox::IsSvgIndex() const
 
 bool GUIListBox::IsInRightMargin(int x) const
 {
-    if (x >= (Width - get_fixed_pixel_size(6)) && IsBorderShown() && AreArrowsShown())
+    if (x >= (_width - get_fixed_pixel_size(6)) && IsBorderShown() && AreArrowsShown())
         return 1;
     return 0;
 }
@@ -86,15 +84,15 @@ bool GUIListBox::IsInRightMargin(int x) const
 Rect GUIListBox::CalcGraphicRect(bool clipped)
 {
     if (clipped)
-        return RectWH(0, 0, Width, Height);
+        return RectWH(0, 0, _width, _height);
+
     // TODO: need to find a way to text position, or there'll be some repetition
     // have to precache text and size on some events:
     // - translation change
     // - macro value change (score, overhotspot etc)
-    Rect rc = RectWH(0, 0, Width, Height);
+    Rect rc = RectWH(0, 0, _width, _height);
     UpdateMetrics();
-    const int width = Width - 1;
-    const int height = Height - 1;
+    const int width = _width - 1;
     const int pixel_size = get_fixed_pixel_size(1);
     int right_hand_edge = width - pixel_size - 1;
     // calculate the scroll bar's width if necessary
@@ -106,11 +104,16 @@ Rect GUIListBox::CalcGraphicRect(bool clipped)
         int at_y = pixel_size + item * RowHeight;
         int item_index = item + TopItem;
         PrepareTextToDraw(Items[item_index]);
-        Line lpos = GUI::CalcTextPositionHor(_textToDraw.GetCStr(), Font, 1 + pixel_size, right_hand_edge, at_y + 1,
+        Line lpos = GUI::CalcTextPositionHor(_textToDraw, Font, 1 + pixel_size, right_hand_edge, at_y + 1,
             (FrameAlignment)TextAlignment);
         max_line.X2 = std::max(max_line.X2, lpos.X2);
     }
-    return SumRects(rc, RectWH(0, 0, max_line.X2 - max_line.X1 + 1, Height));
+    int last_line_y = pixel_size + 1 + (VisibleItemCount - 1) * RowHeight;
+    // Include font fixes for the first and last text line,
+    // in case graphical height is different, and there's a VerticalOffset
+    Line vextent = GUI::CalcFontGraphicalVExtent(Font);
+    Rect text_rc = RectWH(0, vextent.Y1, max_line.X2 - max_line.X1 + 1, last_line_y + (vextent.Y2 - vextent.Y1));
+    return SumRects(rc, text_rc);
 }
 
 int GUIListBox::AddItem(const String &text)
@@ -136,8 +139,8 @@ void GUIListBox::Clear()
 
 void GUIListBox::Draw(Bitmap *ds, int x, int y)
 {
-    const int width  = Width - 1;
-    const int height = Height - 1;
+    const int width  = _width - 1;
+    const int height = _height - 1;
     const int pixel_size = get_fixed_pixel_size(1);
 
     color_t text_color = ds->GetCompatibleColor(TextColor);
@@ -182,7 +185,7 @@ void GUIListBox::Draw(Bitmap *ds, int x, int y)
 
     Rect old_clip = ds->GetClip();
     if (scrollbar && GUI::Options.ClipControls)
-        ds->SetClip(Rect(x, y, right_hand_edge + 1, y + Height - 1));
+        ds->SetClip(Rect(x, y, right_hand_edge + 1, y + _height - 1));
     for (int item = 0; (item < VisibleItemCount) && (item + TopItem < ItemCount); ++item)
     {
         int at_y = y + pixel_size + item * RowHeight;
@@ -206,7 +209,7 @@ void GUIListBox::Draw(Bitmap *ds, int x, int y)
         int item_index = item + TopItem;
         PrepareTextToDraw(Items[item_index]);
 
-        GUI::DrawTextAlignedHor(ds, _textToDraw.GetCStr(), Font, text_color, x + 1 + pixel_size, right_hand_edge, at_y + 1,
+        GUI::DrawTextAlignedHor(ds, _textToDraw, Font, text_color, x + 1 + pixel_size, right_hand_edge, at_y + 1,
             (FrameAlignment)TextAlignment);
     }
     ds->SetClip(old_clip);
@@ -294,9 +297,9 @@ bool GUIListBox::OnMouseDown()
     if (IsInRightMargin(MousePos.X))
     {
         int top_item = TopItem;
-        if (MousePos.Y < Height / 2 && TopItem > 0)
+        if (MousePos.Y < _height / 2 && TopItem > 0)
             top_item = TopItem - 1;
-        if (MousePos.Y >= Height / 2 && ItemCount > TopItem + VisibleItemCount)
+        if (MousePos.Y >= _height / 2 && ItemCount > TopItem + VisibleItemCount)
             top_item = TopItem + 1;
         if (TopItem != top_item)
         {
@@ -335,7 +338,7 @@ void GUIListBox::UpdateMetrics()
     int font_height = (loaded_game_file_version < kGameVersion_360_21) ?
         get_font_height(Font) : get_font_height_outlined(Font);
     RowHeight = font_height + get_fixed_pixel_size(2); // +1 top/bottom margin
-    VisibleItemCount = Height / RowHeight;
+    VisibleItemCount = _height / RowHeight;
     if (ItemCount <= VisibleItemCount)
         TopItem = 0; // reset scroll if all items are visible
 }
@@ -426,7 +429,10 @@ void GUIListBox::ReadFromFile(Stream *in, GuiVersion gui_version)
     if (TextColor == 0)
         TextColor = 16;
 
-    UpdateMetrics();
+    // Reset dynamic values
+    RowHeight = 0;
+    VisibleItemCount = 0;
+    TopItem = 0;
 }
 
 void GUIListBox::ReadFromSavegame(Stream *in, GuiSvgVersion svg_ver)
@@ -464,7 +470,10 @@ void GUIListBox::ReadFromSavegame(Stream *in, GuiSvgVersion svg_ver)
     TopItem = in->ReadInt32();
     SelectedItem = in->ReadInt32();
 
-    UpdateMetrics();
+    // Reset dynamic values
+    RowHeight = 0;
+    VisibleItemCount = 0;
+    TopItem = 0;
 }
 
 void GUIListBox::WriteToSavegame(Stream *out) const

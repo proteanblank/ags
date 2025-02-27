@@ -1,29 +1,46 @@
-/* AGS Native interface to .NET
-
-Adventure Game Studio Editor Source Code
-Copyright (c) 2006-2010 Chris Jones
-------------------------------------------------------
-
-The AGS Editor Source Code is provided under the Artistic License 2.0,
-see the license.txt for details.
-*/
-#include "agsnative.h"
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
+//
+// AGS Native interface to .NET
+//
+//=============================================================================
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #define BITMAP WINDOWS_BITMAP
 #include <windows.h>
 #undef BITMAP
 #include <stdlib.h>
-#include "NativeMethods.h"
-#include "NativeUtils.h"
+#include "ac/characterinfo.h"
+#include "ac/dialogtopic.h"
 #include "ac/game_version.h"
+#include "ac/inventoryiteminfo.h"
+#include "ac/mousecursor.h"
+#include "ac/view.h"
+#include "ac/wordsdictionary.h"
 #include "font/fonts.h"
-#include "font/ttffontrenderer.h"
+#include "game/customproperties.h"
 #include "game/main_game_file.h"
 #include "game/plugininfo.h"
 #include "util/error.h"
+#include "util/ini_util.h"
 #include "util/multifilelib.h"
 #include "util/string_utils.h"
+// IMPORTANT: NativeMethods.h must be included AFTER native headers,
+// otherwise there will be naming conflicts with System:: and AGS::Types
+#include "NativeMethods.h"
+#include "NativeUtils.h"
+#include "agsnative.h"
 
 using namespace System::Runtime::InteropServices;
 typedef AGS::Common::HError HAGSError;
@@ -37,22 +54,23 @@ extern void save_crm_file(Room ^roomToSave);
 extern void save_default_crm_file(Room ^roomToSave);
 extern HAGSError import_sci_font(const AGSString &filename, int fslot);
 extern bool reload_font(int curFont);
+extern bool measure_font_height(const AGSString &filename, int pixel_height, int &formal_height);
 // Draws font char sheet on the provided context and returns the height of drawn object;
 // may be called with hdc = 0 to get required height without drawing anything
-extern int drawFontAt (int hdc, int fontnum, int x, int y, int width);
+extern int drawFontAt (HDC hdc, int fontnum, int x, int y, int width);
 extern Dictionary<int, Sprite^>^ load_sprite_dimensions();
-extern void drawGUI(int hdc, int x,int y, GUI^ gui, int resolutionFactor, float scale, int selectedControl);
-extern void drawSprite(int hdc, int x,int y, int spriteNum, bool flipImage);
-extern void drawSpriteStretch(int hdc, int x,int y, int width, int height, int spriteNum, bool flipImage);
-extern void drawBlockOfColour(int hdc, int x,int y, int width, int height, int colNum);
-extern void drawViewLoop (int hdc, ViewLoop^ loopToDraw, int x, int y, int size, int cursel);
+extern void drawGUI(HDC hdc, int x, int y, GUI^ gui, int resolutionFactor, float scale, int control_transparency, int selectedControl);
+extern void drawSprite(HDC hdc, int x,int y, int spriteNum, bool flipImage);
+extern void drawSpriteStretch(HDC hdc, int x,int y, int width, int height, int spriteNum, bool flipImage);
+extern void drawBlockOfColour(HDC hdc, int x,int y, int width, int height, int colNum);
+extern void drawViewLoop (HDC hdc, ViewLoop^ loopToDraw, int x, int y, int size, List<int>^ cursel);
 extern AGS::Types::SpriteImportResolution SetNewSpriteFromBitmap(int slot, Bitmap^ bmp, int spriteImportMethod, bool remapColours, bool useRoomBackgroundColours, bool alphaChannel);
-extern int GetSpriteAsHBitmap(int spriteSlot);
-extern Bitmap^ getSpriteAsBitmap32bit(int spriteNum, int width, int height);
 extern Bitmap^ getSpriteAsBitmap(int spriteNum);
+extern Bitmap^ getSpriteAsBitmap32bit(int spriteNum, int width, int height);
 extern Bitmap^ getBackgroundAsBitmap(Room ^room, int backgroundNumber);
+extern Bitmap^ getBackgroundAsBitmap32(Room ^room, int backgroundNumber);
 extern int find_free_sprite_slot();
-extern int crop_sprite_edges(int numSprites, int *sprites, bool symmetric);
+extern int crop_sprite_edges(const std::vector<int> &sprites, bool symmetric, Rect *crop_rect = nullptr);
 extern void deleteSprite(int sprslot);
 extern void GetSpriteInfo(int slot, ::SpriteInfo &info);
 extern int GetSpriteWidth(int slot);
@@ -62,7 +80,8 @@ extern int GetPaletteAsHPalette();
 extern bool DoesSpriteExist(int slot);
 extern int GetMaxSprites();
 extern int GetCurrentlyLoadedRoomNumber();
-extern int load_template_file(const AGSString &fileName, char **iconDataBuffer, size_t *iconDataSize, bool isRoomTemplate);
+extern bool load_template_file(const AGSString &fileName, AGSString &description,
+    std::vector<char> &iconDataBuffer, bool isRoomTemplate);
 extern HAGSError extract_template_files(const AGSString &templateFileName);
 extern HAGSError extract_room_template_files(const AGSString &templateFileName, int newRoomNumber);
 extern void change_sprite_number(int oldNumber, int newNumber);
@@ -73,20 +92,21 @@ extern HAGSError reset_sprite_file();
 extern void PaletteUpdated(cli::array<PaletteEntry^>^ newPalette);
 extern void GameDirChanged(String ^workingDir);
 extern void GameUpdated(Game ^game, bool forceUpdate);
+extern void GameFontAdded(Game ^game, int fontNumber);
+extern void GameFontDeleted(Game ^game, int fontNumber);
 extern void GameFontUpdated(Game ^game, int fontNumber, bool forceUpdate);
 extern void UpdateNativeSpritesToGame(Game ^game, CompileMessages ^errors);
-extern void draw_room_background(void *roomptr, int hdc, int x, int y, int bgnum, float scaleFactor, int maskType, int selectedArea, int maskTransparency);
+extern void draw_room_background(void *roomptr, HDC hdc, int x, int y, int bgnum, float scaleFactor, int maskType, int selectedArea, int maskTransparency);
 extern void ImportBackground(Room ^room, int backgroundNumber, Bitmap ^bmp, bool useExactPalette, bool sharePalette);
 extern void DeleteBackground(Room ^room, int backgroundNumber);
 extern void CreateBuffer(int width, int height);
-extern void RenderBufferToHDC(int hdc);
+extern void RenderBufferToHDC(HDC hdc);
 extern void DrawSpriteToBuffer(int sprNum, int x, int y, float scale);
 extern void draw_line_onto_mask(void *roomptr, int maskType, int x1, int y1, int x2, int y2, int color);
 extern void draw_filled_rect_onto_mask(void *roomptr, int maskType, int x1, int y1, int x2, int y2, int color);
 extern void draw_fill_onto_mask(void *roomptr, int maskType, int x1, int y1, int color);
 extern void AdjustRoomResolution(Room ^room);
 extern void FixRoomMasks(Room ^room);
-extern void copy_walkable_to_regions(void *roomptr);
 extern int get_mask_pixel(void *roomptr, int maskType, int x, int y);
 extern void import_area_mask(void *roomptr, int maskType, Bitmap ^bmp);
 extern Bitmap ^export_area_mask(void *roomptr, int maskType);
@@ -140,6 +160,9 @@ AGSString TextConverter::ConvertTextProperty(System::String^ clr_str)
     if (clr_str == nullptr)
         return AGSString();
     AGSString str = TextHelper::Convert(clr_str, _encoding);
+    // Escape backslashes before brackets: for '\[' support;
+    // this is needed because Unescape will delete '\' in unrecognized sequence.
+    str.Replace("\\[", "\\\\[");
     return AGS::Common::StrUtil::Unescape(str);
 }
 
@@ -160,13 +183,6 @@ void TextHelper::ConvertASCIIToArray(System::String^ clr_str, char *buf, size_t 
     memcpy(buf, stringPointer, ansi_len);
     buf[ansi_len - 1] = 0;
     Marshal::FreeHGlobal(IntPtr(stringPointer));
-}
-
-void TextHelper::ConvertASCIIFilename(System::String^ clr_str, char *buf, size_t buf_len)
-{
-    ConvertASCIIToArray(clr_str, buf, buf_len);
-    if (strchr(buf, '?') != nullptr)
-        throw gcnew AGSEditorException(String::Format("Filename contains invalid unicode characters: {0}", clr_str));
 }
 
 AGSString TextHelper::ConvertUTF8(System::String^ clr_str)
@@ -191,6 +207,34 @@ AGSString TextHelper::Convert(System::String^ clr_str, System::Text::Encoding^ e
 TextConverter^ TextHelper::GetGameTextConverter()
 {
     return AGS::Native::NativeMethods::GetGameTextConverter();
+}
+
+AGSString WinAPIHelper::GetErrorUTF8(uint32_t errcode)
+{
+    if (errcode == 0)
+        errcode = GetLastError();
+
+    WCHAR buffer[1024];
+    if (FormatMessageW(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+        /*source*/ NULL, /*dwMessageId*/ errcode, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        buffer, sizeof(buffer) / sizeof(WCHAR), NULL) == 0)
+    {
+        return AGSString();
+    }
+    char message[1024];
+    AGS::Common::StrUtil::ConvertWstrToUtf8(buffer, message, sizeof(message));
+    return message;
+}
+
+AGSString WinAPIHelper::MakeErrorUTF8(const AGSString &error_title, uint32_t errcode)
+{
+    return AGSString::FromFormat("%s \n%s", error_title.GetCStr(), GetErrorUTF8(errcode).GetCStr());
+}
+
+System::String^ WinAPIHelper::MakeErrorManaged(const AGSString &error_title, uint32_t errcode)
+{
+    return TextHelper::ConvertUTF8(MakeErrorUTF8(error_title, errcode));
 }
 
 
@@ -263,34 +307,34 @@ namespace AGS
 			GameUpdated(game, false);
 		}
 
-		void NativeMethods::DrawGUI(int hDC, int x, int y, GUI^ gui, int resolutionFactor, float scale, int selectedControl)
+		void NativeMethods::DrawGUI(int hDC, int x, int y, GUI^ gui, int resolutionFactor, float scale, int controlTransparency, int selectedControl)
 		{
-			drawGUI(hDC, x, y, gui, resolutionFactor, scale, selectedControl);
+			drawGUI((HDC)hDC, x, y, gui, resolutionFactor, scale, controlTransparency, selectedControl);
 		}
 
 		void NativeMethods::DrawSprite(int hDC, int x, int y, int spriteNum, bool flipImage)
 		{
-			drawSprite(hDC, x, y, spriteNum, flipImage);
+			drawSprite((HDC)hDC, x, y, spriteNum, flipImage);
 		}
 
 		int NativeMethods::DrawFont(int hDC, int x, int y, int width, int fontNum)
 		{
-			return drawFontAt(hDC, fontNum, x, y, width);
+			return drawFontAt((HDC)hDC, fontNum, x, y, width);
 		}
 
 		void NativeMethods::DrawSprite(int hDC, int x, int y, int width, int height, int spriteNum, bool flipImage)
 		{
-			drawSpriteStretch(hDC, x, y, width, height, spriteNum, flipImage);
+			drawSpriteStretch((HDC)hDC, x, y, width, height, spriteNum, flipImage);
 		}
 
 		void NativeMethods::DrawBlockOfColour(int hDC, int x, int y, int width, int height, int colourNum)
 		{
-			drawBlockOfColour(hDC, x, y, width, height, colourNum);
+			drawBlockOfColour((HDC)hDC, x, y, width, height, colourNum);
 		}
 
-		void NativeMethods::DrawViewLoop(int hdc, ViewLoop^ loopToDraw, int x, int y, int size, int cursel)
+		void NativeMethods::DrawViewLoop(int hdc, ViewLoop^ loopToDraw, int x, int y, int size, List<int>^ cursel)
 		{
-			drawViewLoop(hdc, loopToDraw, x, y, size, cursel);
+			drawViewLoop((HDC)hdc, loopToDraw, x, y, size, cursel);
 		}
 
 		bool NativeMethods::DoesSpriteExist(int spriteNumber)
@@ -323,17 +367,27 @@ namespace AGS
     int NativeMethods::FindTTFSizeForHeight(String ^fileName, int pixelHeight)
     {
         AGSString filename = TextHelper::ConvertUTF8(fileName);
-        FontMetrics metrics;
-        if (!TTFFontRenderer::MeasureFontOfPixelHeight(filename, pixelHeight, &metrics))
+        int height;
+        if (!measure_font_height(filename, pixelHeight, height))
         {
             throw gcnew AGSEditorException(String::Format("Unable to load font {0}. Not a TTF font, or there an error occured while loading it.", fileName));
         }
-        return metrics.Height;
+        return height;
+    }
+
+    void NativeMethods::OnGameFontAdded(Game^ game, int fontSlot)
+    {
+        ::GameFontAdded(game, fontSlot);
+    }
+
+    void NativeMethods::OnGameFontDeleted(Game^ game, int fontSlot)
+    {
+        ::GameFontDeleted(game, fontSlot);
     }
 
     void NativeMethods::OnGameFontUpdated(Game^ game, int fontSlot, bool forceUpdate)
     {
-        GameFontUpdated(game, fontSlot, forceUpdate);
+        ::GameFontUpdated(game, fontSlot, forceUpdate);
     }
 
         AGS::Types::SpriteInfo^ NativeMethods::GetSpriteInfo(int spriteSlot)
@@ -418,15 +472,15 @@ namespace AGS
       }
 		}
 
-		Bitmap^ NativeMethods::GetBitmapForSprite(int spriteSlot, int width, int height)
-		{
-			return getSpriteAsBitmap32bit(spriteSlot, width, height);
-		}
+        Bitmap^ NativeMethods::GetSpriteBitmap(int spriteSlot)
+        {
+            return getSpriteAsBitmap(spriteSlot);
+        }
 
-		Bitmap^ NativeMethods::GetBitmapForSpritePreserveColDepth(int spriteSlot)
-		{
-      return getSpriteAsBitmap(spriteSlot);
-    }
+        Bitmap^ NativeMethods::GetSpriteBitmapAs32Bit(int spriteSlot, int width, int height)
+        {
+	        return getSpriteAsBitmap32bit(spriteSlot, width, height);
+        }
 
 		void NativeMethods::DeleteSprite(int spriteSlot)
 		{
@@ -439,21 +493,33 @@ namespace AGS
 		}
 
 		bool NativeMethods::CropSpriteEdges(System::Collections::Generic::IList<Sprite^>^ sprites, bool symmetric)
-		{	
-			int *spriteSlotList = new int[sprites->Count];
-			int i = 0;
+        {
+            std::vector<int> spr_list;
+            std::vector<Rect> spr_tile;
+            spr_list.reserve(sprites->Count);
+            spr_tile.reserve(sprites->Count);
 			for each (Sprite^ sprite in sprites)
 			{
-				spriteSlotList[i] = sprite->Number;
-				i++;
+				spr_list.push_back(sprite->Number);
+                spr_tile.push_back(RectWH(sprite->OffsetX, sprite->OffsetY, sprite->ImportWidth, sprite->ImportHeight));
 			}
-			bool result = crop_sprite_edges(sprites->Count, spriteSlotList, symmetric) != 0;
-			delete spriteSlotList;
 
-			int newWidth = GetSpriteWidth(sprites[0]->Number);
+            Rect crop_rect;
+			bool result = crop_sprite_edges(spr_list, symmetric, &crop_rect) != 0;
+
+            int newWidth = GetSpriteWidth(sprites[0]->Number);
 			int newHeight = GetSpriteHeight(sprites[0]->Number);
+            if (newWidth == sprites[0]->Width && newHeight == sprites[0]->Height)
+                return false; // no change
+
 			for each (Sprite^ sprite in sprites)
 			{
+                sprite->ImportAsTile = true;
+                // Remember that this sprite may have been a tile already
+                sprite->OffsetX += crop_rect.Left;
+                sprite->OffsetY += crop_rect.Top;
+                sprite->ImportWidth = crop_rect.GetWidth();
+                sprite->ImportHeight = crop_rect.GetHeight();
 				sprite->Width = newWidth;
 				sprite->Height = newHeight;
 			}
@@ -504,12 +570,12 @@ namespace AGS
 
 		void NativeMethods::RenderBufferToHDC(int hDC) 
 		{
-			::RenderBufferToHDC(hDC);
+			::RenderBufferToHDC((HDC)hDC);
 		}
 
 		void NativeMethods::DrawRoomBackground(int hDC, Room ^room, int x, int y, int backgroundNumber, float scaleFactor, RoomAreaMaskType maskType, int selectedArea, int maskTransparency)
 		{
-			draw_room_background((void*)room->_roomStructPtr, hDC, x, y, backgroundNumber, scaleFactor, (int)maskType, selectedArea, maskTransparency);
+			draw_room_background((void*)room->_roomStructPtr, (HDC)hDC, x, y, backgroundNumber, scaleFactor, (int)maskType, selectedArea, maskTransparency);
 		}
 
 		void NativeMethods::ImportBackground(Room ^room, int backgroundNumber, Bitmap ^bmp, bool useExactPalette, bool sharePalette)
@@ -522,10 +588,15 @@ namespace AGS
 			::DeleteBackground(room, backgroundNumber);
 		}
 
-		Bitmap^ NativeMethods::GetBitmapForBackground(Room ^room, int backgroundNumber)
+		Bitmap^ NativeMethods::GetRoomBackgroundForPreview(Room ^room, int backgroundNumber)
 		{
-			return getBackgroundAsBitmap(room, backgroundNumber);
+			return getBackgroundAsBitmap32(room, backgroundNumber);
 		}
+
+        Bitmap^ NativeMethods::ExportRoomBackground(Room ^room, int backgroundNumber)
+        {
+            return getBackgroundAsBitmap(room, backgroundNumber);
+        }
 
         void NativeMethods::AdjustRoomResolution(Room ^room)
         {
@@ -550,11 +621,6 @@ namespace AGS
 		void NativeMethods::DrawFillOntoMask(Room ^room, RoomAreaMaskType maskType, int x1, int y1, int color)
 		{
 			draw_fill_onto_mask((void*)room->_roomStructPtr, (int)maskType, x1, y1, color);
-		}
-
-		void NativeMethods::CopyWalkableMaskToRegions(Room ^room) 
-		{
-			copy_walkable_to_regions((void*)room->_roomStructPtr);
 		}
 
 		int NativeMethods::GetAreaMaskPixel(Room ^room, RoomAreaMaskType maskType, int x, int y)
@@ -605,18 +671,17 @@ namespace AGS
     BaseTemplate^ NativeMethods::LoadTemplateFile(String ^fileName, bool isRoomTemplate)
     {
       AGSString fileNameAnsi = TextHelper::ConvertUTF8(fileName);
-      char *iconDataBuffer = NULL;
-      size_t iconDataSize = 0u;
+      AGSString description;
+      std::vector<char> iconDataBuffer;
 
-      int success = load_template_file(fileNameAnsi, &iconDataBuffer, &iconDataSize, isRoomTemplate);
+      int success = load_template_file(fileNameAnsi, description, iconDataBuffer, isRoomTemplate);
 			if (success) 
 			{
 				Icon ^icon = nullptr;
-				if (iconDataBuffer != NULL)
+				if (!iconDataBuffer.empty())
 				{
-          cli::array<unsigned char>^ managedArray = gcnew cli::array<unsigned char>(iconDataSize);
-          Marshal::Copy(IntPtr(iconDataBuffer), managedArray, 0, iconDataSize);
-          ::free(iconDataBuffer);
+          cli::array<unsigned char>^ managedArray = gcnew cli::array<unsigned char>(iconDataBuffer.size());
+          Marshal::Copy(IntPtr(&iconDataBuffer.front()), managedArray, 0, iconDataBuffer.size());
           System::IO::MemoryStream^ ms = gcnew System::IO::MemoryStream(managedArray);
           try 
           {
@@ -634,7 +699,11 @@ namespace AGS
         }
         else
         {
-				  return gcnew GameTemplate(fileName, icon);
+            // Bring linebreaks in description to the uniform "\r\n" format.
+            String ^uniDescription = TextHelper::ConvertUTF8(description);
+            uniDescription = System::Text::RegularExpressions::Regex
+                ::Replace(uniDescription, "(?<!\r)\n", "\r\n");
+            return gcnew GameTemplate(fileName, uniDescription, icon);
         }
 			}
 			return nullptr;
@@ -689,8 +758,8 @@ namespace AGS
             if (name->Equals("GAME_DATA_VERSION_CURRENT")) return (int)kGameVersion_Current;
             if (name->Equals("MAX_GUID_LENGTH")) return MAX_GUID_LENGTH;
             if (name->Equals("MAX_SG_EXT_LENGTH")) return MAX_SG_EXT_LENGTH;
-            if (name->Equals("MAX_SG_FOLDER_LEN")) return MAX_SG_FOLDER_LEN;
-            if (name->Equals("MAX_SCRIPT_NAME_LEN")) return MAX_SCRIPT_NAME_LEN;
+            if (name->Equals("MAX_SG_FOLDER_LEN")) return LEGACY_MAX_SG_FOLDER_LEN;
+            if (name->Equals("MAX_SCRIPT_NAME_LEN")) return LEGACY_MAX_SCRIPT_NAME_LEN;
             if (name->Equals("FFLG_SIZEMULTIPLIER")) return FFLG_SIZEMULTIPLIER;
             if (name->Equals("IFLG_STARTWITH")) return IFLG_STARTWITH;
             if (name->Equals("MCF_ANIMMOVE")) return MCF_ANIMMOVE;
@@ -700,11 +769,12 @@ namespace AGS
             if (name->Equals("CHF_NOINTERACT")) return CHF_NOINTERACT;
             if (name->Equals("CHF_NODIAGONAL")) return CHF_NODIAGONAL;
             if (name->Equals("CHF_NOLIGHTING")) return CHF_NOLIGHTING;
-            if (name->Equals("CHF_NOTURNING")) return CHF_NOTURNING;
+            if (name->Equals("CHF_NOTURNWHENWALK")) return CHF_NOTURNWHENWALK;
             if (name->Equals("CHF_NOBLOCKING")) return CHF_NOBLOCKING;
             if (name->Equals("CHF_SCALEMOVESPEED")) return CHF_SCALEMOVESPEED;
             if (name->Equals("CHF_SCALEVOLUME")) return CHF_SCALEVOLUME;
             if (name->Equals("CHF_ANTIGLIDE")) return CHF_ANTIGLIDE;
+            if (name->Equals("CHF_TURNWHENFACE")) return CHF_TURNWHENFACE;
             if (name->Equals("DFLG_ON")) return DFLG_ON;
             if (name->Equals("DFLG_NOREPEAT")) return DFLG_NOREPEAT;
             if (name->Equals("DTFLG_SHOWPARSER")) return DTFLG_SHOWPARSER;
@@ -739,6 +809,7 @@ namespace AGS
             if (name->Equals("GUIF_VISIBLE")) return (int)Common::kGUICtrl_Visible;
             if (name->Equals("GUIF_CLIP")) return (int)Common::kGUICtrl_Clip;
             if (name->Equals("GUIF_TRANSLATED")) return (int)Common::kGUICtrl_Translated;
+            if (name->Equals("GUIF_WRAPTEXT")) return (int)Common::kGUICtrl_WrapText;
             if (name->Equals("GLF_SHOWBORDER")) return (int)Common::kListBox_ShowBorder;
             if (name->Equals("GLF_SHOWARROWS")) return (int)Common::kListBox_ShowArrows;
             if (name->Equals("GUI_POPUP_MODAL")) return (int)Common::kGUIPopupModal;
@@ -772,7 +843,7 @@ namespace AGS
             if (name->Equals("OPT_FIXEDINVCURSOR")) return OPT_FIXEDINVCURSOR;
             if (name->Equals("OPT_HIRES_FONTS")) return OPT_HIRES_FONTS;
             if (name->Equals("OPT_SPLITRESOURCES")) return OPT_SPLITRESOURCES;
-            if (name->Equals("OPT_ROTATECHARS")) return OPT_ROTATECHARS;
+            if (name->Equals("OPT_CHARTURNWHENWALK")) return OPT_CHARTURNWHENWALK;
             if (name->Equals("OPT_FADETYPE")) return OPT_FADETYPE;
             if (name->Equals("OPT_HANDLEINVCLICKS")) return OPT_HANDLEINVCLICKS;
             if (name->Equals("OPT_MOUSEWHEEL")) return OPT_MOUSEWHEEL;
@@ -780,10 +851,11 @@ namespace AGS
             if (name->Equals("OPT_DIALOGUPWARDS")) return OPT_DIALOGUPWARDS;
             if (name->Equals("OPT_ANTIALIASFONTS")) return OPT_ANTIALIASFONTS;
             if (name->Equals("OPT_THOUGHTGUI")) return OPT_THOUGHTGUI;
-            if (name->Equals("OPT_TURNTOFACELOC")) return OPT_TURNTOFACELOC;
+            if (name->Equals("OPT_CHARTURNWHENFACE")) return OPT_CHARTURNWHENFACE;
             if (name->Equals("OPT_RIGHTLEFTWRITE")) return OPT_RIGHTLEFTWRITE;
             if (name->Equals("OPT_DUPLICATEINV")) return OPT_DUPLICATEINV;
             if (name->Equals("OPT_SAVESCREENSHOT")) return OPT_SAVESCREENSHOT;
+            if (name->Equals("OPT_SAVESCREENSHOTLAYER")) return OPT_SAVESCREENSHOTLAYER;
             if (name->Equals("OPT_PORTRAITSIDE")) return OPT_PORTRAITSIDE;
             if (name->Equals("OPT_STRICTSCRIPTING")) return OPT_STRICTSCRIPTING;
             if (name->Equals("OPT_LEFTTORIGHTEVAL")) return OPT_LEFTTORIGHTEVAL;
@@ -804,8 +876,56 @@ namespace AGS
             if (name->Equals("OPT_CLIPGUICONTROLS")) return OPT_CLIPGUICONTROLS;
             if (name->Equals("OPT_GAMETEXTENCODING")) return OPT_GAMETEXTENCODING;
             if (name->Equals("OPT_KEYHANDLEAPI")) return OPT_KEYHANDLEAPI;
+            if (name->Equals("OPT_SCALECHAROFFSETS")) return OPT_SCALECHAROFFSETS;
+            if (name->Equals("OPT_VOICECLIPNAMERULE")) return OPT_VOICECLIPNAMERULE;
+            if (name->Equals("OPT_GAMEFPS")) return OPT_GAMEFPS;
             if (name->Equals("OPT_LIPSYNCTEXT")) return OPT_LIPSYNCTEXT;
             return nullptr;
+        }
+
+        void NativeMethods::ReadIniFile(String ^fileName, Dictionary<String^, Dictionary<String^, String^>^>^ sections)
+        {
+            AGSString filename = TextHelper::ConvertUTF8(fileName);
+            AGS::Common::ConfigTree cfg;
+            if (!AGS::Common::IniUtil::Read(filename, cfg))
+                return;
+
+            sections->Clear();
+            for (const auto &section : cfg)
+            {
+                String ^secname = TextHelper::ConvertASCII(section.first);
+                Dictionary<String^, String^>^ secmap = gcnew Dictionary<String^, String^>();
+                for (const auto &item : section.second)
+                {
+                    String ^key = TextHelper::ConvertASCII(item.first);
+                    String ^value = TextHelper::ConvertUTF8(item.second);
+                    secmap[key] = value;
+                }
+                sections[secname] = secmap;
+            }
+        }
+
+        void NativeMethods::WriteIniFile(String ^fileName, Dictionary<String^, Dictionary<String^, String^>^>^ sections, bool mergeExisting)
+        {
+            AGSString filename = TextHelper::ConvertUTF8(fileName);
+            AGS::Common::ConfigTree cfg;
+            for each (auto section in sections)
+            {
+                AGSString secname = TextHelper::ConvertASCII(section.Key);
+                AGS::Common::StringOrderMap secmap;
+                for each (auto item in section.Value)
+                {
+                    AGSString key = TextHelper::ConvertASCII(item.Key);
+                    AGSString value = TextHelper::ConvertUTF8(item.Value);
+                    secmap[key] = value;
+                }
+                cfg[secname] = std::move(secmap);
+            }
+
+            if (mergeExisting)
+                AGS::Common::IniUtil::Merge(filename, cfg);
+            else
+                AGS::Common::IniUtil::Write(filename, cfg);
         }
 	}
 }

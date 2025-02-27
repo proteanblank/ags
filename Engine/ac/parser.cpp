@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -27,7 +27,6 @@
 using namespace AGS::Common;
 
 extern GameSetupStruct game;
-extern GameState play;
 
 int Parser_FindWordID(const char *wordToFind)
 {
@@ -35,7 +34,7 @@ int Parser_FindWordID(const char *wordToFind)
 }
 
 const char* Parser_SaidUnknownWord() {
-    if (play.bad_parsed_word[0] == 0)
+    if (play.bad_parsed_word.IsEmpty())
         return nullptr;
     return CreateNewScriptString(play.bad_parsed_word);
 }
@@ -139,7 +138,7 @@ int parse_sentence (const char *src_text, int *numwords, short*wordarray, short*
 
     numwords[0] = 0;
     if (compareto == nullptr)
-        play.bad_parsed_word[0] = 0;
+        play.bad_parsed_word.Empty();
 
     String uniform_text = src_text;
     uniform_text.MakeLower();
@@ -234,8 +233,14 @@ int parse_sentence (const char *src_text, int *numwords, short*wordarray, short*
                         const char *textStart = ++text; // begin with next char
 
                         // find where the next word ends
-                        while ((text[0] == ',') || (isalnum((unsigned char)text[0]) != 0))
-                            text++;
+                        while ((text[0] == ',') || is_valid_word_char(text[0]))
+                        {
+                            // shift beginning of potential multi-word each time we see a comma
+                            if(text[0] == ',')
+                                textStart = ++text;
+                            else
+                                text++;
+                        }
 
                         continueSearching = 0;
 
@@ -244,7 +249,11 @@ int parse_sentence (const char *src_text, int *numwords, short*wordarray, short*
                             thisword[text - textStart] = 0;
                             // forward past any multi-word alternatives
                             if (FindMatchingMultiWordWord(thisword, &text) >= 0)
+                            {
+                                if (text[0] == 0)
+                                    break;
                                 continueSearching = 1;
+                            }
                         }
                     }
 
@@ -268,8 +277,8 @@ int parse_sentence (const char *src_text, int *numwords, short*wordarray, short*
                     return 0;
                 // if it's an unknown word, store it for use in messages like
                 // "you can't use the word 'xxx' in this game"
-                if ((word < 0) && (play.bad_parsed_word[0] == 0))
-                    strcpy(play.bad_parsed_word, thisword);
+                if ((word < 0) && (play.bad_parsed_word.IsEmpty()))
+                    play.bad_parsed_word = thisword;
             }
 
             if (do_word_now) {
@@ -301,8 +310,6 @@ int parse_sentence (const char *src_text, int *numwords, short*wordarray, short*
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 // int (const char *wordToFind)
 RuntimeScriptValue Sc_Parser_FindWordID(const RuntimeScriptValue *params, int32_t param_count)

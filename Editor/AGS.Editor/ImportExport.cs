@@ -311,6 +311,24 @@ namespace AGS.Editor
             return importErrors;
         }
 
+        public static List<Script> AddImportedScriptModule(ScriptModuleDef module)
+        {
+            string author = module.Author;
+            string description = module.Description;
+            string name = module.Name;
+            string version = module.Version;
+            string scriptText = module.Script;
+            string headerText = module.Header;
+            int uniqueKey = module.UniqueKey;
+
+            List<Script> scriptsImported = new List<Script>();
+            Script header = new Script(null, headerText, name, description, author, version, uniqueKey, true);
+            Script mainScript = new Script(null, scriptText, name, description, author, version, uniqueKey, false);
+            scriptsImported.Add(header);
+            scriptsImported.Add(mainScript);
+            return scriptsImported;
+        }
+
         public static List<Script> ImportScriptModule(string fileName, Encoding defEncoding)
         {
             BinaryReader reader = new BinaryReader(new FileStream(fileName, FileMode.Open, FileAccess.Read));
@@ -328,9 +346,9 @@ namespace AGS.Editor
 
             Encoding enc = defEncoding;
 
-            var author = ReadNullTerminatedStringAsBytes(reader);
-            var description = ReadNullTerminatedStringAsBytes(reader);
-            var name = ReadNullTerminatedStringAsBytes(reader);
+            var bAuthor = ReadNullTerminatedStringAsBytes(reader);
+            var bDescription = ReadNullTerminatedStringAsBytes(reader);
+            var bName = ReadNullTerminatedStringAsBytes(reader);
             var version = ReadNullTerminatedString(reader);
 
             int scriptLength = reader.ReadInt32();
@@ -361,15 +379,24 @@ namespace AGS.Editor
             }
             catch (ArgumentException) { }
 
-            List<Script> scriptsImported = new List<Script>();
-            Script header = new Script(null, enc.GetString(headerBytes), enc.GetString(name),
-                enc.GetString(description), enc.GetString(author), version, uniqueKey, true);
-            Script mainScript = new Script(null, enc.GetString(scriptBytes), enc.GetString(name),
-                enc.GetString(description), enc.GetString(author), version, uniqueKey, false);
-            scriptsImported.Add(header);
-            scriptsImported.Add(mainScript);
-            return scriptsImported;
+            string author = enc.GetString(bAuthor);
+            string description = enc.GetString(bDescription);
+            string name = enc.GetString(bName);
+            string script = enc.GetString(scriptBytes);
+            string header = enc.GetString(headerBytes);
+
+            ScriptModuleDef module;
+            module.Author = author;
+            module.Description = description;
+            module.Name = name;
+            module.Version = version;
+            module.Script = script;
+            module.Header = header;
+            module.UniqueKey = uniqueKey;
+
+            return AddImportedScriptModule(module);
         }
+
 
         public static void ExportScriptModule(Script header, Script script, string fileName, Encoding defEncoding)
         {
@@ -1123,7 +1150,7 @@ namespace AGS.Editor
 
         private static void WriteOldStyleViewFrame(BinaryWriter writer, ViewFrame frame)
         {
-            Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(frame.Image);
+            Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(frame.Image);
             int colDepth = GetColorDepthForPixelFormat(bmp.PixelFormat);
             writer.Write(colDepth);
             int spriteFlags = 0;
@@ -1333,7 +1360,7 @@ namespace AGS.Editor
                 writer.WriteStartElement(GUI_XML_SPRITE_NODE);
                 writer.WriteAttributeString(GUI_XML_SPRITE_NUMBER, spriteNumber.ToString());
 
-                Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(spriteNumber);
+                Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(spriteNumber);
                 int colDepth = GetColorDepthForPixelFormat(bmp.PixelFormat);
                 writer.WriteAttributeString(GUI_XML_SPRITE_COLOR_DEPTH, colDepth.ToString());
                 writer.WriteAttributeString(GUI_XML_SPRITE_ALPHA_CHANNEL, (bmp.PixelFormat == PixelFormat.Format32bppArgb).ToString());

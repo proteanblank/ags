@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -23,6 +23,7 @@
 #include <vector>
 #include "ac/datetime.h"
 #include "ac/path_helper.h"
+#include "ac/runtime_defines.h"
 #include "debug/outputhandler.h"
 #include "util/geometry.h"
 #include "util/ini_util.h"
@@ -36,21 +37,6 @@ namespace AGS
 }
 using namespace AGS; // FIXME later
 
-enum eScriptSystemOSID
-{
-    eOS_Unknown = 0,
-    eOS_DOS,
-    eOS_Win,
-    eOS_Linux,
-    eOS_Mac,
-    eOS_Android,
-    eOS_iOS,
-    eOS_PSP,
-    eOS_Web,
-    eOS_FreeBSD,
-    eNumOS
-};
-
 enum SetupReturnValue
 {
     kSetup_Cancel,
@@ -59,10 +45,9 @@ enum SetupReturnValue
 };
 
 class AGSPlatformDriver
-    // be used as a output target for logging system
-    : public AGS::Common::IOutputHandler
 {
 public:
+    AGSPlatformDriver();
     virtual ~AGSPlatformDriver() = default;
 
     // Called at the creation of the platform driver
@@ -77,7 +62,7 @@ public:
     virtual void PostBackendExit() { };
 
     virtual void Delay(int millis);
-    virtual void DisplayAlert(const char*, ...) = 0;
+    virtual void DisplayAlert(const char *text, ...);
     virtual void AttachToParentConsole();
     virtual int  GetLastSystemError() { return errno; }
     // platform specific data file
@@ -94,21 +79,28 @@ public:
     virtual FSLocation GetUserGlobalConfigDirectory()  { return FSLocation("."); }
     // Get default directory for program output (logs)
     virtual FSLocation GetAppOutputDirectory() { return FSLocation("."); }
+    // Tells whether it's not permitted to write to the local directory (cwd, or game dir),
+    // and only specified user/app directories should be used.
+    // FIXME: this is a part of a hotfix, review uses of this function later.
+    virtual bool IsLocalDirRestricted() { return true; }
     // Returns array of characters illegal to use in file names
     virtual const char *GetIllegalFileChars() { return "\\/"; }
     virtual const char *GetDiskWriteAccessTroubleshootingText();
     virtual const char *GetGraphicsTroubleshootingText() { return ""; }
-    virtual unsigned long GetDiskFreeSpaceMB() = 0;
+    virtual uint64_t GetDiskFreeSpaceMB(const Common::String &path) = 0;
     virtual const char* GetBackendFailUserHint();
     virtual eScriptSystemOSID GetSystemOSID() = 0;
-    virtual void GetSystemTime(ScriptDateTime*);
-    virtual SetupReturnValue RunSetup(const Common::ConfigTree &cfg_in, Common::ConfigTree &cfg_out);
+    virtual SetupReturnValue RunSetup(const Common::ConfigTree &cfg_in,
+        const Common::ConfigTree &def_cfg_in, Common::ConfigTree &cfg_out);
     // Formats message and writes to standard platform's output;
     // Always adds trailing '\n' after formatted string
     virtual void WriteStdOut(const char *fmt, ...);
     // Formats message and writes to platform's error output;
     // Always adds trailing '\n' after formatted string
     virtual void WriteStdErr(const char *fmt, ...);
+    // Display a text in a message box with a "warning" icon.
+    // Platforms which do not support this should do nothing.
+    virtual void DisplayMessageBox(const char *text);
     virtual void YieldCPU();
     // Called when the application is being paused completely (e.g. when player alt+tabbed from it).
     // This function should suspend any platform-specific realtime processing.
@@ -116,7 +108,7 @@ public:
     // Called when the application is being resumed.
     virtual void ResumeApplication();
     // Adjust window's * client size * to ensure it is in the supported limits
-    virtual Size ValidateWindowSize(const Size &sz, bool borderless) const;
+    virtual Size ValidateWindowSize(int display_index, const Size &sz, bool borderless) const;
     // Either set window icon using system API directly, or create a SDL_Surface
     // for the SDL backend to set an icon instead.
     virtual SDL_Surface *CreateWindowIcon() { return nullptr; }
@@ -128,6 +120,8 @@ public:
 
     // Returns command line argument in a UTF-8 format
     virtual Common::String GetCommandArg(size_t arg_index);
+    // Returns a IOutputHandler implementation that prints to this platform's stdout
+    virtual std::unique_ptr<Common::IOutputHandler> GetStdOut();
 
     // Gets the only platform driver instance, creates one if necessary
     static AGSPlatformDriver *GetDriver();
@@ -137,16 +131,10 @@ public:
     // Store command line arguments for the future use
     void SetCommandArgs(const char *const argv[], size_t argc);
     // Set whether PrintMessage should output to stdout or stderr
-    void SetOutputToErr(bool on) { _logToStdErr = on; }
+    void SetOutputToErr(bool on);
     // Set whether DisplayAlert is allowed to show modal GUIs on some systems;
     // it will print to either stdout or stderr otherwise, depending on above flag
     void SetGUIMode(bool on) { _guiMode = on; }
-
-    //-----------------------------------------------
-    // IOutputHandler implementation
-    //-----------------------------------------------
-    // Writes to the standard platform's output, prepending "AGS: " prefix to the message
-    void PrintMessage(const AGS::Common::DebugMessage &msg) override;
 
 protected:
     // TODO: this is a quick solution for IOutputHandler implementation
@@ -155,6 +143,9 @@ protected:
     // with both going through PlatformDriver need to figure a better
     // design first.
     bool _logToStdErr = false;
+    // A function pointer for stdout write;
+    // this is used when printing log, and may be set to null disabling an output
+    void (AGSPlatformDriver::*_writeStdOut)(const char *fmt, ...) = nullptr;
     // Defines whether engine is allowed to display important warnings
     // and errors by showing a message box kind of GUI.
     bool _guiMode = false;

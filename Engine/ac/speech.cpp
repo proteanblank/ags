@@ -2,26 +2,28 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/speech.h"
 #include "ac/asset_helper.h"
 #include "ac/common.h"
-#include "ac/runtime_defines.h"
-#include "ac/dynobj/scriptoverlay.h"
+#include "ac/game.h"
 #include "ac/gamesetup.h"
 #include "ac/gamestate.h"
+#include "ac/runtime_defines.h"
+#include "ac/dynobj/scriptoverlay.h"
 #include "core/assetmanager.h"
 #include "debug/debug_log.h"
 #include "main/engine.h"
 #include "util/directory.h"
+#include "util/file.h"
 #include "util/path.h"
 
 using namespace AGS::Common;
@@ -97,7 +99,7 @@ SkipSpeechStyle internal_skip_speech_to_user(int internal_val)
 
 bool init_voicepak(const String &name)
 {
-    if (usetup.no_speech_pack) return false; // voice-over disabled
+    if (!usetup.UseVoicePack) return false; // voice-over disabled
 
     String speech_file = name.IsEmpty() ? "speech.vox" : String::FromFormat("sp_%s.vox", name.GetCStr());
     if (ResPaths.SpeechPak.Name.CompareNoCase(speech_file) == 0)
@@ -122,20 +124,24 @@ bool init_voicepak(const String &name)
     }
 
     String speech_subdir = "";
-    if (!ResPaths.VoiceDir2.IsEmpty() && Path::ComparePaths(ResPaths.DataDir, ResPaths.VoiceDir2) != 0)
+    // Look up in the alternative locations that include "voice" filter
+    for (const auto &opt_dir : ResPaths.OptDataDirs)
     {
-        // If we have custom voice directory set, we will enable voice-over even if speech.vox does not exist
-        speech_subdir = name.IsEmpty() ? ResPaths.VoiceDir2 : Path::ConcatPaths(ResPaths.VoiceDir2, name);
-        if (File::IsDirectory(speech_subdir) && !FindFile::OpenFiles(speech_subdir).AtEnd())
+        if (opt_dir.second.FindSection("voice", ',') != String::NoIndex)
         {
-            Debug::Printf(kDbgMsg_Info, "Optional voice directory is defined: %s", speech_subdir.GetCStr());
-            ResPaths.VoiceAvail = true;
+            // If we have custom voice directory set, we will enable voice-over even if speech.vox does not exist
+            speech_subdir = Path::ConcatPaths(opt_dir.first, name);
+            if (File::IsDirectory(speech_subdir) && Directory::HasAnyFiles(speech_subdir))
+            {
+                Debug::Printf(kDbgMsg_Info, "Optional voice directory is defined: %s", speech_subdir.GetCStr());
+                ResPaths.VoiceAvail = true;
+            }
         }
     }
 
     // Save new resource locations and register asset libraries
     VoicePakName = name;
-    VoiceAssetPath = name.IsEmpty() ? "" : String::FromFormat("%s/", name.GetCStr());
+    VoiceAssetPath = name;
     ResPaths.SpeechPak.Name = speech_file;
     ResPaths.SpeechPak.Path = speech_filepath;
     ResPaths.VoiceDirSub = speech_subdir;
@@ -164,6 +170,7 @@ String get_voice_assetpath()
 #include "ac/gamestate.h"
 #include "ac/global_audio.h"
 #include "ac/global_display.h"
+#include "ac/dynobj/cc_character.h"
 #include "ac/dynobj/cc_scriptobject.h"
 #include "ac/dynobj/dynobj_manager.h"
 #include "debug/out.h"
@@ -171,7 +178,8 @@ String get_voice_assetpath()
 #include "script/script_runtime.h"
 
 extern GameSetupStruct game;
-extern GameState play;
+extern CCCharacter ccDynamicCharacter;
+extern int char_speaking;
 
 ScriptOverlay* Speech_GetTextOverlay()
 {
@@ -181,6 +189,11 @@ ScriptOverlay* Speech_GetTextOverlay()
 ScriptOverlay* Speech_GetPortraitOverlay()
 {
     return (ScriptOverlay*)ccGetObjectAddressFromHandle(play.speech_face_schandle);
+}
+
+CharacterInfo* Speech_GetSpeakingCharacter()
+{
+    return char_speaking >= 0 ? &game.chars[char_speaking] : nullptr;
 }
 
 int Speech_GetAnimationStopTimeMargin()
@@ -414,6 +427,11 @@ RuntimeScriptValue Sc_Speech_GetPortraitOverlay(const RuntimeScriptValue *params
     API_SCALL_OBJAUTO(ScriptOverlay, Speech_GetPortraitOverlay);
 }
 
+RuntimeScriptValue Sc_Speech_GetSpeakingCharacter(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_OBJ(CharacterInfo, ccDynamicCharacter, Speech_GetSpeakingCharacter);
+}
+
 extern RuntimeScriptValue Sc_SetVoiceMode(const RuntimeScriptValue *params, int32_t param_count);
 
 void RegisterSpeechAPI(ScriptAPIVersion base_api, ScriptAPIVersion /*compat_api*/)
@@ -436,6 +454,7 @@ void RegisterSpeechAPI(ScriptAPIVersion base_api, ScriptAPIVersion /*compat_api*
         { "Speech::set_SkipKey",                API_FN_PAIR(Speech_SetSkipKey) },
         { "Speech::get_SkipStyle",              Sc_Speech_GetSkipStyle, GetSkipSpeech },
         { "Speech::set_SkipStyle",              API_FN_PAIR(SetSkipSpeech) },
+        { "Speech::get_SpeakingCharacter",      API_FN_PAIR(Speech_GetSpeakingCharacter) },
         { "Speech::get_Style",                  API_FN_PAIR(Speech_GetStyle) },
         { "Speech::set_Style",                  API_FN_PAIR(SetSpeechStyle) },
         { "Speech::get_TextAlignment",          API_FN_PAIR(Speech_GetTextAlignment) },
