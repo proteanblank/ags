@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include <string>
 #include <util/string_compat.h>
 #include "gtest/gtest.h"
@@ -12,7 +25,6 @@ extern int cc_tokenize(const char*inpl, ccInternalList*targ, ccCompiledScript*sc
 ccCompiledScript *newScriptFixture() {
     // TODO: investigate proper google test fixtures.
     ccCompiledScript *scrip = new ccCompiledScript();
-    scrip->init();
     sym.reset();  // <-- global
     return scrip;
 }
@@ -349,32 +361,32 @@ TEST(Compile, DefaultParametersLargeInts) {
     int funcidx;
     funcidx = sym.find("importedfunc");
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[1]);
-    EXPECT_EQ(0, sym.entries[funcidx].funcParamDefaultValues[1]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[1].HasDefaultValue);
+    EXPECT_EQ(0, sym.entries[funcidx].funcparams[1].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[2]);
-    EXPECT_EQ(1, sym.entries[funcidx].funcParamDefaultValues[2]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[2].HasDefaultValue);
+    EXPECT_EQ(1, sym.entries[funcidx].funcparams[2].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[3]);
-    EXPECT_EQ(2, sym.entries[funcidx].funcParamDefaultValues[3]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[3].HasDefaultValue);
+    EXPECT_EQ(2, sym.entries[funcidx].funcparams[3].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[4]);
-    EXPECT_EQ(-32000, sym.entries[funcidx].funcParamDefaultValues[4]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[4].HasDefaultValue);
+    EXPECT_EQ(-32000, sym.entries[funcidx].funcparams[4].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[5]);
-    EXPECT_EQ(32001, sym.entries[funcidx].funcParamDefaultValues[5]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[5].HasDefaultValue);
+    EXPECT_EQ(32001, sym.entries[funcidx].funcparams[5].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[6]);
-    EXPECT_EQ((2147483647), sym.entries[funcidx].funcParamDefaultValues[6]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[6].HasDefaultValue);
+    EXPECT_EQ((2147483647), sym.entries[funcidx].funcparams[6].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[7]);
-    EXPECT_EQ((-2147483648), sym.entries[funcidx].funcParamDefaultValues[7]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[7].HasDefaultValue);
+    EXPECT_EQ((-2147483648), sym.entries[funcidx].funcparams[7].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[8]);
-    EXPECT_EQ(-1, sym.entries[funcidx].funcParamDefaultValues[8]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[8].HasDefaultValue);
+    EXPECT_EQ(-1, sym.entries[funcidx].funcparams[8].DefaultValue);
 
-    EXPECT_EQ(true, sym.entries[funcidx].funcParamHasDefaultValues[9]);
-    EXPECT_EQ(-2, sym.entries[funcidx].funcParamDefaultValues[9]);
+    EXPECT_EQ(true, sym.entries[funcidx].funcparams[9].HasDefaultValue);
+    EXPECT_EQ(-2, sym.entries[funcidx].funcparams[9].DefaultValue);
 }
 
 TEST(Compile, HexLiterals) {
@@ -431,7 +443,7 @@ TEST(Compile, ImportFunctionReturningDynamicArray) {
 
     ASSERT_TRUE(funcidx != -1);
 
-    EXPECT_EQ(STYPE_DYNARRAY, sym.entries[funcidx].funcparamtypes[0] & STYPE_DYNARRAY);
+    EXPECT_EQ(STYPE_DYNARRAY, sym.entries[funcidx].funcparams[0].Type & STYPE_DYNARRAY);
 }
 
 TEST(Compile, DoubleNegatedConstant) {

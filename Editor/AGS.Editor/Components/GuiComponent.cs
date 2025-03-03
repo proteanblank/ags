@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 using System.Xml;
@@ -33,6 +34,13 @@ namespace AGS.Editor.Components
         internal const string MODE_ADD_SLIDER = "AddSlider";
         internal const string MODE_ADD_INVENTORY = "AddInventory";
 
+        // TODO: this event is a workaround.
+        // We need some sort of a global interface, preferably in AGS.Types, that would
+        // contain all the game changing events and Notify methods, e.g. IGameListener,
+        // provided by the Editor API.
+        public delegate void GUIChangedIDHandler(GUI gui, int oldID);
+        public event GUIChangedIDHandler GUIChangedID;
+
         private GUI _guiRightClicked;
         private Dictionary<GUI, ContentDocument> _documents;
 
@@ -50,6 +58,7 @@ namespace AGS.Editor.Components
             _guiController.RegisterIcon("GUISliderIcon", Resources.ResourceManager.GetIcon("guis_slider.ico"));
             _guiController.RegisterIcon("GUITextBoxIcon", Resources.ResourceManager.GetIcon("guis_textbox.ico"));
             _guiController.ProjectTree.AddTreeRoot(this, TOP_LEVEL_COMMAND_ID, "GUIs", ICON_KEY);
+            _agsEditor.CheckGameScripts += ScanAndReportMissingEventHandlers;
 
             RePopulateTreeView();
         }
@@ -84,6 +93,7 @@ namespace AGS.Editor.Components
                         GUI newGUI = ImportExport.ImportGUIFromFile(fileName, _agsEditor.CurrentGame);
                         newGUI.ID = _agsEditor.CurrentGame.RootGUIFolder.GetAllItemsCount();
                         AddSingleItem(newGUI);
+                        GUIIndexTypeConverter.SetGUIList(_agsEditor.CurrentGame.GUIs);
                         _agsEditor.CurrentGame.NotifyClientsGUIAddedOrRemoved(newGUI);
                     }
                     catch (Exception ex)
@@ -118,6 +128,7 @@ namespace AGS.Editor.Components
                 {
                     _agsEditor.CurrentGame.NotifyClientsGUIAddedOrRemoved(_guiRightClicked);
                     DeleteSingleItem(_guiRightClicked);
+                    GUIIndexTypeConverter.SetGUIList(_agsEditor.CurrentGame.GUIs);
                 }
             }
             else if (controlID == COMMAND_CHANGE_ID)
@@ -136,7 +147,7 @@ namespace AGS.Editor.Components
                 }
                 _guiRightClicked.ID = newNumber;
                 GetFlatList().Swap(oldNumber, newNumber);
-                OnItemIDOrNameChanged(_guiRightClicked, false);
+                OnItemIDOrNameChanged(_guiRightClicked, oldNumber, false);
             }
             else if ((!controlID.StartsWith(NODE_ID_PREFIX_FOLDER)) &&
                      (controlID != TOP_LEVEL_COMMAND_ID))
@@ -181,7 +192,7 @@ namespace AGS.Editor.Components
 				editor.OnControlsChanged += new GUIEditor.ControlsChanged(_guiEditor_OnControlsChanged);
 				editor.OnGuiNameChanged += new GUIEditor.GuiNameChanged(_guiEditor_OnGuiNameChanged);
                 document = new ContentDocument(editor, chosenGui.WindowTitle,
-                    this, ICON_KEY, ConstructPropertyObjectList(chosenGui));
+                    this, ICON_KEY, GUIEditor.ConstructPropertyObjectList(chosenGui));
                 _documents[chosenGui] = document;
                 document.SelectedPropertyGridObject = chosenGui;
 				if (chosenGui is NormalGUI)
@@ -193,19 +204,54 @@ namespace AGS.Editor.Components
             _guiController.AddOrShowPane(document);
 		}
 
-        private void OnItemIDOrNameChanged(GUI item, bool name_only)
+        public override IList<string> GetManagedScriptElements()
+        {
+            return new string[] { "GUI", "Label", "Button", "Slider", "ListBox", "TextBox", "InvWindow" };
+        }
+
+        public override bool ShowItemPaneByName(string name)
+        {
+            IList<GUI> guis = GetFlatList();
+            foreach (GUI g in guis)
+            {
+                if (g.Name == name)
+                {
+                    _guiController.ProjectTree.SelectNode(this, GetNodeID(g));
+                    ShowOrAddPane(g);
+                    return true;
+                }
+                
+                foreach(GUIControl gctrl in g.Controls)
+                {
+                    if(gctrl.Name == name)
+                    {
+                        _guiController.ProjectTree.SelectNode(this, GetNodeID(g));
+                        ShowOrAddPane(g);
+                        Factory.GUIController.SetPropertyGridObject(gctrl);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private void OnItemIDOrNameChanged(GUI item, int oldID, bool nameOnly)
         {
             // Refresh tree, property grid and open windows
-            if (name_only)
+            if (nameOnly)
                 ChangeItemLabel(GetNodeID(item), GetNodeLabel(item));
             else
-                RePopulateTreeView(); // currently this is the only way to update tree item ids
+                RePopulateTreeView(GetNodeID(item)); // currently this is the only way to update tree item ids
+
+            GUIIndexTypeConverter.RefreshGUIList();
+            GUIChangedID?.Invoke(item, oldID); // invoke even if only name changed, may need to refresh property view
 
             foreach (ContentDocument doc in _documents.Values)
             {
                 var docItem = ((GUIEditor)doc.Control).GuiToEdit;
                 doc.Name = docItem.WindowTitle;
-                _guiController.SetPropertyGridObjectList(ConstructPropertyObjectList(docItem), doc, docItem);
+                _guiController.SetPropertyGridObjectList(GUIEditor.ConstructPropertyObjectList(docItem), doc, docItem);
             }
         }
 
@@ -215,9 +261,10 @@ namespace AGS.Editor.Components
             GUI itemBeingEdited = editor.GuiToEdit;
             _guiEditor_OnControlsChanged(editor.GuiToEdit);
 
-			if (propertyName == "Name")
+ 			// FIXME: this does not distinguish GUI and GUIControl properties!
+ 			if (propertyName == "Name")
 			{
-                OnItemIDOrNameChanged(itemBeingEdited, true);
+                OnItemIDOrNameChanged(itemBeingEdited, itemBeingEdited.ID, true);
 			}
         }
 
@@ -260,6 +307,7 @@ namespace AGS.Editor.Components
             _documents.Clear();
 
             RePopulateTreeView();
+            GUIIndexTypeConverter.SetGUIList(_agsEditor.CurrentGame.GUIs);
         }
 
         public override void GameSettingsChanged()
@@ -289,29 +337,20 @@ namespace AGS.Editor.Components
             newGui.ID = _agsEditor.CurrentGame.RootGUIFolder.GetAllItemsCount();
             newGui.Name = _agsEditor.GetFirstAvailableScriptName("gGui");
             string newNodeId = AddSingleItem(newGui);
+            GUIIndexTypeConverter.SetGUIList(_agsEditor.CurrentGame.GUIs);
             _guiController.ProjectTree.SelectNode(this, newNodeId);
 			ShowOrAddPane(newGui);
-        }
-        
-        private Dictionary<string, object> ConstructPropertyObjectList(GUI forGui)
-        {
-            Dictionary<string, object> list = new Dictionary<string, object>();
-            list.Add(forGui.PropertyGridTitle, forGui);
-            foreach (GUIControl control in forGui.Controls)
-            {
-                list.Add(control.Name + " (" + control.ControlType + "; ID " + control.ID + ")", control);
-            }
-            return list;
         }
 
         private void _guiEditor_OnControlsChanged(GUI editingGui)
         {
-            _guiController.SetPropertyGridObjectList(ConstructPropertyObjectList(editingGui));
         }
 
         private void _guiEditor_OnGuiNameChanged()
         {
-            RePopulateTreeView();
+            GUI itemBeingEdited = ((GUIEditor)_guiController.ActivePane.Control).GuiToEdit;
+            RePopulateTreeView(GetNodeID(itemBeingEdited));
+            GUIIndexTypeConverter.SetGUIList(_agsEditor.CurrentGame.GUIs);
         }
 
         private string GetNodeID(GUI item)
@@ -351,5 +390,112 @@ namespace AGS.Editor.Components
             return _agsEditor.CurrentGame.GUIFlatList;
         }
 
+        /// <summary>
+        /// Helper class for use when scanning for event handlers
+        /// </summary>
+        private class GUIObjectWithEvents
+        {
+            public NormalGUI GUI;
+            public GUIControl Control;
+
+            public GUIObjectWithEvents(NormalGUI gui) { GUI = gui; Control = null; }
+            public GUIObjectWithEvents(GUIControl control) { GUI = null; Control = control; }
+        }
+
+        private class GUIEventReference
+        {
+            public GUIObjectWithEvents GUIObject;
+            public string ObjName;
+            public string EventName;
+            public string FunctionName;
+
+            public GUIEventReference(GUIObjectWithEvents obj, string evtName, string fnName)
+            {
+                GUIObject = obj;
+                ObjName = obj.GUI != null ? obj.GUI.Name : obj.Control.Name;
+                EventName = evtName;
+                FunctionName = fnName;
+            }
+        }
+
+        private void ScanAndReportMissingEventHandlers(GenericMessagesArgs args)
+        {
+            var errors = args.Messages;
+            foreach (GUI gui in _agsEditor.CurrentGame.GUIs)
+            {
+                NormalGUI ngui = gui as NormalGUI;
+                if (ngui == null)
+                    continue;
+
+                // Gather function names from the GUI and all of their controls,
+                // in order to check missing functions in a single batch.
+                // TODO: the following code would be simpler if there was an indexed Events table in each GUI and control class;
+                // see also: how Interactions class is done for Characters etc.
+                List<GUIEventReference> objectEvents = new List<GUIEventReference>();
+                objectEvents.Add(new GUIEventReference(new GUIObjectWithEvents(ngui), "OnClick", ngui.OnClick));
+
+                foreach (var control in ngui.Controls)
+                {
+                    GUIObjectWithEvents obj = new GUIObjectWithEvents(control);
+                    if (control is GUIButton)
+                    {
+                        objectEvents.Add(new GUIEventReference(obj, "OnClick", (control as GUIButton).OnClick));
+                    }
+                    else if (control is GUIListBox)
+                    {
+                        objectEvents.Add(new GUIEventReference(obj, "OnSelectionChanged", (control as GUIListBox).OnSelectionChanged));
+                    }
+                    else if (control is GUISlider)
+                    {
+                        objectEvents.Add(new GUIEventReference(obj, "OnChange", (control as GUISlider).OnChange));
+                    }
+                    else if (control is GUITextBox)
+                    {
+                        objectEvents.Add(new GUIEventReference(obj, "OnActivate", (control as GUITextBox).OnActivate));
+                    }
+                }
+
+                var functionNames = objectEvents.Select(evt => !string.IsNullOrEmpty(evt.FunctionName) ? evt.FunctionName : $"{evt.ObjName}_{evt.EventName}");
+                var funcs = _agsEditor.Tasks.FindEventHandlers(ngui.ScriptModule, functionNames.ToArray());
+                if (funcs == null || funcs.Length == 0)
+                    continue;
+
+                for (int i = 0; i < funcs.Length; ++i)
+                {
+                    GUIEventReference evtRef = objectEvents[i];
+                    GUIObjectWithEvents guiObject = evtRef.GUIObject;
+                    bool has_interaction = !string.IsNullOrEmpty(evtRef.FunctionName);
+                    bool has_function = funcs[i].HasValue;
+                    // If we have an assigned interaction function, but the function is not found - report a missing warning
+                    if (has_interaction && !has_function)
+                    {
+                        if (guiObject.GUI != null)
+                        {
+                            errors.Add(new CompileWarningWithGameObject($"GUI ({ngui.ID}) {ngui.Name}'s event {evtRef.EventName} function \"{evtRef.FunctionName}\" not found in script {ngui.ScriptModule}.",
+                                "GUI", ngui.Name, true));
+                        }
+                        else
+                        {
+                            errors.Add(new CompileWarningWithGameObject($"GUI ({ngui.ID}) {ngui.Name}: {guiObject.Control.ControlType} #{guiObject.Control.ID} {guiObject.Control.Name}'s event {evtRef.EventName} function \"{evtRef.FunctionName}\" not found in script {ngui.ScriptModule}.",
+                                guiObject.Control.ControlType, guiObject.Control.Name, true));
+                        }
+                    }
+                    // If we don't have an assignment, but has a similar function - report a possible unlinked function
+                    else if (!has_interaction && has_function)
+                    {
+                        if (guiObject.GUI != null)
+                        {
+                            errors.Add(new CompileWarningWithGameObject($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on GUI ({ngui.ID}) {ngui.Name}'s Event pane",
+                                "GUI", ngui.Name, funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                        }
+                        else
+                        {
+                            errors.Add(new CompileWarningWithGameObject($"Function \"{funcs[i].Value.Name}\" looks like an event handler, but is not linked on {guiObject.Control.ControlType} ({guiObject.Control.ID}) {guiObject.Control.Name}'s Event pane",
+                                guiObject.Control.ControlType, guiObject.Control.Name, funcs[i].Value.ScriptName, funcs[i].Value.Name, funcs[i].Value.LineNumber));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

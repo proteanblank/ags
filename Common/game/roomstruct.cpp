@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -55,10 +55,10 @@ RoomEdges::RoomEdges(int l, int r, int t, int b)
 }
 
 RoomObjectInfo::RoomObjectInfo()
-    : Sprite(0)
+    : Room(-1)
     , X(0)
     , Y(0)
-    , Room(-1)
+    , Sprite(0)
     , IsOn(false)
     , Baseline(0xFF)
     , Flags(0)
@@ -158,7 +158,7 @@ void RoomStruct::InitDefaults()
     DataVersion     = kRoomVersion_Current;
     GameID          = NO_GAME_ID_IN_ROOM_FILE;
 
-    _resolution     = kRoomRealRes;
+    _legacyResolution = kRoomResolution_Real;
     MaskResolution  = 1;
     Width           = 320;
     Height          = 200;
@@ -177,7 +177,7 @@ void RoomStruct::InitDefaults()
         Hotspots[i] = RoomHotspot();
     for (size_t i = 0; i < (size_t)MAX_ROOM_REGIONS; ++i)
         Regions[i] = RoomRegion();
-    for (size_t i = 0; i <= (size_t)MAX_WALK_AREAS; ++i)
+    for (size_t i = 0; i < (size_t)MAX_WALK_AREAS; ++i)
         WalkAreas[i] = WalkArea();
     for (size_t i = 0; i < (size_t)MAX_WALK_BEHINDS; ++i)
         WalkBehinds[i] = WalkBehind();
@@ -188,9 +188,9 @@ void RoomStruct::InitDefaults()
     memset(Palette, 0, sizeof(Palette));
 }
 
-void RoomStruct::SetResolution(RoomResolutionType type)
+void RoomStruct::SetLegacyResolution(RoomResolutionType resolution)
 {
-    _resolution = type;
+    _legacyResolution = resolution;
 }
 
 Bitmap *RoomStruct::GetMask(RoomAreaMask mask) const
@@ -246,22 +246,6 @@ int RoomStruct::GetRegionTintLuminance(int id) const
     return 0;
 }
 
-void load_room(const String &filename, RoomStruct *room, bool game_is_hires, const std::vector<SpriteInfo> &sprinfos)
-{
-    room->Free();
-    room->InitDefaults();
-
-    RoomDataSource src;
-    HRoomFileError err = OpenRoomFileFromAsset(filename, src);
-    if (err)
-    {
-        err = ReadRoomData(room, src.InputStream.get(), src.DataVersion);
-        if (err)
-            err = UpdateRoomData(room, src.DataVersion, game_is_hires, sprinfos);
-    }
-    if (!err)
-        quitprintf("Unable to load the room file '%s'.\n%s.", filename.GetCStr(), err->FullMessage().GetCStr());
-}
 
 PBitmap FixBitmap(PBitmap bmp, int width, int height)
 {

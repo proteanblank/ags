@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -65,10 +65,11 @@ bool RegisterPluginStubs(const char* name)
   else if (ags_stricmp(name, "agsappopenurl") == 0)
   {
     // agsappopenurl.dll
-    ccAddExternalStaticFunction("AppOpenURL",                 Sc_PluginStub_Int0);
-   return true;
+    ccAddExternalStaticFunction("AppOpenURL",                   Sc_PluginStub_Int0);
+    return true;
   }
-  else if (ags_stricmp(name, "ags_snowrain") == 0)
+  else if (ags_stricmp(name, "ags_snowrain") == 0 ||
+           ags_stricmp(name, "ags_SnowRain20") == 0)
   {
     // ags_snowrain.dll
     ccAddExternalStaticFunction("srSetSnowDriftRange",          Sc_PluginStub_Void);

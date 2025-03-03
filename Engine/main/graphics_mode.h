@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -27,6 +27,9 @@ using AGS::Engine::GraphicResolution;
 using AGS::Engine::DisplayMode;
 using AGS::Engine::WindowMode;
 
+// Gets desktop size for the given display
+Size get_desktop_size(int display_index);
+// Gets desktop size for the displays that hosts game window
 Size get_desktop_size();
 
 namespace AGS { namespace Engine { class IGfxModeList; }}
@@ -41,11 +44,21 @@ bool find_nearest_supported_mode(const AGS::Engine::IGfxModeList &modes, const S
 extern AGS::Common::PlaneScaling GameScaling;
 
 
+// WindowSizeHint is an auxiliary value telling which kind of size was requested
+// by configuration. This is primarily meant for precise parsing and writing
+// of a config file, and for the setup application.
+enum WindowSizeHint
+{
+    kWndSizeHint_Desktop,       // use current desktop resolution
+    kWndSizeHint_GameNative,    // use native game resolution
+    kWndSizeHint_Explicit,      // explicit size (WxH)
+    kWndSizeHint_GameScale      // as a scale factor of native game res
+};
+
 // Filter configuration
 struct GfxFilterSetup
 {
-    String ID;          // internal filter ID
-    String UserRequest; // filter name, requested by user
+    String ID;          // filter ID
 };
 
 // Defines how game frame is scaled inside a larger window
@@ -61,6 +74,7 @@ enum FrameScaleDef
 // Configuration that is used to determine the size and style of the window
 struct WindowSetup
 {
+    WindowSizeHint       SizeHint = kWndSizeHint_Explicit;
     ::Size               Size;      // explicit screen metrics
     int                  Scale = 0; // explicit game scale factor
     WindowMode           Mode = AGS::Engine::kWnd_Windowed; // window mode
@@ -68,18 +82,25 @@ struct WindowSetup
     inline bool IsDefaultSize() const { return Size.IsNull() && Scale == 0; }
 
     WindowSetup() = default;
+    WindowSetup(WindowSizeHint hint, const ::Size &sz, WindowMode mode = AGS::Engine::kWnd_Windowed)
+        : SizeHint(hint), Size(sz), Mode(mode) {}
     WindowSetup(const ::Size &sz, WindowMode mode = AGS::Engine::kWnd_Windowed)
-        : Size(sz), Scale(0), Mode(mode) {}
+        : SizeHint(kWndSizeHint_Explicit), Size(sz), Mode(mode) {}
     WindowSetup(int scale, WindowMode mode = AGS::Engine::kWnd_Windowed)
-        : Scale(scale), Mode(mode) {}
-    WindowSetup(WindowMode mode) : Scale(0), Mode(mode) {}
+        : SizeHint(kWndSizeHint_GameScale), Scale(scale), Mode(mode) {}
+    WindowSetup(WindowMode mode) // Init with mode type only assumes using "desktop resolution"
+        : SizeHint(kWndSizeHint_Desktop), Mode(mode) {}
 };
 
 // Additional parameters for the display mode setup
-struct DisplaySetupEx
+struct DisplayParamsEx
 {
-    int                  RefreshRate = 0;  // gfx mode refresh rate
-    bool                 VSync = false;    // vertical sync
+    int  DisplayIndex = 0; // 0-based display index
+    int  RefreshRate = 0;  // gfx mode refresh rate
+    bool VSync = false;    // vertical sync
+
+    DisplayParamsEx(int display_index, int rate, bool vsync)
+        : DisplayIndex(display_index), RefreshRate(rate), VSync(vsync) {}
 };
 
 // Full graphics configuration, contains graphics driver selection,
@@ -98,8 +119,11 @@ struct DisplayModeSetup
     FrameScaleDef        WinGameFrame = // how the game frame should be scaled/positioned in windowed mode
                                 kFrame_Undefined;
 
+    bool                 UseDefaultDisplay = true; // used when writing config back
+    int                  DisplayIndex = 0; // 0-based display index
     bool                 Windowed = false; // initial mode
-    DisplaySetupEx       Params;
+    int                  RefreshRate = 0;  // gfx mode refresh rate
+    bool                 VSync = false;    // vertical sync
 
     GfxFilterSetup       Filter;        // graphics filter definition
 };
@@ -123,8 +147,10 @@ struct ActiveDisplaySetting
 };
 
 // Initializes any possible gfx mode, using user config as a recommendation;
-// may try all available renderers and modes before succeeding (or failing)
-bool graphics_mode_init_any(const GraphicResolution &game_res, const DisplayModeSetup &setup, const ColorDepthOption &color_depth);
+// may try all available renderers and modes before succeeding (or failing).
+// Returns result, and sets original desktop size on the used display.
+bool graphics_mode_init_any(const GraphicResolution &game_res, const DisplayModeSetup &setup, const ColorDepthOption &color_depth,
+                            Size *init_desktop_size);
 // Return last saved display mode of the given kind
 ActiveDisplaySetting graphics_mode_get_last_setting(bool windowed);
 // Creates graphics driver of given id
@@ -132,7 +158,7 @@ bool graphics_mode_create_renderer(const String &driver_id);
 // Try to find and initialize compatible display mode as close to given setup as possible
 bool graphics_mode_set_dm_any(const Size &game_size, const WindowSetup &ws,
                               const ColorDepthOption &color_depth,
-                              const FrameScaleDef frame, const DisplaySetupEx &params);
+                              const FrameScaleDef frame, const DisplayParamsEx &params);
 // Set the display mode with given parameters
 bool graphics_mode_set_dm(const AGS::Engine::DisplayMode &dm);
 // Set the native image size

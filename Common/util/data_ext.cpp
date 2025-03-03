@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/data_ext.h"
@@ -58,7 +58,7 @@ HError DataExtParser::OpenBlock()
     }
     else
     { // new style block identified by a string id
-        _extID = String::FromStreamCount(_in, 16);
+        _extID = String::FromStreamCount(_in.get(), 16);
         _blockLen = _in->ReadInt64();
     }
     _blockStart = _in->GetPosition();
@@ -68,7 +68,7 @@ HError DataExtParser::OpenBlock()
 void DataExtParser::SkipBlock()
 {
     if (_blockID >= 0)
-        _in->Seek(_blockLen);
+        _in->Seek(_blockStart + _blockLen, kSeekBegin);
 }
 
 HError DataExtParser::PostAssert()
@@ -117,7 +117,7 @@ HError DataExtReader::Read()
     {
         // Call the reader function to read current block's data
         read_next = true;
-        err = ReadBlock(_blockID, _extID, _blockLen, read_next);
+        err = ReadBlock(_in.get(), _blockID, _extID, _blockLen, read_next);
         if (!err)
             return err;
         // Test that we did not read too much or too little
@@ -131,27 +131,31 @@ HError DataExtReader::Read()
 // Generic function that saves a block and automatically adds its size into header
 void WriteExtBlock(int block, const String &ext_id, const PfnWriteExtBlock& writer, int flags, Stream *out)
 {
+    const bool is_id32 = (flags & kDataExt_NumID32) != 0;
+    // 64-bit file offsets are written for blocks with ext_id, OR File64 flag
+    const bool is_file64 = (block == 0) || ((flags & kDataExt_File64) != 0);
     // Write block's header
-    (flags & kDataExt_NumID32) != 0 ?
+    is_id32 ?
         out->WriteInt32(block) :
         out->WriteInt8(static_cast<int8_t>(block));
     if (block == 0) // new-style string id
         ext_id.WriteCount(out, 16);
     soff_t sz_at = out->GetPosition();
     // block size placeholder
-    ((flags & kDataExt_File64) != 0) ?
+    is_file64 ?
         out->WriteInt64(0) :
         out->WriteInt32(0);
+    soff_t start_at = out->GetPosition();
 
     // Call writer to save actual block contents
     writer(out);
 
     // Now calculate the block's size...
     soff_t end_at = out->GetPosition();
-    soff_t block_size = (end_at - sz_at) - sizeof(int64_t);
+    soff_t block_size = (end_at - start_at);
     // ...return back and write block's size in the placeholder
     out->Seek(sz_at, Common::kSeekBegin);
-    ((flags & kDataExt_File64) != 0) ?
+    is_file64 ?
         out->WriteInt64(block_size) :
         out->WriteInt32((int32_t)block_size);
     // ...and get back to the end of the file

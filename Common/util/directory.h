@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -31,25 +31,6 @@ namespace AGS
 namespace Common
 {
 
-namespace Directory
-{
-    // Creates new directory (if it does not exist)
-    bool   CreateDirectory(const String &path);
-    // Makes sure all the sub-directories in the path are created. Parent path is
-    // not touched, and function must fail if parent path is not accessible.
-    bool   CreateAllDirectories(const String &parent, const String &sub_dirs);
-    // Sets current working directory, returns the resulting path
-    String SetCurrentDirectory(const String &path);
-    // Gets current working directory
-    String GetCurrentDirectory();
-
-    // Get list of subdirs found in the given directory
-    void   GetDirs(const String &dir_path, std::vector<String> &dirs);
-    // Get list of files found in the given directory
-    void   GetFiles(const String &dir_path, std::vector<String> &files);
-} // namespace Directory
-
-
 // FileEntry describes a single entry in the filesystem.
 struct FileEntry
 {
@@ -66,9 +47,37 @@ struct FileEntry
     operator bool() const { return !Name.IsEmpty(); }
 };
 
+namespace Directory
+{
+    // Creates new directory (if it does not exist)
+    bool   CreateDirectory(const String &path);
+    // Makes sure all the sub-directories in the path are created. Parent path is
+    // not touched, and function must fail if parent path is not accessible.
+    bool   CreateAllDirectories(const String &parent, const String &sub_dirs);
+    // Sets current working directory, returns the resulting path
+    String SetCurrentDirectory(const String &path);
+    // Gets current working directory
+    String GetCurrentDirectory();
+
+    // Get list of subdirs found in the given directory
+    void   GetDirs(const String &dir_path, std::vector<String> &dirs);
+    // Get list of files found in the given directory
+    void   GetFiles(const String &dir_path, std::vector<String> &files);
+    // Get list of files found in the given directory using wildcard pattern
+    void   GetFiles(const String &dir_path, std::vector<String> &files, const String &wildcard);
+    // Get list of file entries in the given directory using wildcard pattern
+    void   GetFiles(const String &dir_path, std::vector<FileEntry> &files, const String &wildcard);
+    // Tells whether there are any files in the given directory
+    bool   HasAnyFiles(const String &dir_path);
+} // namespace Directory
+
+
 //
 // DirectoryIterator iterates entries in the directory.
 // The order of iteration is undefined.
+// These entries may be files or subdirectories, they are iterated through
+// altogether. If you require only certain type, check current FileEntry's
+// properties using GetEntry() method.
 //
 class DirectoryIterator
 {
@@ -106,6 +115,9 @@ private:
 // and all the subdirectories. The order of iteration among subitems
 // is undefined, but each subdirectory is passed in one go before
 // going to others.
+// These entries may be files or subdirectories, they are iterated through
+// altogether. If you require only certain type, check current FileEntry's
+// properties using GetEntry() method.
 //
 class DirectoryRecursiveIterator
 {
@@ -130,10 +142,13 @@ private:
     bool PushDir();
     bool PopDir();
 
-    // A stack of directory iteration positions
-    std::stack<DirectoryIterator> _dirStack;
-    DirectoryIterator _dir; // current dir iterator
-    DirectoryIterator _subSearch; // current subdirectories searcher
+    DirectoryIterator _dir; // current dir iterator (used to iterate all entries)
+    DirectoryIterator _subSearch; // current subdirectories searcher (on this level)
+    // A stack of subdirectories iterators saved for upper nesting levels.
+    // Whenever we go one level down, we save current subSearch iterator;
+    // whenever we return one level up, we restore a saved subSearch iterator;
+    // this lets us continue iterating subdirs from the position we were at last time.
+    std::stack<DirectoryIterator> _subdirStack;
     // max nesting level, SIZE_MAX for unrestricted
     size_t _maxLevel = SIZE_MAX;
     String _fullDir; // full directory path
@@ -191,6 +206,50 @@ private:
     // TODO: make flags instead?
     bool _doFiles = false;
     bool _doDirs = false;
+};
+
+
+//
+// FileEntry comparators
+//
+struct FileEntryEqByName
+{
+     bool operator()(const FileEntry &fe1, const FileEntry &fe2) const
+    {
+        return fe1.Name == fe2.Name;
+    }
+};
+
+struct FileEntryEqByNameCI
+{
+     bool operator()(const FileEntry &fe1, const FileEntry &fe2) const
+    {
+        return fe1.Name.CompareNoCase(fe2.Name) == 0;
+    }
+};
+
+struct FileEntryCmpByName
+{
+    bool operator()(const FileEntry &fe1, const FileEntry &fe2) const
+    {
+        return fe1.Name.Compare(fe2.Name) < 0;
+    }
+};
+
+struct FileEntryCmpByNameCI
+{
+    bool operator()(const FileEntry &fe1, const FileEntry &fe2) const
+    {
+        return fe1.Name.CompareNoCase(fe2.Name) < 0;
+    }
+};
+
+struct FileEntryCmpByTime
+{
+    bool operator()(const FileEntry &fe1, const FileEntry &fe2) const
+    {
+        return fe1.Time < fe2.Time;
+    }
 };
 
 } // namespace Common

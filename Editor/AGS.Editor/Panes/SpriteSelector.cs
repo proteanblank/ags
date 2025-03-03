@@ -13,7 +13,7 @@ using AGS.Editor.Utils;
 
 namespace AGS.Editor
 {
-    public partial class SpriteSelector : UserControl
+    public partial class SpriteSelector : UserControl, IObjectConfigurable
     {
         public delegate void SelectionChangedHandler(Sprite[] newSelection);
         [Description("Occurs when the selected sprite changes")]
@@ -35,6 +35,7 @@ namespace AGS.Editor
         private const string MENU_ITEM_REPLACE_FROM_SOURCE_ALL = "ReplaceAllSpritesFromSource";
         private const string MENU_ITEM_EXPORT_FOLDER = "ExportFolder";
         private const string MENU_ITEM_EXPORT_FIXUP_SOURCES = "ExportFixupSources";
+        private const string MENU_ITEM_REPLACE_SOURCE_FOLDER = "ReplaceSpritesSourceFolder";
         private const string MENU_ITEM_SORT_BY_NUMBER = "SortSpritesByNumber";
         private const string MENU_ITEM_REPLACE_FROM_SOURCE = "ReplaceSpriteFromSource";
         private const string MENU_ITEM_FIND_BY_NUMBER = "FindSpriteByNumber";
@@ -68,13 +69,13 @@ namespace AGS.Editor
         private Dictionary<TreeNode, SpriteFolder> _nodeFolderMapping;
         private SpriteFolder _currentFolder;
         private SpriteFolder _rootFolder;
+        private TreeNode _rootTreeNode;
         private ImageList _spriteImages = new ImageList();
         private int _spriteNumberOnMenuActivation;
         private bool _showUseThisSpriteOption = false;
         private bool _sendUpdateNotifications = false;
         private string[] _lastImportedFilenames = null;
         private Timer _timer;
-        private TreeNode _dropHighlight;
         private int _spriteSizeMultiplier = 1;
         private bool _idleHandlerSet = false;
         // Which information to display under sprites
@@ -99,6 +100,10 @@ namespace AGS.Editor
                 _spManagerIcons.Images.Add("OpenFolder", Resources.ResourceManager.GetIcon("openfldr.ico"));
             }
             folderList.ImageList = _spManagerIcons;
+            folderList.KeyDown += new System.Windows.Forms.KeyEventHandler(this.folderList_KeyDown);
+            folderList.ItemTryDrag += FolderList_ItemTryDrag;
+            folderList.ItemDragOver += FolderList_ItemDragOver;
+            folderList.ItemDragDrop += FolderList_ItemDragDrop;
             SetSpritePreviewMultiplier(2); // default value for sprite multiplier
         }
 
@@ -183,6 +188,8 @@ namespace AGS.Editor
                 DisplaySpritesForFolder(rootFolder);
                 folderList.Nodes[0].Expand();
             }
+
+            _rootTreeNode = folderList.Nodes[0];
         }
 
         private void AddNodeState(SpriteFolder folder, List<int> expanded)
@@ -737,18 +744,7 @@ namespace AGS.Editor
                 Sprite sprite = FindSpriteByNumber(_spriteNumberOnMenuActivation);
                 string path = Utilities.ResolveSourcePath(sprite.SourceFile);
 
-                if (File.Exists(path))
-                {
-                    if (Utilities.IsMonoRunning())
-                    {
-                        // FIXME - this probably needs to be more platform specific
-                        Process.Start(path);
-                    }
-                    else
-                    {
-                        Process.Start("explorer.exe", String.Format("/select,\"{0}\"", path));
-                    }
-                }
+                Utilities.OpenFileOrDirInFileExplorer(path);
             }
             else if (item.Name == MENU_ITEM_DELETE_SPRITE)
             {
@@ -793,10 +789,10 @@ namespace AGS.Editor
             else if (item.Name == MENU_ITEM_COPY_TO_CLIPBOARD)
             {
                 Sprite sprite = FindSpriteByNumber(_spriteNumberOnMenuActivation);
-                Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(sprite.Number, sprite.Width, sprite.Height);
+                Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(sprite.Number);
 
                 if (GetDesktopColourDepth() < 32 &&
-                    (bmp.PixelFormat != PixelFormat.Format32bppArgb || bmp.PixelFormat == PixelFormat.Format32bppRgb))
+                    (bmp.PixelFormat == PixelFormat.Format32bppArgb || bmp.PixelFormat == PixelFormat.Format32bppRgb))
                 {
                     if (Factory.GUIController.ShowQuestion("Your desktop colour depth is lower than this image. You may lose image detail if you copy this to the clipboard. Do you want to go ahead?") != DialogResult.Yes)
                     {
@@ -856,6 +852,10 @@ namespace AGS.Editor
             {
                 ReplaceSpritesFromSource();
             }
+            else if (item.Name == MENU_ITEM_REPLACE_SOURCE_FOLDER)
+            {
+                ReplaceSourceFolderForSprites();
+            }
             else if (item.Name == MENU_ITEM_PREVIEW_SIZE_1X)
             {
                 SetSpritePreviewMultiplier(2);
@@ -889,13 +889,13 @@ namespace AGS.Editor
                 Sprite spr = GetSprite(listItem);
                 if (String.IsNullOrEmpty(spr.SourceFile))
                 {
-                    Factory.GUIController.ShowMessage(String.Format("Sprite {0} does not have a source file.", spr.Number), MessageBoxIcon.Error);
-                    return;
+                    errors.Add($"Sprite {spr.Number} does not have a source file.");
+                    continue;
                 }
                 else if (!File.Exists(spr.SourceFile))
                 {
-                    Factory.GUIController.ShowMessage(String.Format("Sprite {0}: source file {1} does not exist.", spr.Number, spr.SourceFile), MessageBoxIcon.Error);
-                    return;
+                    errors.Add($"Sprite {spr.Number}: source file {spr.SourceFile} does not exist.");
+                    continue;
                 }
                 sprites.Add(spr);
             }
@@ -923,16 +923,17 @@ namespace AGS.Editor
 
                     // take the alpha channel preference from the specified import option
                     // (instead of using whether the old sprite has an alpha channel)
-                    SpriteTools.ReplaceSprite(spr, spr.SourceFile, spr.Frame, spr.ImportAlphaChannel, spr.RemapToGamePalette, spr.RemapToRoomPalette, spr.TransparentColour, spritesheet);
+                    SpriteTools.ReplaceSprite(spr, new SpriteImportOptions(spr.ImportAlphaChannel, spr.RemapToGamePalette, spr.RemapToRoomPalette, spr.TransparentColour, spr.SourceFile, spr.Frame), spritesheet);
                 }
                 catch (Exception ex)
                 {
                     if (ex is InvalidOperationException || ex is Types.InvalidDataException)
                     {
-                        errors.Add(ex.Message);
+                        errors.Add($"Sprite {spr.Number}: {ex.Message}");
                     }
                     else
                     {
+                        progress.Dispose();
                         throw;
                     }
                 }
@@ -950,7 +951,7 @@ namespace AGS.Editor
             else if (errors.Count > 1)
             {
                 Factory.GUIController.ShowOutputPanel(errors.ToArray(), "SpriteIcon");
-                Factory.GUIController.ShowMessage("Sprite replacement complete, with some errors", MessageBoxIcon.Warning);
+                Factory.GUIController.ShowMessage("Sprite replacement complete, with some errors.", MessageBoxIcon.Warning);
             }
         }
 
@@ -985,7 +986,7 @@ namespace AGS.Editor
             ImageFormat fileFormat;
             string fileName = GetTempFileNameForSprite(sprite, out fileFormat);
 
-            Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(sprite.Number);
+            Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(sprite.Number);
             bmp.Save(fileName, fileFormat);
 
             DateTime fileLastModified = System.IO.File.GetLastWriteTimeUtc(fileName);
@@ -1062,6 +1063,7 @@ namespace AGS.Editor
         {
             string fileName = (string)parameter;
             Process imageEditor = new Process();
+            imageEditor.StartInfo.UseShellExecute = false;
 
             string paintProgramPath = Factory.AGSEditor.Settings.PaintProgramPath;
             if (string.IsNullOrEmpty(paintProgramPath))
@@ -1184,7 +1186,7 @@ namespace AGS.Editor
 
         private void ExportSprite(string fileName, Sprite sprite)
         {
-            Bitmap bmp = Factory.NativeProxy.GetBitmapForSprite(sprite.Number, sprite.Width, sprite.Height);
+            Bitmap bmp = Factory.NativeProxy.GetSpriteBitmap(sprite.Number);
             ImportExport.ExportBitmapToFile(fileName, bmp);
             bmp.Dispose();
         }
@@ -1224,6 +1226,67 @@ namespace AGS.Editor
                     resetTileSettings: true
                 );
             Tasks.ExportSprites(opts);
+        }
+
+        private void ReplaceSourceFolderForSprites()
+        {
+            var allSprites = Factory.AGSEditor.CurrentGame.RootSpriteFolder.GetAllSpritesFromAllSubFolders();
+
+            string firstFoundSourceFile = null;
+            foreach (ListViewItem listItem in spriteList.SelectedItems)
+            {
+                Sprite spr = GetSprite(listItem);
+                if (!string.IsNullOrEmpty(spr.SourceFile))
+                {
+                    firstFoundSourceFile = spr.SourceFile;
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(firstFoundSourceFile))
+            {
+                Sprite spr = allSprites.Where(s => !string.IsNullOrEmpty(s.SourceFile)).FirstOrDefault();
+                if (spr != null)
+                    firstFoundSourceFile = spr.SourceFile;
+            }
+
+            if (string.IsNullOrEmpty(firstFoundSourceFile))
+            {
+                Factory.GUIController.ShowMessage("None of the sprites has a source filename.", MessageBoxIcon.Warning);
+                return;
+            }
+
+            string parentDir = Path.GetDirectoryName(firstFoundSourceFile);
+            var replaceDirs = ReplaceFolderDialog.Show("Replace sprite(s) source path",
+                "Please choose which part of the parent path should be replaced and provide a replacement. Relative paths will be assumed relative to your game's project folder.",
+                parentDir, parentDir, Factory.AGSEditor.CurrentGame.DirectoryPath);
+
+            if (replaceDirs == null || replaceDirs.Item1 == replaceDirs.Item2)
+                return;
+
+            int itemCount = 0;
+            foreach (var sprite in allSprites)
+            {
+                if (string.IsNullOrEmpty(sprite.SourceFile))
+                    continue;
+
+                string newPath;
+                 if (Utilities.ReplacePathBaseProjectRelative(sprite.SourceFile, replaceDirs.Item1, replaceDirs.Item2, out newPath))
+                {
+                    sprite.SourceFile = newPath;
+                    itemCount++;
+                }
+            }
+
+            if (itemCount > 0)
+            {
+                Factory.GUIController.ShowMessage($"{itemCount} sprite(s) had their source paths updated.", MessageBoxIcon.Information);
+                Factory.GUIController.RefreshPropertyGrid();
+            }
+            else
+            {
+                Factory.GUIController.ShowMessage($"No sprites with the matching old paths found, no changes were made.", MessageBoxIcon.Information);
+            }
         }
 
         private void SortAllSpritesInCurrentFolderByNumber()
@@ -1365,6 +1428,7 @@ namespace AGS.Editor
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Export all sprites...", null, onClick, MENU_ITEM_EXPORT_FOLDER));
             menu.Items.Add(new ToolStripMenuItem("Create source files for all sprites with missing / external sources...", null, onClick, MENU_ITEM_EXPORT_FIXUP_SOURCES));
+            menu.Items.Add(new ToolStripMenuItem("Replace source paths for sprites...", null, onClick, MENU_ITEM_REPLACE_SOURCE_FOLDER));
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(new ToolStripMenuItem("Find sprite by number...", null, onClick, MENU_ITEM_FIND_BY_NUMBER));
             menu.Items.Add(new ToolStripMenuItem("Sort sprites by number", null, onClick, MENU_ITEM_SORT_BY_NUMBER));
@@ -1593,48 +1657,6 @@ namespace AGS.Editor
             }
         }
 
-        private void folderList_DragOver(object sender, DragEventArgs e)
-        {
-			TreeNode target;
-
-            if (e.Data.GetDataPresent(typeof(SpriteManagerDragDropData)))
-            {
-				target = GetMouseOverTreeNode(e.X, e.Y);
-				SetFolderListDropHighlight(target);
-				if (target != null)
-                {
-					target.Expand();
-                    e.Effect = DragDropEffects.Move;
-                }
-                else
-                {
-                    e.Effect = DragDropEffects.None;
-                }
-            }
-        }
-
-		private void SetFolderListDropHighlight(TreeNode target)
-		{
-			if (_dropHighlight != target)
-			{
-				if (_dropHighlight != null)
-				{
-					_dropHighlight.BackColor = Color.Empty;
-					_dropHighlight.ForeColor = Color.Empty;
-				}
-				if (target != null)
-				{
-					folderList.HideSelection = target == folderList.SelectedNode;
-					target.BackColor = SystemColors.Highlight;
-					target.ForeColor = SystemColors.HighlightText;
-				}
-				else
-					if (_dropHighlight == folderList.SelectedNode)
-						folderList.HideSelection = false;
-				_dropHighlight = target;
-			}
-		}
-
         private void RemoveSpritesFromFolder(SpriteFolder folder, List<Sprite> spritesToRemove)
         {
             foreach (Sprite draggedSprite in spritesToRemove)
@@ -1642,24 +1664,6 @@ namespace AGS.Editor
                 folder.Sprites.Remove(draggedSprite);
             }
         }
-
-        private void folderList_DragDrop(object sender, DragEventArgs e)
-        {
-            SpriteFolder draggedInto = GetMouseOverFolder(e.X, e.Y);
-            SpriteManagerDragDropData dragged = (SpriteManagerDragDropData)e.Data.GetData(typeof(SpriteManagerDragDropData));
-            RemoveSpritesFromFolder(_currentFolder, dragged.Sprites);
-            foreach (Sprite draggedSprite in dragged.Sprites)
-            {
-                draggedInto.Sprites.Add(draggedSprite);
-            }
-			SetFolderListDropHighlight(null);
-            RefreshSpriteDisplay();
-        }
-
-		private void folderList_DragLeave(object sender, EventArgs e)
-		{
-			SetFolderListDropHighlight(null);
-		}
 
 		private TreeNode GetMouseOverTreeNode(int screenX, int screenY)
         {
@@ -1786,6 +1790,15 @@ namespace AGS.Editor
             }
         }
 
+        private void folderList_KeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.F2)
+            {
+                if (folderList.SelectedNode != null)
+                    folderList.SelectedNode.BeginEdit();
+            }
+        }
+
         private void SpriteSelector_Leave(object sender, EventArgs e)
         {
             SelectionIdleHandler = false;
@@ -1800,6 +1813,141 @@ namespace AGS.Editor
         {
             splitContainer1.SplitterDistance = 2 * (button_importNew.Font.Height) + button_importNew.Margin.Top + button_importNew.Margin.Bottom - 4;
         }
+
+        #region Folder Drag n Drop
+
+        private void folderList_DragOver(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(typeof(SpriteManagerDragDropData)))
+            {
+                TreeNode target = GetMouseOverTreeNode(e.X, e.Y);
+                if (target != null)
+                {
+                    e.Effect = DragDropEffects.Move;
+                }
+                else
+                {
+                    e.Effect = DragDropEffects.None;
+                }
+            }
+        }
+
+        private void folderList_DragDrop(object sender, DragEventArgs e)
+        {
+            if (e.Data.GetDataPresent(typeof(SpriteManagerDragDropData)))
+            {
+                SpriteFolder draggedInto = GetMouseOverFolder(e.X, e.Y);
+                SpriteManagerDragDropData dragged = (SpriteManagerDragDropData)e.Data.GetData(typeof(SpriteManagerDragDropData));
+                RemoveSpritesFromFolder(_currentFolder, dragged.Sprites);
+                foreach (Sprite draggedSprite in dragged.Sprites)
+                {
+                    draggedInto.Sprites.Add(draggedSprite);
+                }
+                RefreshSpriteDisplay();
+            }
+        }
+
+        private void FolderList_ItemTryDrag(object sender, TreeItemTryDragEventArgs e)
+        {
+            e.AllowedEffect = DragDropEffects.Move;
+        }
+
+        private void FolderList_ItemDragOver(object sender, TreeItemDragEventArgs e)
+        {
+            if ((e.DragItem != null) && (e.DragItem != _rootTreeNode) && (e.DropTarget != null)
+                && (!e.DropTarget.IsDescendantOf(e.DragItem)))
+            {
+                e.Effect = DragDropEffects.Move;
+                e.ShowLine &= e.DropTarget != _rootTreeNode;
+            }
+            else
+            {
+                e.Effect = DragDropEffects.None;
+            }
+        }
+
+        private void FolderList_ItemDragDrop(object sender, TreeItemDragEventArgs e)
+        {
+            if (e.DropTarget == null)
+                return; // can't drop into nowhere
+            if (e.DropTarget.IsDescendantOf(e.DragItem))
+                return; // can't drop into itself or its own descendants
+
+            TargetDropZone zone = (e.DropTarget != _rootTreeNode) ? e.DropZone : TargetDropZone.Middle;
+
+            switch (e.DropZone)
+            {
+                case TargetDropZone.Top:
+                    MoveFolderBeforeFolder(e.DragItem, e.DropTarget);
+                    break;
+                case TargetDropZone.Bottom:
+                    MoveFolderAfterFolder(e.DragItem, e.DropTarget);
+                    break;
+                default:
+                    MoveFolderToFolder(e.DragItem, e.DropTarget);
+                    break;
+            }
+        }
+
+        private void MoveFolderBeforeFolder(TreeNode folder, TreeNode beforeFolder)
+        {
+            SpriteFolder movedSpriteFolder = _folders[folder.Name];
+            SpriteFolder beforeSpriteFolder = _folders[beforeFolder.Name];
+            SpriteFolder sourceParent = _folders[folder.Parent.Name];
+            SpriteFolder destParent = _folders[beforeFolder.Parent.Name];
+            sourceParent.SubFolders.Remove(movedSpriteFolder);
+            destParent.SubFolders.Insert(destParent.SubFolders.IndexOf(beforeSpriteFolder), movedSpriteFolder);
+
+            folder.Remove();
+            beforeFolder.Parent.Nodes.Insert(beforeFolder.Index, folder);
+            folderList.SelectedNode = folder;
+        }
+
+        private void MoveFolderAfterFolder(TreeNode folder, TreeNode afterFolder)
+        {
+            SpriteFolder movedSpriteFolder = _folders[folder.Name];
+            SpriteFolder afterSpriteFolder = _folders[afterFolder.Name];
+            SpriteFolder sourceParent = _folders[folder.Parent.Name];
+            SpriteFolder destParent = _folders[afterFolder.Parent.Name];
+            sourceParent.SubFolders.Remove(movedSpriteFolder);
+            destParent.SubFolders.Insert(destParent.SubFolders.IndexOf(afterSpriteFolder) + 1, movedSpriteFolder);
+
+            folder.Remove();
+            afterFolder.Parent.Nodes.Insert(afterFolder.Index + 1, folder);
+            folderList.SelectedNode = folder;
+        }
+
+        private void MoveFolderToFolder(TreeNode folder, TreeNode intoFolder)
+        {
+            if (folder.Parent == intoFolder)
+                return; // already there
+
+            SpriteFolder movedSpriteFolder = _folders[folder.Name];
+            SpriteFolder sourceParent = _folders[folder.Parent.Name];
+            SpriteFolder destParent = _folders[intoFolder.Name];
+            sourceParent.SubFolders.Remove(movedSpriteFolder);
+            destParent.SubFolders.Add(movedSpriteFolder);
+
+            folder.Remove();
+            intoFolder.Nodes.Add(folder);
+            folderList.SelectedNode = folder;
+        }
+
+        #endregion // Folder Drag n Drop
+
+        #region IObjectConfigurable
+
+        public void ReadConfig(IObjectConfig config)
+        {
+            splitWindow.SplitterDistance = config.GetInt("splitWindow/SplitterDistance", splitWindow.SplitterDistance);
+        }
+
+        public void WriteConfig(IObjectConfig config)
+        {
+            config.SetInt("splitWindow/SplitterDistance", splitWindow.SplitterDistance);
+        }
+
+        #endregion
     }
 
     internal class SpriteManagerDragDropData

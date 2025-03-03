@@ -2,28 +2,28 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
+#include "gui/mypushbutton.h"
 #include <string.h>
 #include "ac/common.h"
 #include "ac/sys_events.h"
-#include "font/fonts.h"
-#include "gui/mypushbutton.h"
-#include "gui/guidialog.h"
-#include "gui/guidialoginternaldefs.h"
-#include "main/game_run.h"
-#include "gfx/bitmap.h"
-#include "platform/base/agsplatformdriver.h"
 #include "ac/timer.h"
+#include "font/fonts.h"
+#include "gfx/bitmap.h"
+#include "gui/guidialog.h"
+#include "gui/guidialogdefines.h"
+#include "main/game_run.h"
+#include "platform/base/agsplatformdriver.h"
 
-using AGS::Common::Bitmap;
+using namespace AGS::Common;
 
 extern int windowbackgroundcolor, pushbuttondarkcolor;
 extern int pushbuttonlightcolor;
@@ -36,8 +36,7 @@ MyPushButton::MyPushButton(int xx, int yy, int wi, int hi, const char *tex)
     wid = wi;
     hit = hi + 1;               //hit=hi;
     state = 0;
-    strncpy(text, tex, 50);
-    text[49] = 0;
+    snprintf(text, sizeof(text), "%s", tex);
 };
 
 void MyPushButton::draw(Bitmap *ds)

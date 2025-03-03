@@ -11,6 +11,7 @@ namespace AGS.Types
     public class RoomHotspot : IChangeNotification
 	{
 		public const string PROPERTY_NAME_SCRIPT_NAME = "Name";
+        public const string PROPERTY_NAME_DESCRIPTION = "Description";
 
         private static InteractionSchema _interactionSchema;
 
@@ -18,22 +19,23 @@ namespace AGS.Types
         private string _name = string.Empty;
         private string _description = string.Empty;
         private Point _walkToPoint;
-        private CustomProperties _properties = new CustomProperties();
+        private CustomProperties _properties = new CustomProperties(CustomPropertyAppliesTo.Hotspots);
         private Interactions _interactions = new Interactions(_interactionSchema);
 		private IChangeNotification _notifyOfModification;
 
         static RoomHotspot()
         {
-            _interactionSchema = new InteractionSchema(new string[] {"Stands on hotspot",
+            _interactionSchema = new InteractionSchema(string.Empty, true,
+                new string[] {"Stands on hotspot",
                 "$$01 hotspot","$$02 hotspot","Use inventory on hotspot",
                 "$$03 hotspot", "Any click on hotspot","Mouse moves over hotspot", 
                 "$$05 hotspot", "$$08 hotspot", "$$09 hotspot"},
                 new string[] { "WalkOn", "Look", "Interact", "UseInv", "Talk", "AnyClick", "MouseMove", "PickUp", "Mode8", "Mode9" },
-                new string[] { /*WalkOn*/"Hotspot *h", /*Look*/"Hotspot *h, CursorMode mode",
-                    /*Interact*/"Hotspot *h, CursorMode mode", /*UseInv*/"Hotspot *h, CursorMode mode",
-                    /*Talk*/"Hotspot *h, CursorMode mode", /*AnyClick*/"Hotspot *h, CursorMode mode",
-                    /*MouseMove*/"Hotspot *h", /*PickUp*/"Hotspot *h, CursorMode mode",
-                    /*Mode8*/"Hotspot *h, CursorMode mode", /*Mode9*/"Hotspot *h, CursorMode mode" });
+                new string[] { /*WalkOn*/"Hotspot *theHotspot", /*Look*/"Hotspot *theHotspot, CursorMode mode",
+                    /*Interact*/"Hotspot *theHotspot, CursorMode mode", /*UseInv*/"Hotspot *theHotspot, CursorMode mode",
+                    /*Talk*/"Hotspot *theHotspot, CursorMode mode", /*AnyClick*/"Hotspot *theHotspot, CursorMode mode",
+                    /*MouseMove*/"Hotspot *theHotspot", /*PickUp*/"Hotspot *theHotspot, CursorMode mode",
+                    /*Mode8*/"Hotspot *theHotspot, CursorMode mode", /*Mode9*/"Hotspot *theHotspot, CursorMode mode" });
         }
 
 		public RoomHotspot(IChangeNotification changeNotifier)
@@ -78,17 +80,19 @@ namespace AGS.Types
         [Browsable(false)]
         public string PropertyGridTitle
         {
-            get { return _name + " (Hotspot; ID " + _id + ")"; }
+            get { return TypesHelper.MakePropertyGridTitle("Hotspot", _name, _description, _id); }
         }
 
         [AGSSerializeClass()]
         [Description("Custom properties for this hotspot")]
-        [Category("Properties")]
-        [EditorAttribute(typeof(CustomPropertiesUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
         public CustomProperties Properties
         {
             get { return _properties; }
-            protected set { _properties = value; }
+            protected set
+            {
+                _properties = value;
+                _properties.AppliesTo = CustomPropertyAppliesTo.Hotspots;
+            }
         }
 
         [AGSNoSerialize()]

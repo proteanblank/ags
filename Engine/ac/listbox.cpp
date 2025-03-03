@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/listbox.h"
@@ -16,21 +16,23 @@
 #include <vector>
 #include <allegro.h> // find files
 #include "ac/common.h"
+#include "ac/file.h"
 #include "ac/game.h"
+#include "ac/gamesetup.h"
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
 #include "ac/global_game.h"
+#include "ac/gui.h"
 #include "ac/path_helper.h"
 #include "ac/string.h"
+#include "ac/dynobj/cc_dynamicarray.h"
 #include "core/assetmanager.h"
-#include "gui/guimain.h"
 #include "debug/debug_log.h"
 #include "util/directory.h"
 #include "util/path.h"
 
 using namespace AGS::Common;
 
-extern GameState play;
 extern GameSetupStruct game;
 
 // *** LIST BOX FUNCTIONS
@@ -51,43 +53,25 @@ void ListBox_Clear(GUIListBox *listbox) {
   listbox->Clear();
 }
 
-void FillDirList(std::vector<String> &files, const FSLocation &loc, const String &pattern)
+void ListBox_FillDirList3(GUIListBox *listbox, const char *filemask, int file_sort, int sort_dir)
 {
-    // Do ci search for the location, as parts of the path may have case mismatch
-    String path = File::FindFileCI(loc.BaseDir, loc.SubDir, true);
-    if (path.IsEmpty())
-        return;
-    for (FindFile ff = FindFile::OpenFiles(path, pattern); !ff.AtEnd(); ff.Next())
-        files.push_back(ff.Current());
+    file_sort = ValidateFileSort("ListBox.FillDirList", file_sort);
+    sort_dir = ValidateSortDirection("ListBox.FillDirList", sort_dir);
+
+    std::vector<String> files;
+    FillDirList(files, filemask, (ScriptFileSortStyle)file_sort, (ScriptSortDirection)sort_dir);
+
+    // TODO: method for adding item batch to speed up update
+    listbox->Clear();
+    for (auto it = files.cbegin(); it != files.cend(); ++it)
+    {
+        listbox->AddItem(*it);
+    }
 }
 
-void ListBox_FillDirList(GUIListBox *listbox, const char *filemask) {
-  listbox->Clear();
-
-  ResolvedPath rp, alt_rp;
-  if (!ResolveScriptPath(filemask, true, rp, alt_rp))
-    return;
-
-  std::vector<String> files;
-  if (rp.AssetMgr)
-  {
-    AssetMgr->FindAssets(files, rp.FullPath, "*");
-  }
-  else
-  {
-    FillDirList(files, rp.Loc, Path::GetFilename(rp.FullPath));
-    if (alt_rp)
-      FillDirList(files, alt_rp.Loc, Path::GetFilename(alt_rp.FullPath));
-    // Sort and remove duplicates
-    std::sort(files.begin(), files.end());
-    files.erase(std::unique(files.begin(), files.end(), StrEqNoCase()), files.end());
-  }
-
-  // TODO: method for adding item batch to speed up update
-  for (auto it = files.cbegin(); it != files.cend(); ++it)
-  {
-    listbox->AddItem(*it);
-  }
+void ListBox_FillDirList(GUIListBox *listbox, const char *filemask)
+{
+    ListBox_FillDirList3(listbox, filemask, kScFileSort_Name, kScSortAscending);
 }
 
 int ListBox_GetSaveGameSlots(GUIListBox *listbox, int index) {
@@ -97,32 +81,78 @@ int ListBox_GetSaveGameSlots(GUIListBox *listbox, int index) {
   return listbox->SavedGameIndex[index];
 }
 
-int ListBox_FillSaveGameList(GUIListBox *listbox) {
-  // TODO: find out if limiting to MAXSAVEGAMES is still necessary here
-  std::vector<SaveListItem> saves;
-  FillSaveList(saves, TOP_LISTEDSAVESLOT, MAXSAVEGAMES);
-  std::sort(saves.rbegin(), saves.rend());
+// Fills ListBox with save game slots, inserts descriptions as textual items,
+// and fills SavedGameIndex array with corresponding slot numbers
+static void ListBox_FillSaveItems(GUIListBox *listbox, const std::vector<SaveListItem> &saves)
+{
+    listbox->Clear();
+    // TODO: method for adding item batch to speed up update
+    for (const auto &item : saves)
+    {
+        listbox->AddItem(item.Description);
+        listbox->SavedGameIndex[listbox->ItemCount - 1] = item.Slot;
+    }
 
-  // fill in the list box
-  listbox->Clear();
-  // TODO: method for adding item batch to speed up update
-  for (const auto &item : saves)
-  {
-    listbox->AddItem(item.Description);
-    listbox->SavedGameIndex[listbox->ItemCount - 1] = item.Slot;
-  }
+    // update the global savegameindex[] array for backward compatibilty
+    for (size_t n = 0; n < LEGACY_MAXSAVEGAMES && n < saves.size(); ++n)
+    {
+        play.filenumbers[n] = saves[n].Slot;
+    }
 
-  // update the global savegameindex[] array for backward compatibilty
-  for (size_t n = 0; n < saves.size(); ++n)
-  {
-    play.filenumbers[n] = saves[n].Slot;
-  }
+    listbox->SetSvgIndex(true);
+}
 
-  listbox->SetSvgIndex(true);
+int ListBox_FillSaveGameList4(GUIListBox *listbox, int min_slot, int max_slot, int save_sort, int sort_dir)
+{
+    // Optionally override the max slot
+    max_slot = usetup.Override.MaxSaveSlot > 0 ? usetup.Override.MaxSaveSlot : max_slot;
 
-  if (saves.size() >= MAXSAVEGAMES)
-    return 1;
-  return 0;
+    if (!ValidateSaveSlotRange("ListBox.FillSaveGameList", min_slot, max_slot))
+    {
+        listbox->Clear();
+        return 0;
+    }
+
+    save_sort = ValidateSaveGameSort("ListBox.FillSaveGameList", save_sort);
+    sort_dir = ValidateSortDirection("ListBox.FillSaveGameList", sort_dir);
+
+    std::vector<SaveListItem> saves;
+    FillSaveList(saves, min_slot, max_slot, true, (ScriptSaveGameSortStyle)save_sort, (ScriptSortDirection)sort_dir);
+    std::sort(saves.rbegin(), saves.rend(), SaveItemCmpByTime()); // sort by time in reverse
+
+    // Fill in the list box
+    ListBox_FillSaveItems(listbox, saves);
+
+    // Returns TRUE if the whole range of slots is occupied
+    return saves.size() > static_cast<uint32_t>(max_slot - min_slot);
+}
+
+int ListBox_FillSaveGameList(GUIListBox *listbox)
+{
+    return ListBox_FillSaveGameList4(listbox, 0, LEGACY_TOP_LISTEDSAVESLOT, kScFileSort_Time, kScSortDescending);
+}
+
+int ListBox_FillSaveGameList2(GUIListBox *listbox, int min_slot, int max_slot)
+{
+    return ListBox_FillSaveGameList4(listbox, min_slot, max_slot, kScFileSort_Time, kScSortDescending);
+}
+
+void ListBox_FillSaveGameSlots(GUIListBox *listbox, void *src_arr, int save_sort, int sort_dir)
+{
+    const auto &hdr = CCDynamicArray::GetHeader(src_arr);
+    if (hdr.GetElemCount() == 0u)
+    {
+        debug_script_warn("ListBox.FillSaveGameSlots: empty array provided, skip execution");
+        return;
+    }
+
+    std::vector<int> slots;
+    const int *slots_arr = static_cast<const int*>(src_arr);
+    slots.insert(slots.end(), slots_arr, slots_arr + hdr.GetElemCount());
+
+    std::vector<SaveListItem> saves;
+    FillSaveList(slots, saves, true, (ScriptSaveGameSortStyle)save_sort, (ScriptSortDirection)sort_dir);
+    ListBox_FillSaveItems(listbox, saves);
 }
 
 int ListBox_GetItemAtLocation(GUIListBox *listbox, int x, int y) {
@@ -134,7 +164,7 @@ int ListBox_GetItemAtLocation(GUIListBox *listbox, int x, int y) {
   x = (x - listbox->X) - guis[listbox->ParentId].X;
   y = (y - listbox->Y) - guis[listbox->ParentId].Y;
 
-  if ((x < 0) || (y < 0) || (x >= listbox->Width) || (y >= listbox->Height))
+  if ((x < 0) || (y < 0) || (x >= listbox->GetWidth()) || (y >= listbox->GetHeight()))
     return -1;
   
   return listbox->GetItemAt(x, y);
@@ -143,8 +173,7 @@ int ListBox_GetItemAtLocation(GUIListBox *listbox, int x, int y) {
 char *ListBox_GetItemText(GUIListBox *listbox, int index, char *buffer) {
   if ((index < 0) || (index >= listbox->ItemCount))
     quit("!ListBoxGetItemText: invalid item specified");
-  strncpy(buffer, listbox->Items[index].GetCStr(), 198);
-  buffer[199] = 0;
+  snprintf(buffer, MAX_MAXSTRLEN, "%s", listbox->Items[index].GetCStr());
   return buffer;
 }
 
@@ -181,9 +210,7 @@ int ListBox_GetFont(GUIListBox *listbox) {
 }
 
 void ListBox_SetFont(GUIListBox *listbox, int newfont) {
-
-  if ((newfont < 0) || (newfont >= game.numfonts))
-    quit("!ListBox.Font: invalid font number.");
+  newfont = ValidateFontNumber("ListBox.Font", newfont);
 
   if (newfont != listbox->Font) {
     listbox->SetFont(newfont);
@@ -352,8 +379,6 @@ GUIListBox* is_valid_listbox (int guin, int objn) {
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
 
-extern ScriptString myScriptStringImpl;
-
 // int (GUIListBox *lbb, const char *text)
 RuntimeScriptValue Sc_ListBox_AddItem(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -372,10 +397,29 @@ RuntimeScriptValue Sc_ListBox_FillDirList(void *self, const RuntimeScriptValue *
     API_OBJCALL_VOID_POBJ(GUIListBox, ListBox_FillDirList, const char);
 }
 
-// int (GUIListBox *listbox)
+RuntimeScriptValue Sc_ListBox_FillDirList3(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_POBJ_PINT2(GUIListBox, ListBox_FillDirList3, const char);
+}
+
 RuntimeScriptValue Sc_ListBox_FillSaveGameList(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
     API_OBJCALL_INT(GUIListBox, ListBox_FillSaveGameList);
+}
+
+RuntimeScriptValue Sc_ListBox_FillSaveGameList2(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT_PINT2(GUIListBox, ListBox_FillSaveGameList2);
+}
+
+RuntimeScriptValue Sc_ListBox_FillSaveGameList4(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT_PINT4(GUIListBox, ListBox_FillSaveGameList4);
+}
+
+RuntimeScriptValue Sc_ListBox_FillSaveGameSlots(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_POBJ_PINT2(GUIListBox, ListBox_FillSaveGameSlots, void);
 }
 
 // int (GUIListBox *listbox, int x, int y)
@@ -576,7 +620,11 @@ void RegisterListBoxAPI()
         { "ListBox::AddItem^1",           API_FN_PAIR(ListBox_AddItem) },
         { "ListBox::Clear^0",             API_FN_PAIR(ListBox_Clear) },
         { "ListBox::FillDirList^1",       API_FN_PAIR(ListBox_FillDirList) },
+        { "ListBox::FillDirList^3",       API_FN_PAIR(ListBox_FillDirList3) },
         { "ListBox::FillSaveGameList^0",  API_FN_PAIR(ListBox_FillSaveGameList) },
+        { "ListBox::FillSaveGameList^2",  API_FN_PAIR(ListBox_FillSaveGameList2) },
+        { "ListBox::FillSaveGameList^4",  API_FN_PAIR(ListBox_FillSaveGameList4) },
+        { "ListBox::FillSaveGameSlots^3", API_FN_PAIR(ListBox_FillSaveGameSlots) },
         { "ListBox::GetItemAtLocation^2", API_FN_PAIR(ListBox_GetItemAtLocation) },
         { "ListBox::GetItemText^2",       API_FN_PAIR(ListBox_GetItemText) },
         { "ListBox::InsertItemAt^2",      API_FN_PAIR(ListBox_InsertItemAt) },

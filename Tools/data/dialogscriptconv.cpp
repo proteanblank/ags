@@ -2,18 +2,19 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "data/dialogscriptconv.h"
 #include <cctype>
 #include <regex>
+#include "util/memory_compat.h"
 #include "util/memorystream.h"
 #include "util/string_utils.h"
 #include "util/textstreamreader.h"
@@ -61,7 +62,7 @@ function _run_dialog_request(int parmtr) {\n\
 
 
 DialogScriptConverter::DialogScriptConverter(const String &dlg_script, const GameRef &game, const DialogRef &dialog)
-    : _dlgScript(dlg_script), _game(game), _dialog(dialog)
+    : _game(game), _dialog(dialog), _dlgScript(dlg_script)
 {
     _scriptName.Format("Dialog %d", _dialog.ID);
     _sayFnName = _game.Settings.SayFunction;
@@ -82,14 +83,14 @@ String DialogScriptConverter::Convert()
     _lineNumber = 0;
 
     // TODO: TextStreamReader now deletes stream in dtor, which is a design mistake
-    MemoryStream *mems = new MemoryStream((uint8_t*)_dlgScript.GetCStr(), _dlgScript.GetLength());
-    TextStreamReader sr(mems);
+    auto mems = std::make_unique<Stream>(
+        std::make_unique<MemoryStream>((uint8_t*)_dlgScript.GetCStr(), _dlgScript.GetLength()));
+    TextStreamReader sr(std::move(mems));
 
     String ags_script =
         String::FromFormat("function _run_dialog%d(int entryPoint) { \n", _dialog.ID);
 
-    String thisLine;
-    for (thisLine = sr.ReadLine(); !thisLine.IsEmpty(); thisLine = sr.ReadLine())
+    for (String thisLine = sr.ReadLine(); !sr.EOS(); thisLine = sr.ReadLine())
     {
         _lineNumber++;
         String s = ConvertLine(thisLine);
@@ -144,8 +145,8 @@ String DialogScriptConverter::ConvertLine(const String &line)
 String DialogScriptConverter::ConvertRealScript(const String &src_line)
 {
     String line = src_line;
-    size_t at = -1;
-    for (at = line.FindString("this", at + 1); at != -1;
+    
+    for (size_t at = line.FindString("this", 0); at != -1;
         at = line.FindString("this", at + 1))
     {
         if (std::isalnum(line[at - 1]) ||

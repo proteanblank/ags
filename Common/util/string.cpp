@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <stdio.h>
@@ -19,6 +19,7 @@
 #include "util/stream.h"
 #include "util/string.h"
 #include "util/string_compat.h"
+#include "utf8.h"
 
 namespace AGS
 {
@@ -50,6 +51,14 @@ String::String(String &&str)
     str._len = 0;
     str._buf = nullptr;
     str._bufHead = nullptr;
+}
+
+String::String(const std::string &str)
+    : _cstr(const_cast<char*>(""))
+    , _len(0)
+    , _buf(nullptr)
+{
+    *this = str;
 }
 
 String::String(const char *cstr)
@@ -87,7 +96,7 @@ bool String::IsNullOrSpace() const
         return true;
     for (const char *ptr = _cstr; *ptr; ++ptr)
     {
-        if (!std::isspace(*ptr))
+        if (!std::isspace(static_cast<uint8_t>(*ptr)))
             return false;
     }
     return true;
@@ -95,11 +104,8 @@ bool String::IsNullOrSpace() const
 
 void String::Read(Stream *in, size_t max_chars, bool stop_at_limit)
 {
+    assert(in);
     Empty();
-    if (!in)
-    {
-        return;
-    }
     if (max_chars == 0 && stop_at_limit)
     {
         return;
@@ -134,7 +140,8 @@ void String::Read(Stream *in, size_t max_chars, bool stop_at_limit)
 
 void String::ReadCount(Stream *in, size_t count)
 {
-    if (in && count > 0)
+    assert(in);
+    if (count > 0)
     {
         ReserveAndShift(false, count);
         count = in->Read(_cstr, count);
@@ -149,23 +156,19 @@ void String::ReadCount(Stream *in, size_t count)
 
 void String::Write(Stream *out) const
 {
-    if (out)
-    {
-        out->Write(_cstr, _len + 1);
-    }
+    assert(out);
+    out->Write(_cstr, _len + 1);
 }
 
 void String::WriteCount(Stream *out, size_t count) const
 {
-    if (out)
-    {
-        size_t str_out_len = std::min(count - 1, _len);
-        if (str_out_len > 0)
-            out->Write(_cstr, str_out_len);
-        size_t null_out_len = count - str_out_len;
-        if (null_out_len > 0)
-            out->WriteByteCount(0, null_out_len);
-    }
+    assert(out);
+    size_t str_out_len = std::min(count - 1, _len);
+    if (str_out_len > 0)
+        out->Write(_cstr, str_out_len);
+    size_t null_out_len = count - str_out_len;
+    if (null_out_len > 0)
+        out->WriteByteCount(0, null_out_len);
 }
 
 int String::Compare(const char *cstr) const
@@ -313,6 +316,32 @@ bool String::FindSection(char separator, size_t first, size_t last, bool exclude
     return false;
 }
 
+size_t String::FindSection(const String &section_text, char separator, bool case_insensitive) const
+{
+    if (!separator)
+    {
+        return NoIndex;
+    }
+
+    for (size_t prev_sep = 0u, sec_at = 0u, next_sep = FindChar(separator);
+        prev_sep != NoIndex;
+        prev_sep = next_sep,
+            sec_at = prev_sep != NoIndex ? prev_sep + 1 : NoIndex,
+            next_sep = prev_sep != NoIndex ? FindChar(separator, prev_sep + 1) : NoIndex)
+    {
+        // TODO: CompareMid (and similar methods) logic results in success if substring matches arg's beginning, while being shorter;
+        // perhaps introduce Equals() that compares with a substring and is strict about both lengths
+        const size_t sec_len = next_sep != String::NoIndex ? next_sep - sec_at : _len - sec_at;
+        if (section_text.GetLength() != sec_len)
+            continue;
+        if ((case_insensitive && CompareMidNoCase(section_text, sec_at, sec_len) == 0) ||
+            (!case_insensitive && CompareMid(section_text, sec_at, sec_len) == 0))
+            return sec_at;
+    }
+
+    return NoIndex; // was not found
+}
+
 int String::ToInt() const
 {
     return atoi(_cstr);
@@ -371,6 +400,20 @@ String String::Upper() const
 {
     String str = *this;
     str.MakeUpper();
+    return str;
+}
+
+String String::LowerUTF8() const
+{
+    String str = *this;
+    str.MakeLowerUTF8();
+    return str;
+}
+
+String String::UpperUTF8() const
+{
+    String str = *this;
+    str.MakeUpperUTF8();
     return str;
 }
 
@@ -721,6 +764,24 @@ void String::MakeUpper()
     }
 }
 
+void String::MakeLowerUTF8()
+{
+    if (_len != 0)
+    {
+        BecomeUnique();
+        Utf8::CStrToLower(_cstr);
+    }
+}
+
+void String::MakeUpperUTF8()
+{
+    if (_len != 0)
+    {
+        BecomeUnique();
+        Utf8::CStrToUpper(_cstr);
+    }
+}
+
 void String::MergeSequences(char c)
 {
     if (_len <= 1)
@@ -885,20 +946,24 @@ void String::SetAt(size_t index, char c)
 
 void String::SetString(const char *cstr, size_t length)
 {
-    if (cstr)
+    if (cstr && length > 0u)
     {
-        length = std::min(length, strlen(cstr));
-        if (length > 0)
-        {
-            ReserveAndShift(false, Math::Surplus(length, _len));
-            memcpy(_cstr, cstr, length);
-            _len = length;
-            _cstr[length] = 0;
-        }
-        else
-        {
-            Empty();
-        }
+        SetStringImpl(cstr, std::min(length, strlen(cstr)));
+    }
+    else
+    {
+        Empty();
+    }
+}
+
+void String::SetStringImpl(const char *cstr, size_t length)
+{
+    if (length > 0)
+    {
+        ReserveAndShift(false, Math::Surplus(length, _len));
+        memcpy(_cstr, cstr, length);
+        _len = length;
+        _cstr[length] = 0;
     }
     else
     {
@@ -925,7 +990,7 @@ void String::TrimLeft(char c)
         auto t = *trim_ptr;
         if (t == 0) { break; }
         if (c && t != c) { break; }
-        if (!c && !isspace(t)) { break; }
+        if (!c && !isspace(static_cast<uint8_t>(t))) { break; }
         trim_ptr++;
     }
     size_t trimmed = trim_ptr - _cstr;
@@ -950,7 +1015,7 @@ void String::TrimRight(char c)
         if (trim_ptr < _cstr) { break; }
         auto t = *trim_ptr;
         if (c && t != c) { break; }
-        if (!c && !isspace(t)) { break; }
+        if (!c && !isspace(static_cast<uint8_t>(t))) { break; }
         trim_ptr--;
     }
     size_t trimmed = (_cstr + _len - 1) - trim_ptr;
@@ -1087,6 +1152,12 @@ String &String::operator=(String &&str)
     str._len = 0;
     str._buf = nullptr;
     str._bufHead = nullptr;
+    return *this;
+}
+
+String &String::operator=(const std::string &str)
+{
+    SetStringImpl(str.c_str(), str.length());
     return *this;
 }
 

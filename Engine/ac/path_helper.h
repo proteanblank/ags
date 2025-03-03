@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -25,8 +25,10 @@
 #ifndef __AGS_EE_AC__PATHHELPER_H
 #define __AGS_EE_AC__PATHHELPER_H
 
+#include <memory>
 #include "util/file.h"
 #include "util/path.h"
+#include "util/stream.h"
 
 using AGS::Common::String;
 
@@ -88,7 +90,11 @@ struct ResolvedPath
 
     ResolvedPath() = default;
     ResolvedPath(const String &file, bool asset_mgr = false)
-        : FullPath(file), AssetMgr(asset_mgr) {}
+        : Loc(AGS::Common::Path::GetParent(file))
+        , FullPath(file)
+        , SubPath(AGS::Common::Path::GetFilename(file))
+        , AssetMgr(asset_mgr)
+    {}
     ResolvedPath(const FSLocation &loc, const String &file)
         : Loc(loc)
         , FullPath(AGS::Common::Path::ConcatPaths(loc.FullDir, file))
@@ -120,7 +126,7 @@ ResolvedPath ResolveWritePathAndCreateDirs(const String &sc_path);
 // for write access precreates subdirs.
 // Fills a full resolved path, if possible.
 // Returns open stream on success, and null on failure.
-AGS::Common::Stream *ResolveScriptPathAndOpen(const String &sc_path,
-    AGS::Common::FileOpenMode open_mode, AGS::Common::FileWorkMode work_mode);
+std::unique_ptr<AGS::Common::Stream> ResolveScriptPathAndOpen(const String &sc_path,
+    AGS::Common::FileOpenMode open_mode, AGS::Common::StreamMode work_mode);
 
 #endif // __AGS_EE_AC__PATHHELPER_H

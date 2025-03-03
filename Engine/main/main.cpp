@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <allegro.h> // allegro_exit
 #include "ac/common.h"
+#include "ac/game.h"
 #include "ac/gamesetup.h"
 #include "ac/gamestate.h"
 #include "core/def_version.h"
@@ -43,7 +44,7 @@
 #include "platform/windows/win_ex_handling.h"
 #endif
 
-#if AGS_PLATFORM_OS_WINDOWS && !AGS_PLATFORM_DEBUG
+#if AGS_PLATFORM_OS_WINDOWS && (!AGS_PLATFORM_DEBUG) && !AGS_PLATFORM_WINDOWS_MINGW
 #define USE_CUSTOM_EXCEPTION_HANDLER
 #endif
 
@@ -54,8 +55,6 @@ String appPath; // engine exe path
 String appDirectory; // engine dir
 String cmdGameDataPath; // game path received from cmdline
 
-extern GameState play;
-extern int our_eip;
 extern int editor_debugging_initialized;
 extern char editor_debugger_instance_token[100];
 
@@ -76,7 +75,7 @@ AGS::Common::Version EngineVersion;
 
 void main_init(int argc, char*argv[])
 {
-    our_eip = -999;
+    set_our_eip(-999);
 
     // Init libraries: set text encoding
     set_uformat(U_UTF8);
@@ -116,6 +115,7 @@ void main_print_help() {
 #if AGS_PLATFORM_OS_WINDOWS
            "  --console-attach             Write output to the parent process's console\n"
 #endif
+           "  --display <number>           1-based index of system display to start the game on.\n"
            "  --fps                        Display fps counter\n"
            "  --fullscreen                 Force display mode to fullscreen\n"
            "  --gfxdriver <id>             Request graphics driver. Available options:\n"
@@ -126,7 +126,7 @@ void main_print_help() {
 #endif
            "  --gfxfilter FILTER [SCALING]\n"
            "                               Request graphics filter. Available options:\n"           
-           "                                 none, linear, stdscale\n"
+           "                                 stdscale, linear\n"
            "                               (support may differ between graphic drivers);\n"
            "                               Scaling is specified as:\n"
            "                                 proportional, round, stretch,\n"
@@ -148,7 +148,7 @@ void main_print_help() {
            "                               (where \"console\" is internal engine's console)\n"
            "                               GROUPs are:\n"
            "                                 all, main (m), game (g), manobj (o),\n"
-           "                                 script (s), sprcache (c)\n"
+           "                                 plugin (p), script (s), sdl(l), sprcache (c)\n"
            "                               LEVELs are:\n"
            "                                 all, alert (1), fatal (2), error (3), warn (4),\n"
            "                                 info (5), debug (6)\n"
@@ -157,9 +157,8 @@ void main_print_help() {
            "                                 --log-file=all:warn\n"
            "  --log-file-path=PATH         Define custom path for the log file\n"
           //--------------------------------------------------------------------------------|
-#if AGS_PLATFORM_OS_WINDOWS
            "  --no-message-box             Disable alerts as modal message boxes\n"
-#endif
+           "  --no-plugins                 Disable plugin loading\n"
            "  --no-translation             Use default game language on start\n"
            "  --noiface                    Don't draw game GUI\n"
            "  --noscript                   Don't run room scripts; *WARNING:* unreliable\n"
@@ -218,13 +217,19 @@ static int main_process_cmdline(ConfigTree &cfg, int argc, char *argv[])
         {
             justDisplayVersion = true;
         }
-        else if (ags_stricmp(arg,"--updatereg") == 0)
+        else if (ags_stricmp(arg, "--updatereg") == 0)
+        {
             debug_flags |= DBG_REGONLY;
-        else if ((ags_stricmp(arg,"--startr") == 0) && (ee < argc-1)) {
+        }
+        else if ((ags_stricmp(arg,"--startr") == 0) && (ee < argc-1))
+        {
             override_start_room = atoi(argv[ee+1]);
             ee++;
         }
-        else if (ags_stricmp(arg,"--noexceptionhandler")==0) usetup.disable_exception_handling = true;
+        else if (ags_stricmp(arg, "--noexceptionhandler") == 0)
+        {
+            usetup.DisableExceptionHandling = true;
+        }
         else if (ags_stricmp(arg, "--setup") == 0)
         {
             justRunSetup = true;
@@ -243,35 +248,37 @@ static int main_process_cmdline(ConfigTree &cfg, int argc, char *argv[])
         }
         else if (ags_stricmp(arg, "--conf") == 0 && (argc > ee + 1))
         {
-            usetup.conf_path = argv[++ee];
+            usetup.UserConfPath = argv[++ee];
         }
         else if (ags_stricmp(arg, "--localuserconf") == 0)
         {
-            usetup.user_conf_dir = ".";
+            usetup.UserConfDir = ".";
         }
         else if ((ags_stricmp(arg, "--user-conf-dir") == 0) && (argc > ee + 1))
         {
-            usetup.user_conf_dir = argv[++ee];
+            usetup.UserConfDir = argv[++ee];
         }
-        else if (ags_stricmp(arg, "--runfromide") == 0 && (argc > ee + 4))
+        else if (ags_stricmp(arg, "--runfromide") == 0 && (argc > ee + 2))
         {
-            usetup.install_dir = argv[ee + 1];
-            usetup.opt_data_dir = argv[ee + 2];
-            usetup.opt_audio_dir = argv[ee + 3];
-            usetup.opt_voice_dir = argv[ee + 4];
-            ee += 4;
+            usetup.OptInstallDir = argv[ee + 1];
+            String opt_dirs      = argv[ee + 2];
+            parse_asset_dirs(opt_dirs, usetup.OptDataDirs);
+            ee += 2;
         }
-        else if (ags_stricmp(arg,"--takeover")==0) {
+        else if (ags_stricmp(arg,"--takeover")==0)
+        {
             if (argc < ee+2)
                 break;
             play.takeover_data = atoi (argv[ee + 1]);
-            strncpy (play.takeover_from, argv[ee + 2], 49);
-            play.takeover_from[49] = 0;
+            snprintf(play.takeover_from, sizeof(play.takeover_from), "%s", argv[ee + 2]);
             ee += 2;
         }
         else if (ags_stricmp(arg, "--clear-cache-on-room-change") == 0)
+        {
             cfg["misc"]["clear_cache_on_room_change"] = "1";
-        else if (ags_strnicmp(arg, "--tell", 6) == 0) {
+        }
+        else if (ags_strnicmp(arg, "--tell", 6) == 0)
+        {
             if (arg[6] == 0)
                 tellInfoKeys.insert(String("all"));
             else if (arg[6] == '-' && arg[7] != 0)
@@ -312,12 +319,16 @@ static int main_process_cmdline(ConfigTree &cfg, int argc, char *argv[])
                 }
             }
         }
+        else if ((ags_stricmp(arg, "--display") == 0) && (argc > ee + 1))
+            cfg["graphics"]["display"] = argv[++ee];
         else if ((ags_stricmp(arg, "--translation") == 0) && (argc > ee + 1))
             cfg["language"]["translation"] = argv[++ee];
         else if (ags_stricmp(arg, "--no-translation") == 0)
             cfg["language"]["translation"] = "";
         else if (ags_stricmp(arg, "--background") == 0)
             cfg["override"]["multitasking"] = "1";
+        else if (ags_stricmp(arg, "--no-plugins") == 0)
+            cfg["override"]["noplugins"] = "1";
         else if (ags_stricmp(arg, "--fps") == 0)
             cfg["misc"]["show_fps"] = "1";
         else if (ags_stricmp(arg, "--test") == 0) debug_flags |= DBG_DEBUGMODE;
@@ -366,7 +377,7 @@ static int main_process_cmdline(ConfigTree &cfg, int argc, char *argv[])
 int ags_entry_point(int argc, char *argv[]) { 
     main_init(argc, argv);
 
-#if AGS_PLATFORM_OS_WINDOWS
+#if AGS_PLATFORM_OS_WINDOWS && !AGS_PLATFORM_WINDOWS_MINGW
     setup_malloc_handling();
 #endif
     debug_flags=0;
@@ -396,8 +407,8 @@ int ags_entry_point(int argc, char *argv[]) {
     if (!justTellInfo && !hideMessageBoxes)
         platform->SetGUIMode(true);
 
-    init_debug(startup_opts, justTellInfo);
     Debug::Printf(kDbgMsg_Alert, get_engine_string());
+    init_debug(startup_opts, justTellInfo);
 
     appPath = Path::MakeAbsolutePath(platform->GetCommandArg(0));
     appDirectory = Path::GetDirectoryPath(appPath);
@@ -408,7 +419,7 @@ int ags_entry_point(int argc, char *argv[]) {
 
     int result = 0;
 #ifdef USE_CUSTOM_EXCEPTION_HANDLER
-    if (usetup.disable_exception_handling)
+    if (usetup.DisableExceptionHandling)
 #endif
     {
         result = initialize_engine(startup_opts);

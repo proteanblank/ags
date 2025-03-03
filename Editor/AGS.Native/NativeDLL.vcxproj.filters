@@ -52,9 +52,6 @@
     <ClCompile Include="agsnative.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="..\Native\color_native.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="NativeMethods.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -206,7 +203,10 @@
       <Filter>Scintilla\win32</Filter>
     </ClCompile>
     <ClCompile Include="SpriteFileWriter_NET.cpp">
-      <Filter>Header Files</Filter>
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="SpriteFileReader_NET.cpp">
+      <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -214,9 +214,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="NativeMethods.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Scripting.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\Native\ac\actiontype.h">
@@ -229,6 +226,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SpriteFileWriter_NET.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SpriteFileReader_NET.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="IScriptCompiler.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="CompiledScript.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

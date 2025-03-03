@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -47,9 +47,9 @@ struct AGS_PACKFILE_OBJ
     size_t asset_size = 0u;
     size_t remains = 0u;
 };
-// Creates PACKFILE stream from AGS asset.
+// Creates PACKFILE stream from AGS stream.
 // This function is supposed to be used only when you have to create Allegro
 // object, passing PACKFILE stream to constructor.
-PACKFILE *PackfileFromAsset(const AssetPath &path);
+PACKFILE *PackfileFromStream(std::unique_ptr<Stream> stream);
 
 #endif // __AGS_EE_AC__ASSETHELPER_H

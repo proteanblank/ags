@@ -2,22 +2,20 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "core/platform.h"
 
 #if AGS_PLATFORM_OS_ANDROID
 #include <ctype.h>
-#include <dirent.h>
 #include <stdio.h>
-#include <sys/stat.h> 
 #include <unistd.h>
 #include <SDL.h>
 #include <allegro.h>
@@ -25,14 +23,14 @@
 #include <android/log.h>
 #include <android/asset_manager_jni.h>
 #include "platform/base/agsplatformdriver.h"
+#include "platform/base/mobile_base.h"
 #include "ac/runtime_defines.h"
 #include "game/main_game_file.h"
-#include "platform/base/mobile_base.h"
-#include "plugin/agsplugin.h"
 #include "util/android_file.h"
+#include "util/directory.h"
+#include "util/file.h"
 #include "util/path.h"
 #include "util/string_compat.h"
-#include "util/file.h"
 
 using namespace AGS::Common;
 
@@ -46,12 +44,11 @@ struct AGSAndroid : AGSPlatformDriver {
   void ReadConfiguration(ConfigTree &cfg) override;
   int  CDPlayerCommand(int cmdd, int datt) override;
   void Delay(int millis) override;
-  void DisplayAlert(const char*, ...) override;
   FSLocation GetAllUsersDataDirectory() override;
   FSLocation GetUserSavedgamesDirectory() override;
   FSLocation GetUserGlobalConfigDirectory() override;
   FSLocation GetAppOutputDirectory() override;
-  unsigned long GetDiskFreeSpaceMB() override;
+  uint64_t GetDiskFreeSpaceMB(const String &path) override;
   eScriptSystemOSID GetSystemOSID() override;
   int  InitializeCDPlayer() override;
   void ShutdownCDPlayer() override;
@@ -79,11 +76,9 @@ const int CONFIG_IGNORE_ACSETUP = 0;
 const int CONFIG_CLEAR_CACHE = 1;
 const int CONFIG_AUDIO_ENABLED = 3;
 const int CONFIG_AUDIO_CACHESIZE = 5;
-const int CONFIG_VIDEO_FRAMEDROP = 8;
 const int CONFIG_GFX_RENDERER = 9;
 const int CONFIG_GFX_SMOOTHING = 10;
 const int CONFIG_GFX_SCALING = 11;
-const int CONFIG_GFX_SS = 12;
 const int CONFIG_ROTATION = 13;
 const int CONFIG_ENABLED = 14;
 const int CONFIG_DEBUG_FPS = 15;
@@ -141,16 +136,12 @@ JNIEXPORT jint JNICALL
       return setup.audio_enabled;
     case CONFIG_AUDIO_CACHESIZE:
       return setup.audio_cachesize;
-    case CONFIG_VIDEO_FRAMEDROP:
-      return setup.video_framedrop;
     case CONFIG_GFX_RENDERER:
       return setup.gfx_renderer;
     case CONFIG_GFX_SMOOTHING:
       return setup.gfx_smoothing;
     case CONFIG_GFX_SCALING:
       return setup.gfx_scaling;
-    case CONFIG_GFX_SS:
-      return setup.gfx_super_sampling;
     case CONFIG_GFX_SMOOTH_SPRITES:
       return setup.gfx_smooth_sprites;
     case CONFIG_ROTATION:
@@ -206,9 +197,6 @@ JNIEXPORT void JNICALL
     case CONFIG_AUDIO_CACHESIZE:
       setup.audio_cachesize = value;
       break;
-    case CONFIG_VIDEO_FRAMEDROP:
-      setup.video_framedrop = value;
-      break;
     case CONFIG_GFX_RENDERER:
       setup.gfx_renderer = value;
       break;
@@ -217,9 +205,6 @@ JNIEXPORT void JNICALL
       break;
     case CONFIG_GFX_SCALING:
       setup.gfx_scaling = value;
-      break;
-    case CONFIG_GFX_SS:
-      setup.gfx_super_sampling = value;
       break;
     case CONFIG_GFX_SMOOTH_SPRITES:
       setup.gfx_smooth_sprites = value;
@@ -272,33 +257,13 @@ JNIEXPORT void JNICALL
 JNIEXPORT jint JNICALL
   Java_uk_co_adventuregamestudio_runtime_PreferencesActivity_getAvailableTranslations(JNIEnv* env, jobject object, jobjectArray translations)
 {
-  int i = 0;
-  int length;
-  DIR* dir;
-  struct dirent* entry;
-  char buffer[200];
-
-  dir = opendir(".");
-  if (dir)
-  {
-    while ((entry = readdir(dir)) != 0)
+    int count = 0;
+    for (FindFile ff = FindFile::OpenFiles(".", "*.tra"); !ff.AtEnd(); ff.Next())
     {
-      length = strlen(entry->d_name);
-      if (length > 4)
-      {
-        if (ags_stricmp(&entry->d_name[length - 4], ".tra") == 0)
-        {
-          memset(buffer, 0, 200);
-          strncpy(buffer, entry->d_name, length - 4);
-          env->SetObjectArrayElement(translations, i, env->NewStringUTF(&buffer[0]));
-          i++;
-        }
-      }
+        String filename = Path::RemoveExtension(Path::GetFilename(ff.Current()));
+        env->SetObjectArrayElement(translations, count++, env->NewStringUTF(filename.GetCStr()));
     }
-    closedir(dir);
-  }
-
-  return i;
+    return count;
 }
 
 JNIEXPORT void JNICALL
@@ -418,20 +383,11 @@ int AGSAndroid::CDPlayerCommand(int cmdd, int datt) {
   return 1;
 }
 
-void AGSAndroid::DisplayAlert(const char *text, ...) {
-  char displbuf[2000];
-  va_list args;
-  va_start(args, text);
-  vsprintf(displbuf, text, args);
-  SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_WARNING, "AGSNative",displbuf, nullptr);
-  va_end(args);
-}
-
 void AGSAndroid::Delay(int millis) {
   usleep(millis * 1000);
 }
 
-unsigned long AGSAndroid::GetDiskFreeSpaceMB() {
+uint64_t AGSAndroid::GetDiskFreeSpaceMB(const String &path) {
   // placeholder
   return 100;
 }

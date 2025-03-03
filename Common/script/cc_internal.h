@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -18,7 +18,9 @@
 #ifndef __CC_INTERNAL_H
 #define __CC_INTERNAL_H
 
-#define SCOM_VERSION 90
+#define SCOM_VERSION_SECTIONS 83
+#define SCOM_VERSION_321  90
+#define SCOM_VERSION_CURRENT SCOM_VERSION_321
 #define SCOM_VERSIONSTR "0.90"
 
 // virtual CPU registers
@@ -120,12 +122,12 @@
 #define FIXUP_DATADATA    5     // globaldata[fixup] += &globaldata[0]
 #define FIXUP_STACK       6     // code[fixup] += &stack[0]
 
-
+#define BUILTIN_SYMBOL_PREFIX        "__Builtin_"
+// Built-in pseudo property DynamicArray.Length
+#define BUILTIN_DYNAMIC_ARRAY_LENGTH "__Builtin_DynamicArray::get_Length"
 
 // Script file signature
 extern const char scfilesig[5];
 #define ENDFILESIG 0xbeefcafe
-
-extern const char *ccCurScriptName; // name of currently compiling script
 
 #endif // __CC_INTERNAL_H

@@ -2,18 +2,19 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <cstdio>
 #include "ac/asset_helper.h"
 #include "ac/common.h"
+#include "ac/game.h"
 #include "ac/gamesetup.h"
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
@@ -30,7 +31,6 @@
 using namespace AGS::Common;
 
 extern GameSetupStruct game;
-extern GameState play;
 
 String trans_name;
 String trans_filename;
@@ -56,7 +56,7 @@ bool init_translation(const String &lang, const String &fallback_lang)
     trans_name = lang;
     trans_filename = String::FromFormat("%s.tra", lang.GetCStr());
 
-    std::unique_ptr<Stream> in(AssetMgr->OpenAsset(trans_filename));
+    auto in = AssetMgr->OpenAsset(trans_filename);
     if (in == nullptr)
     {
         Debug::Printf(kDbgMsg_Error, "Cannot open translation: %s", trans_filename.GetCStr());
@@ -66,12 +66,12 @@ bool init_translation(const String &lang, const String &fallback_lang)
     trans = Translation();
 
     // First test if the translation is meant for this game
-    HError err = TestTraGameID(game.uniqueid, game.gamename, in.get());
+    HError err = TestTraGameID(game.uniqueid, game.gamename, std::move(in));
     if (err)
     {
         // If successful, then read translation data fully
-        in.reset(AssetMgr->OpenAsset(trans_filename));
-        err = ReadTraData(trans, in.get());
+        in = AssetMgr->OpenAsset(trans_filename);
+        err = ReadTraData(trans, std::move(in));
     }
 
     // Process errors

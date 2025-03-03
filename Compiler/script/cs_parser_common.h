@@ -1,5 +1,20 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #ifndef __CS_PARSER_COMMON_H
 #define __CS_PARSER_COMMON_H
+
+#include <cctype>
 
 #define NEW_SCRIPT_TOKEN_PREFIX "\"__NEWSCRIPTSTART_"
 #define STRING_LENGTH 200   // how big to make strings
@@ -15,7 +30,6 @@
 #define NEST_DOSINGLE   9 // Single Do statement
 #define NEST_FOR        10 // For statement
 #define NEST_SWITCH     11 // Case block for a switch statement
-#define MAX_FUNCTIONS 2000
 #define MAX_FUNCTION_PARAMETERS 15
 #define SYM_GLOBALVAR 1
 #define SYM_LOCALVAR  2
@@ -103,9 +117,38 @@
 #define SFLG_HASDYNAMICARRAY  0x100000
 #define TEMP_SYMLIST_LENGTH 100
 
-extern int is_whitespace(char cht);
-extern void skip_whitespace(char**pttt);
-extern int is_digit(int chrac);
-extern int is_alphanum(int chrac);
+// Checks for whitespaces with exception for linebreaks
+inline bool IsWhitespaceNoLineBreak(int c)
+{
+    // space, tab, vertical tab, linefeed
+    return c == ' ' || c == '\t' || c == '\v' || c == '\f';
+}
+
+// Tells if this character may be a part of a script symbol
+inline bool IsScriptWordChar(char c)
+{
+    return ((c >= 'A') && (c <= 'Z')) ||
+           ((c >= 'a') && (c <= 'z')) ||
+           ((c >= '0') && (c <= '9')) ||
+           (c == '_');
+}
+
+// Returns a escaped character corresponding to the given character;
+// e.g. 'n'=>'\n', 't'=>'\t', etc.
+// If no such escaped character exists, then returns input character.
+inline char GetEscapedChar(char c)
+{
+    switch (c)
+    {
+    case 'a': return '\a';
+    case 'b': return '\b';
+    case 'f': return '\f';
+    case 'n': return '\n';
+    case 'r': return '\r';
+    case 't': return '\t';
+    case 'v': return '\v';
+    default: return c;
+    }
+}
 
 #endif // __CS_PARSER_COMMON_H

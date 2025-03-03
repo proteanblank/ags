@@ -58,6 +58,7 @@ target_sources(common
     debug/assert.h
     debug/debugmanager.cpp
     debug/debugmanager.h
+    debug/messagebuffer.h
     debug/out.h
     debug/outputhandler.h
     font/agsfontrenderer.h
@@ -89,7 +90,11 @@ target_sources(common
     gfx/allegrobitmap.h
     gfx/bitmap.cpp
     gfx/bitmap.h
+    gfx/bitmapdata.cpp
+    gfx/bitmapdata.h
     gfx/gfx_def.h
+    gfx/image_file.cpp
+    gfx/image_file.h
     gui/guibutton.cpp
     gui/guibutton.h
     gui/guidefines.h
@@ -116,8 +121,6 @@ target_sources(common
     util/aasset_stream.h
     util/android_file.cpp
     util/android_file.h
-    util/alignedstream.cpp
-    util/alignedstream.h
     util/bbop.h
     util/cmdlineopts.cpp
     util/cmdlineopts.h
@@ -125,8 +128,6 @@ target_sources(common
     util/compress.h
     util/data_ext.cpp
     util/data_ext.h
-    util/datastream.cpp
-    util/datastream.h
     util/directory.cpp
     util/directory.h
     util/error.h
@@ -136,7 +137,6 @@ target_sources(common
     util/filestream.h
     util/geometry.cpp
     util/geometry.h
-    util/iagsstream.h
     util/ini_util.cpp
     util/ini_util.h
     util/inifile.cpp
@@ -153,10 +153,9 @@ target_sources(common
     util/path.cpp
     util/path_ex.cpp
     util/path.h
-    util/proxystream.cpp
-    util/proxystream.h
     util/resourcecache.h
     util/scaling.h
+    util/smart_ptr.h
     util/stdio_compat.c
     util/stdio_compat.h
     util/stream.cpp
@@ -186,7 +185,7 @@ target_sources(common
 )
 
 target_link_libraries(common PUBLIC
-        ${SDL2_LIBRARY} ${SDL2_LIBRARIES}
+        ${SDL2_LIBRARY}
         Allegro::Allegro
         AlFont::AlFont
         AAStr::AAStr
@@ -203,7 +202,7 @@ if(ANDROID)
 endif()
 
 # NOTE: You can optionally create case sensitive filesystems on Macos and Windows now.
-if (LINUX)
+if (LINUX OR ANDROID)
     target_compile_definitions(common PRIVATE AGS_CASE_SENSITIVE_FILESYSTEM)
 endif()
 
@@ -238,6 +237,7 @@ if(AGS_TESTS)
         test/path_test.cpp
         test/stream_test.cpp
         test/string_test.cpp
+        test/utf8_test.cpp
         test/version_test.cpp
     )
     set_target_properties(common_test PROPERTIES

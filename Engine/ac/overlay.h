@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -18,6 +18,7 @@
 #ifndef __AGS_EE_AC__OVERLAY_H
 #define __AGS_EE_AC__OVERLAY_H
 #include <vector>
+#include "ac/display.h"
 #include "ac/screenoverlay.h"
 #include "ac/dynobj/scriptoverlay.h"
 #include "util/geometry.h"
@@ -26,7 +27,8 @@ namespace AGS { namespace Common { class Bitmap; } }
 using namespace AGS; // FIXME later
 
 void Overlay_Remove(ScriptOverlay *sco);
-void Overlay_SetText(ScriptOverlay *scover, int wii, int fontid, int clr, const char*text);
+void Overlay_SetText(ScriptOverlay *scover, int width, int fontid, int text_color, const char *text);
+void Overlay_SetText(ScreenOverlay &over, int x, int y, int width, int fontid, int text_color, const char *text);
 int  Overlay_GetX(ScriptOverlay *scover);
 void Overlay_SetX(ScriptOverlay *scover, int newx);
 int  Overlay_GetY(ScriptOverlay *scover);
@@ -36,7 +38,7 @@ ScriptOverlay* Overlay_CreateGraphical(int x, int y, int slot, bool transparent 
 ScriptOverlay* Overlay_CreateTextual(int x, int y, int width, int font, int colour, const char* text);
 ScreenOverlay *Overlay_CreateGraphicCore(bool room_layer, int x, int y, int slot, bool transparent = true, bool clone = false);
 ScreenOverlay *Overlay_CreateTextCore(bool room_layer, int x, int y, int width, int font, int text_color,
-    const char *text, int disp_type, int allow_shrink);
+    const char *text, int over_type, DisplayTextStyle style, DisplayTextShrink allow_shrink);
 
 ScreenOverlay *get_overlay(int type);
 // Calculates overlay position in its respective layer (screen or room)
@@ -51,7 +53,10 @@ void remove_all_overlays();
 ScriptOverlay* create_scriptoverlay(ScreenOverlay &over, bool internal_ref = false);
 // Restores overlays, e.g. after restoring a game save
 void restore_overlays();
-
+// Returns a ref to overlays list, useful for iterating over them
+// FIXME: this should be a CONST ref (if any at all), strictly for reading,
+// but unfortunately some batch operations on overlays are currently performed
+// by external code...
 std::vector<ScreenOverlay> &get_overlays();
 
 

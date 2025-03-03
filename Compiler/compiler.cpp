@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <utility>
@@ -88,7 +88,7 @@ void CompilerOptions::PrintToStdout() const {
     printf("ScriptCompatLevel: %s\n", ScriptAPI.ScriptCompatLevel.c_str());
     printf("Flags: ");
     if (Flags.ExportAll) printf("ExportAll; ");
-    if (Flags.ShowWarnings) printf("ShowWarnings; ");
+    //if (Flags.ShowWarnings) printf("ShowWarnings; ");
     if (Flags.LineNumbers) printf("LineNumbers; ");
     if (Flags.AutoImport) printf("AutoImport; ");
     if (Flags.DebugRun) printf("DebugRun; ");
@@ -173,8 +173,6 @@ int Compile(const CompilerOptions& comp_opts)
     //-----------------------------------------------------------------------//
     ccSetSoftwareVersion(comp_opts.Version.c_str());
 
-    ccSetOption(SCOPT_SHOWWARNINGS, comp_opts.Flags.ShowWarnings);
-
     ccSetOption(SCOPT_EXPORTALL, comp_opts.Flags.ExportAll);
     ccSetOption(SCOPT_LINENUMBERS, comp_opts.Flags.LineNumbers);
     // now deprecated, was used to prevent override imports in the room script
@@ -207,9 +205,8 @@ int Compile(const CompilerOptions& comp_opts)
         String headername = Path::GetFilename(header.c_str());
         headername = Path::RemoveExtension(headername);
 
-        TextStreamReader sr(in.get());
+        TextStreamReader sr(std::move(in));
         heads.emplace_back(sr.ReadAll(), headername);
-        sr.ReleaseStream();
     }
 
     String script_input;
@@ -228,9 +225,8 @@ int Compile(const CompilerOptions& comp_opts)
         std::cerr << "Error: failed to open script for reading: " << src << std::endl;
         return -1;
     }
-    TextStreamReader sr(in.get());
+    TextStreamReader sr(std::move(in));
     script_input = sr.ReadAll();
-    sr.ReleaseStream();
 
     //-----------------------------------------------------------------------//
     // Preprocess headers and set them for use when compiling

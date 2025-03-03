@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -28,7 +28,6 @@
 using namespace AGS::Common;
 
 extern RoomStruct thisroom;
-extern GameState play;
 extern GameSetupStruct game;
 extern int displayed_room;
 extern RoomStatus*croom;
@@ -62,7 +61,7 @@ int get_area_scaling (int onarea, int xx, int yy) {
     xx = room_to_mask_coord(xx);
     yy = room_to_mask_coord(yy);
 
-    if ((onarea >= 0) && (onarea <= MAX_WALK_AREAS) &&
+    if ((onarea >= 0) && (onarea < MAX_WALK_AREAS) &&
         (thisroom.WalkAreas[onarea].ScalingNear != NOT_VECTOR_SCALED)) {
             // We have vector scaling!
             // In case the character is off the screen, limit the Y co-ordinate
@@ -88,7 +87,7 @@ int get_area_scaling (int onarea, int xx, int yy) {
             }
             zoom_level += 100;
     }
-    else if ((onarea >= 0) & (onarea <= MAX_WALK_AREAS))
+    else if ((onarea >= 0) & (onarea < MAX_WALK_AREAS))
         zoom_level = thisroom.WalkAreas[onarea].ScalingFar + 100;
 
     if (zoom_level == 0)
@@ -220,7 +219,7 @@ int get_walkable_area_at_location(int xx, int yy) {
             onarea = 0;
     }
 
-    return onarea;
+    return (onarea >= 0 && onarea < MAX_WALK_AREAS) ? onarea : 0;
 }
 
 int get_walkable_area_at_character (int charnum) {

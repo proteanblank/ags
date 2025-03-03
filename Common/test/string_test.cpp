@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include "gtest/gtest.h"
 #include "util/string.h"
 
@@ -187,6 +200,28 @@ TEST(String, Section) {
     ASSERT_TRUE(from == 1 && to == 5);
     ASSERT_TRUE(s.FindSection('_', 1, 1, false, false, from, to));
     ASSERT_TRUE(from == 0 && to == 5);
+}
+
+
+TEST(String, FindSection) {
+    String s1 = "";
+    ASSERT_TRUE(s1.FindSection("", ',') == 0);
+    ASSERT_TRUE(s1.FindSection("value", ',') == String::NoIndex);
+
+    String s2 = ",abc,def";
+    ASSERT_TRUE(s2.FindSection("", ',') == 0);
+    ASSERT_TRUE(s2.FindSection("abc", ',') == 1);
+    ASSERT_TRUE(s2.FindSection("def", ',') == 5);
+    ASSERT_TRUE(s1.FindSection("value", ',') == String::NoIndex);
+
+    String s3 = "abc,def,";
+    ASSERT_TRUE(s3.FindSection("abc", ',') == 0);
+    ASSERT_TRUE(s3.FindSection("def", ',') == 4);
+    ASSERT_TRUE(s3.FindSection("", ',') == 8);
+    ASSERT_TRUE(s1.FindSection("value", ',') == String::NoIndex);
+
+    String s4 = "abc,def,xyz";
+    ASSERT_TRUE(s4.FindSection("", ',') == String::NoIndex);
 }
 
 TEST(String, Append) {

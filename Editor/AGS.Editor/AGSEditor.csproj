@@ -30,33 +30,6 @@
     <NuGetPackageImportStamp>
     </NuGetPackageImportStamp>
   </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>full</DebugType>
-    <Optimize>false</Optimize>
-    <OutputPath>..\..\Solutions\.build\Debug\</OutputPath>
-    <DefineConstants>TRACE;DEBUG</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <GenerateSerializationAssemblies>Off</GenerateSerializationAssemblies>
-    <PlatformTarget>x86</PlatformTarget>
-    <LangVersion>6</LangVersion>
-    <Prefer32Bit>false</Prefer32Bit>
-  </PropertyGroup>
-  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
-    <DebugType>none</DebugType>
-    <Optimize>true</Optimize>
-    <OutputPath>..\..\Solutions\.build\Release\</OutputPath>
-    <DefineConstants>TRACE</DefineConstants>
-    <ErrorReport>prompt</ErrorReport>
-    <WarningLevel>4</WarningLevel>
-    <DebugSymbols>false</DebugSymbols>
-    <PlatformTarget>x86</PlatformTarget>
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
-    <LangVersion>6</LangVersion>
-    <Prefer32Bit>false</Prefer32Bit>
-  </PropertyGroup>
   <PropertyGroup>
     <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
@@ -66,16 +39,72 @@
   <PropertyGroup>
     <AssemblyOriginatorKeyFile>AGSEditor.snk</AssemblyOriginatorKeyFile>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>..\..\Solutions\.build\x64\Debug\</OutputPath>
+    <DefineConstants>TRACE;DEBUG</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateSerializationAssemblies>Off</GenerateSerializationAssemblies>
+    <LangVersion>6</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>..\..\Solutions\.build\x64\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <PlatformTarget>x64</PlatformTarget>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <LangVersion>6</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>..\..\Solutions\.build\Debug\</OutputPath>
+    <DefineConstants>TRACE;DEBUG</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateSerializationAssemblies>Off</GenerateSerializationAssemblies>
+    <LangVersion>6</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x86'">
+    <OutputPath>..\..\Solutions\.build\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <PlatformTarget>x86</PlatformTarget>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <LangVersion>6</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+  </PropertyGroup>
   <ItemGroup>
-    <Reference Include="AGS.Native, Version=0.0.0.0, Culture=neutral, processorArchitecture=x86">
+    <Reference Condition="'$(Platform)' == 'x86'" Include="AGS.Native, Version=0.0.0.0, Culture=neutral, processorArchitecture=x86">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\References\AGS.Native.dll</HintPath>
     </Reference>
-    <Reference Include="irrKlang.NET4">
+    <Reference Condition="'$(Platform)' == 'x64'" Include="AGS.Native, Version=0.0.0.0, Culture=neutral, processorArchitecture=x64">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\References\x64\AGS.Native.dll</HintPath>
+    </Reference>
+    <Reference Condition="'$(Platform)' == 'x86'" Include="irrKlang.NET4">
       <HintPath>..\References\irrKlang.NET4.dll</HintPath>
     </Reference>
-    <Reference Include="Magick.NET-Q8-x86, Version=7.10.0.0, Culture=neutral, PublicKeyToken=2004825badfa91ec, processorArchitecture=x86">
-      <HintPath>..\..\Solutions\packages\Magick.NET-Q8-x86.7.10.0\lib\net40\Magick.NET-Q8-x86.dll</HintPath>
+    <Reference Include="Magick.NET-Q8-AnyCPU, Version=7.10.0.0, Culture=neutral, PublicKeyToken=2004825badfa91ec, processorArchitecture=MSIL">
+      <HintPath>..\..\Solutions\packages\Magick.NET-Q8-AnyCPU.7.10.0\lib\net40\Magick.NET-Q8-AnyCPU.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
+    <Reference Condition="'$(Platform)' == 'x64'" Include="irrKlang.NET4">
+      <HintPath>..\References\x64\irrKlang.NET4.dll</HintPath>
     </Reference>
     <Reference Include="Newtonsoft.Json, Version=13.0.0.0, Culture=neutral, PublicKeyToken=30ad4fe6b2a6aeed, processorArchitecture=MSIL">
       <HintPath>..\..\Solutions\packages\Newtonsoft.Json.13.0.1\lib\net45\Newtonsoft.Json.dll</HintPath>
@@ -106,8 +135,6 @@
     </Compile>
     <Compile Include="ColorThemes\Controls\MainMenuColorTable.cs" />
     <Compile Include="ColorThemes\Controls\ToolStripColorTable.cs" />
-    <Compile Include="Components\CharacterIDChangedEventArgs.cs" />
-    <Compile Include="Components\CharacterRoomChangedEventArgs.cs" />
     <Compile Include="Components\CharactersComponent.cs" />
     <Compile Include="Components\CursorsComponent.cs" />
     <Compile Include="Components\DebugLogComponent.cs" />
@@ -122,7 +149,24 @@
     <Compile Include="Components\SpriteManagerComponent.cs" />
     <Compile Include="Components\TextParserComponent.cs" />
     <Compile Include="Components\ViewsComponent.cs" />
+    <Compile Include="Config\ConfigUtils.cs" />
+    <Compile Include="Entities\CharacterIDChangedEventArgs.cs" />
+    <Compile Include="Entities\CharacterRoomChangedEventArgs.cs" />
+    <Compile Include="Entities\CompilationStepArgs.cs" />
+    <Compile Include="Entities\CompileWarningEx.cs" />
+    <Compile Include="Entities\TreeItemDragEventArgs.cs" />
+    <Compile Include="Entities\ExistingScriptHeaderToAdd.cs" />
+    <Compile Include="Entities\ExistingFileToAdd.cs" />
+    <Compile Include="Config\IObjectConfig.cs" />
+    <Compile Include="Config\IObjectConfigurable.cs" />
+    <Compile Include="Config\ObjectConfigJson.cs" />
     <Compile Include="Entities\LogBufferEventArgs.cs" />
+    <Compile Include="Entities\MultiSelectAction.cs" />
+    <Compile Include="Entities\OutputCreationStepArgs.cs" />
+    <Compile Include="Entities\ScriptModuleDef.cs" />
+    <Compile Include="Entities\GenericMessagesArgs.cs" />
+    <Compile Include="Entities\TreeItemTryDragEventArgs.cs" />
+    <Compile Include="Enums\TargetDropZone.cs" />
     <Compile Include="GUI\AssignToView.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -136,7 +180,6 @@
       <DependentUpon>CustomPropertiesEditor.cs</DependentUpon>
     </Compile>
     <Compile Include="GUI\CustomPropertyBag.cs" />
-    <Compile Include="GUI\CustomPropertyDescriptor.cs" />
     <Compile Include="GUI\CustomPropertySchemaEditor.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -161,11 +204,20 @@
     <Compile Include="GUI\ImportTTFDialog.Designer.cs">
       <DependentUpon>ImportTTFDialog.cs</DependentUpon>
     </Compile>
+    <Compile Include="GUI\LineInBetween.cs">
+      <SubType>Component</SubType>
+    </Compile>
     <Compile Include="GUI\LogPanel.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="GUI\LogPanel.Designer.cs">
       <DependentUpon>LogPanel.cs</DependentUpon>
+    </Compile>
+    <Compile Include="GUI\MultilineStringEditorDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="GUI\MultilineStringEditorDialog.Designer.cs">
+      <DependentUpon>MultilineStringEditorDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="GUI\NumberEntryWithInfoDialog.cs">
       <SubType>Form</SubType>
@@ -173,11 +225,18 @@
     <Compile Include="GUI\NumberEntryWithInfoDialog.Designer.cs">
       <DependentUpon>NumberEntryWithInfoDialog.cs</DependentUpon>
     </Compile>
+    <Compile Include="GUI\OutputPanelItem.cs" />
     <Compile Include="GUI\Progress.cs">
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="GUI\Progress.Designer.cs">
       <DependentUpon>Progress.cs</DependentUpon>
+    </Compile>
+    <Compile Include="GUI\ReplaceFolderDialog.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="GUI\ReplaceFolderDialog.Designer.cs">
+      <DependentUpon>ReplaceFolderDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="GUI\SplashScreen.cs">
       <SubType>Form</SubType>
@@ -191,6 +250,12 @@
     <Compile Include="GUI\SpriteExportDialog.Designer.cs">
       <DependentUpon>SpriteExportDialog.cs</DependentUpon>
     </Compile>
+    <Compile Include="GUI\WizardIntroPage.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="GUI\WizardIntroPage.Designer.cs">
+      <DependentUpon>WizardIntroPage.cs</DependentUpon>
+    </Compile>
     <Compile Include="GUI\TextEntryDialog.cs">
       <SubType>Form</SubType>
     </Compile>
@@ -202,6 +267,10 @@
     </Compile>
     <Compile Include="GUI\SpriteChooser.Designer.cs">
       <DependentUpon>SpriteChooser.cs</DependentUpon>
+    </Compile>
+    <Compile Include="GUI\TreeViewExtensions.cs" />
+    <Compile Include="GUI\TreeViewWithDragDrop.cs">
+      <SubType>Component</SubType>
     </Compile>
     <Compile Include="GUI\ViewChooser.cs">
       <SubType>Form</SubType>
@@ -218,12 +287,15 @@
       <DependentUpon>NumberEntryDialog.cs</DependentUpon>
     </Compile>
     <Compile Include="Entities\LogBuffer.cs" />
+    <Compile Include="Panes\Room\RoomEditFilters\BaseRoomEditorFilter.cs" />
+    <Compile Include="Panes\Room\RoomEditFilters\BaseThingEditorFilter.cs" />
     <Compile Include="Panes\Room\RoomEditFilters\CharactersEditorFilter.cs" />
     <Compile Include="Panes\Room\RoomEditFilters\DesignTimeProperties.cs" />
     <Compile Include="Panes\Room\RoomEditFilters\RoomFilterContextMenuArgs.cs" />
     <Compile Include="Panes\ScriptEditorBase.cs">
       <SubType>UserControl</SubType>
     </Compile>
+    <Compile Include="Panes\ViewLoopContextMenuArgs.cs" />
     <Compile Include="Panes\ZoomTrackbar.cs">
       <SubType>UserControl</SubType>
     </Compile>
@@ -370,8 +442,18 @@
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="Utils\AndroidUtilities.cs" />
     <Compile Include="Utils\ArgumentBuilder.cs" />
+    <Compile Include="Utils\BitmapExtensions.cs" />
+    <Compile Include="Utils\CommandLineOptions.cs" />
     <Compile Include="Utils\ConcurrentCircularBuffer.cs" />
+    <Compile Include="Utils\Debounce.cs" />
     <Compile Include="Utils\MathExtra.cs" />
+    <Compile Include="Utils\TickOnceTimer.cs">
+      <SubType>Component</SubType>
+    </Compile>
+    <Compile Include="Utils\ToolStripExtensions.cs" />
+    <Compile Include="Utils\ScriptFileUtilities.cs" />
+    <Compile Include="Utils\ScriptGeneration.cs" />
+    <Compile Include="Utils\StdConsoleWriter.cs" />
     <Compile Include="Utils\Validation.cs" />
     <EmbeddedResource Include="GUI\frmMain.resx">
       <SubType>Designer</SubType>
@@ -386,6 +468,9 @@
     <EmbeddedResource Include="GUI\LogPanel.resx">
       <DependentUpon>LogPanel.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="GUI\MultilineStringEditorDialog.resx">
+      <DependentUpon>MultilineStringEditorDialog.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="GUI\NumberEntryWithInfoDialog.resx">
       <DependentUpon>NumberEntryWithInfoDialog.cs</DependentUpon>
       <SubType>Designer</SubType>
@@ -393,8 +478,14 @@
     <EmbeddedResource Include="GUI\Progress.resx">
       <DependentUpon>Progress.cs</DependentUpon>
     </EmbeddedResource>
+    <EmbeddedResource Include="GUI\ReplaceFolderDialog.resx">
+      <DependentUpon>ReplaceFolderDialog.cs</DependentUpon>
+    </EmbeddedResource>
     <EmbeddedResource Include="GUI\SpriteExportDialog.resx">
       <DependentUpon>SpriteExportDialog.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="GUI\WizardIntroPage.resx">
+      <DependentUpon>WizardIntroPage.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Panes\BigPropertySheet.resx">
       <SubType>Designer</SubType>
@@ -618,11 +709,21 @@
     <Content Include="..\License.txt">
       <Link>License.txt</Link>
     </Content>
-    <Content Include="..\References\ikpMP3.dll">
+    <Content Condition="'$(Platform)' == 'x86'" Include="..\References\ikpMP3.dll">
+      <Link>ikpMP3.dll</Link>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+    <Content Condition="'$(Platform)' == 'x64'" Include="..\References\x64\ikpMP3.dll">
       <Link>ikpMP3.dll</Link>
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </Content>
     <Content Include="agsico-1.ico" />
+    <EmbeddedResource Include="Resources\wizard-bg.png" />
+    <EmbeddedResource Include="Resources\wizard-cup.png" />
+    <EmbeddedResource Include="Resources\menu_build_openfolder.over.ico" />
+    <EmbeddedResource Include="Resources\menu_file_openfolder.ico" />
+    <EmbeddedResource Include="Resources\menu_file_openfolder.over.ico" />
+    <EmbeddedResource Include="Resources\menu_build_openfolder.ico" />
     <EmbeddedResource Include="Resources\log_autoscroll.ico" />
     <EmbeddedResource Include="Resources\log_quiet.ico" />
     <EmbeddedResource Include="Resources\log_run.ico" />
@@ -694,8 +795,8 @@
     <EmbeddedResource Include="GUI\SplashPage.resx">
       <DependentUpon>SplashPage.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource Include="GUI\StartNewGameWizardPage2.resx">
-      <DependentUpon>StartNewGameWizardPage2.cs</DependentUpon>
+    <EmbeddedResource Include="GUI\StartNewGameDetailsPage.resx">
+      <DependentUpon>StartNewGameDetailsPage.cs</DependentUpon>
       <SubType>Designer</SubType>
     </EmbeddedResource>
     <EmbeddedResource Include="GUI\FindReplaceDialog.resx">
@@ -710,9 +811,9 @@
       <SubType>Designer</SubType>
       <DependentUpon>RoomMessagesEditor.cs</DependentUpon>
     </EmbeddedResource>
-    <EmbeddedResource Include="GUI\StartNewGameWizardPage.resx">
+    <EmbeddedResource Include="GUI\StartNewGameTemplatesPage.resx">
       <SubType>Designer</SubType>
-      <DependentUpon>StartNewGameWizardPage.cs</DependentUpon>
+      <DependentUpon>StartNewGameTemplatesPage.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="GUI\WelcomeScreen.resx">
       <SubType>Designer</SubType>
@@ -981,7 +1082,6 @@
     <Compile Include="Enums\DebugState.cs" />
     <Compile Include="Enums\FunctionCallType.cs" />
     <Compile Include="Entities\RecentlyEditedGame.cs" />
-    <Compile Include="Enums\ZoomToFileZoomType.cs" />
     <Compile Include="Factory.cs" />
     <Compile Include="GIFLoader\GifDecoder.cs" />
     <Compile Include="GUI\AboutDialog.cs">
@@ -1091,11 +1191,11 @@
     <Compile Include="GUI\AutoNumberSpeechWizardPage.Designer.cs">
       <DependentUpon>AutoNumberSpeechWizardPage.cs</DependentUpon>
     </Compile>
-    <Compile Include="GUI\StartNewGameWizardPage2.cs">
+    <Compile Include="GUI\StartNewGameDetailsPage.cs">
       <SubType>UserControl</SubType>
     </Compile>
-    <Compile Include="GUI\StartNewGameWizardPage2.Designer.cs">
-      <DependentUpon>StartNewGameWizardPage2.cs</DependentUpon>
+    <Compile Include="GUI\StartNewGameDetailsPage.Designer.cs">
+      <DependentUpon>StartNewGameDetailsPage.cs</DependentUpon>
     </Compile>
     <Compile Include="GUI\FindReplaceDialog.cs">
       <SubType>Form</SubType>
@@ -1116,11 +1216,11 @@
     <Compile Include="GUI\RoomMessagesEditor.Designer.cs">
       <DependentUpon>RoomMessagesEditor.cs</DependentUpon>
     </Compile>
-    <Compile Include="GUI\StartNewGameWizardPage.cs">
+    <Compile Include="GUI\StartNewGameTemplatesPage.cs">
       <SubType>UserControl</SubType>
     </Compile>
-    <Compile Include="GUI\StartNewGameWizardPage.Designer.cs">
-      <DependentUpon>StartNewGameWizardPage.cs</DependentUpon>
+    <Compile Include="GUI\StartNewGameTemplatesPage.Designer.cs">
+      <DependentUpon>StartNewGameTemplatesPage.cs</DependentUpon>
     </Compile>
     <Compile Include="GUI\WelcomeScreen.cs">
       <SubType>Form</SubType>
@@ -1192,11 +1292,25 @@
     <PostBuildEvent>
     </PostBuildEvent>
   </PropertyGroup>
-  <Import Project="..\..\Solutions\packages\Magick.NET-Q8-x86.7.10.0\build\net40\Magick.NET-Q8-x86.targets" Condition="Exists('..\..\Solutions\packages\Magick.NET-Q8-x86.7.10.0\build\net40\Magick.NET-Q8-x86.targets')" />
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('..\..\Solutions\packages\Magick.NET-Q8-x86.7.10.0\build\net40\Magick.NET-Q8-x86.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\..\Solutions\packages\Magick.NET-Q8-x86.7.10.0\build\net40\Magick.NET-Q8-x86.targets'))" />
-  </Target>
+  <ItemGroup Condition="'$(OS)' != 'Unix' And $(Platform) == 'x86'">
+    <NativeDLL Include="..\..\Solutions\packages\Magick.NET-Q8-AnyCPU.7.10.0\runtimes\win-x86\native\*.Native.dll" />
+    <Content Include="@(NativeDLL)">
+      <Link>%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="'$(OS)' != 'Unix' And $(Platform) == 'x64'">
+    <NativeDLL Include="..\..\Solutions\packages\Magick.NET-Q8-AnyCPU.7.10.0\runtimes\win-x64\native\*.Native.dll" />
+    <Content Include="@(NativeDLL)">
+      <Link>%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup Condition="'$(OS)' == 'Unix'">
+    <NativeDLL Include="$(MSBuildThisFileDirectory)\..\..\runtimes\**\*.Native.dll.so" />
+    <Content Include="@(NativeDLL)">
+      <Copy>%(FileName)%(Extension)</Copy>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 </Project>

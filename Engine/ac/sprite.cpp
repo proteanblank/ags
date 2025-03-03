@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/common.h"
@@ -17,7 +17,6 @@
 #include "ac/sprite.h"
 #include "ac/system.h"
 #include "platform/base/agsplatformdriver.h"
-#include "plugin/agsplugin_evts.h"
 #include "plugin/plugin_engine.h"
 #include "gfx/bitmap.h"
 #include "gfx/graphicsdriver.h"
@@ -26,7 +25,7 @@ using namespace AGS::Common;
 using namespace AGS::Engine;
 
 extern GameSetupStruct game;
-extern int our_eip, eip_guinum, eip_guiobj;
+extern int eip_guinum, eip_guiobj;
 extern RGB palette[256];
 extern IGraphicsDriver *gfxDriver;
 extern AGSPlatformDriver *platform;
@@ -40,70 +39,16 @@ Size get_new_size_for_sprite(const Size &size, const uint32_t sprite_flags)
     return newsz;
 }
 
-// from is a 32-bit RGBA image, to is a 15/16/24-bit destination image
-Bitmap *remove_alpha_channel(Bitmap *from)
-{
-    const int game_cd = game.GetColorDepth();
-    Bitmap *to = BitmapHelper::CreateBitmap(from->GetWidth(), from->GetHeight(), game_cd);
-    const int maskcol = to->GetMaskColor();
-    int y,x;
-    unsigned int c,b,g,r;
-
-    if (game_cd == 24) // 32-to-24
-    {
-        for (y=0; y < from->GetHeight(); y++) {
-            unsigned int*psrc = (unsigned int *)from->GetScanLine(y);
-            unsigned char*pdest = (unsigned char*)to->GetScanLine(y);
-
-            for (x=0; x < from->GetWidth(); x++) {
-                c = psrc[x];
-                // less than 50% opaque, remove the pixel
-                if (((c >> 24) & 0x00ff) < 128)
-                    c = maskcol;
-
-                // copy the RGB values across
-                memcpy(&pdest[x * 3], &c, 3);
-            }
-        }
-    }
-    else if (game_cd > 8) // 32 to 15 or 16
-    {
-        for (y=0; y < from->GetHeight(); y++) {
-            unsigned int*psrc = (unsigned int *)from->GetScanLine(y);
-            unsigned short*pdest = (unsigned short *)to->GetScanLine(y);
-
-            for (x=0; x < from->GetWidth(); x++) {
-                c = psrc[x];
-                // less than 50% opaque, remove the pixel
-                if (((c >> 24) & 0x00ff) < 128)
-                    pdest[x] = maskcol;
-                else {
-                    // otherwise, copy it across
-                    r = (c >> 16) & 0x00ff;
-                    g = (c >> 8) & 0x00ff;
-                    b = c & 0x00ff;
-                    pdest[x] = makecol_depth(game_cd, r, g, b);
-                }
-            }
-        }
-    }
-    else // 32 to 8-bit game
-    { // TODO: consider similar to above approach if this becomes a wanted feature
-        to->Blit(from);
-    }
-    return to;
-}
-
 Bitmap *initialize_sprite(sprkey_t index, Bitmap *image, uint32_t &sprite_flags)
 {
-    int oldeip = our_eip;
-    our_eip = 4300;
-    
+    int oldeip = get_our_eip();
+    set_our_eip(4300);
+
+    // If SPF_HADALPHACHANNEL is set that means that we have stripped alpha
+    // channel from this sprite last time it was loaded. Add SPF_ALPHACHANNEL
+    // so that we can remove it properly again (see PrepareSpriteForUse).
     if (sprite_flags & SPF_HADALPHACHANNEL)
     {
-        // we stripped the alpha channel out last time, put
-        // it back so that we can remove it properly again
-        // CHECKME: find out what does this mean, and explain properly
         sprite_flags |= SPF_ALPHACHANNEL;
     }
         
@@ -121,20 +66,21 @@ Bitmap *initialize_sprite(sprkey_t index, Bitmap *image, uint32_t &sprite_flags)
         delete image;
     }
 
-    use_bmp = PrepareSpriteForUse(use_bmp, (sprite_flags & SPF_ALPHACHANNEL) != 0);
-    if (game.GetColorDepth() < 32)
+    const bool has_alpha = (sprite_flags & SPF_ALPHACHANNEL) != 0;
+    use_bmp = PrepareSpriteForUse(use_bmp, has_alpha);
+    // For non-32 bit games, strip SPF_ALPHACHANNEL flag, but add SPF_HADALPHACHANNEL
+    // in order to record the fact that the asset on disk has alpha channel.
+    if (has_alpha && (game.GetColorDepth() < 32))
     {
         sprite_flags &= ~SPF_ALPHACHANNEL;
-        // save the fact that it had one for the next time this is re-loaded from disk
-        // CHECKME: find out what does this mean, and explain properly
         sprite_flags |= SPF_HADALPHACHANNEL;
     }
 
-    our_eip = oldeip;
+    set_our_eip(oldeip);
     return use_bmp;
 }
 
 void post_init_sprite(sprkey_t index)
 {
-    pl_run_plugin_hooks(AGSE_SPRITELOAD, index);
+    pl_run_plugin_hooks(kPluginEvt_SpriteLoad, index);
 }

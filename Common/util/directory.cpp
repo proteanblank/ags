@@ -1,3 +1,16 @@
+//=============================================================================
+//
+// Adventure Game Studio (AGS)
+//
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
+// The full list of copyright holders can be found in the Copyright.txt
+// file, which is part of this source code distribution.
+//
+// The AGS source code is provided under the Artistic License 2.0.
+// A copy of this license can be found in the file License.txt and at
+// https://opensource.org/license/artistic-2-0/
+//
+//=============================================================================
 #include "util/directory.h"
 #include <errno.h>
 #include <string.h>
@@ -114,6 +127,23 @@ void GetFiles(const String &dir_path, std::vector<String> &files)
         if (e.IsFile)
             files.push_back(e.Name);
     }
+}
+
+void GetFiles(const String &dir_path, std::vector<String> &files, const String &wildcard)
+{
+    for (FindFile ff = FindFile::OpenFiles(dir_path, wildcard); !ff.AtEnd(); ff.Next())
+        files.push_back(ff.Current());
+}
+
+void GetFiles(const String &dir_path, std::vector<FileEntry> &files, const String &wildcard)
+{
+    for (FindFile ff = FindFile::OpenFiles(dir_path, wildcard); !ff.AtEnd(); ff.Next())
+        files.push_back(ff.GetEntry());
+}
+
+bool HasAnyFiles(const String &dir_path)
+{
+    return !FindFile::OpenFiles(dir_path).AtEnd();
 }
 
 } // namespace Directory
@@ -354,7 +384,7 @@ DirectoryRecursiveIterator DirectoryRecursiveIterator::Open(const String &path,
 
 void DirectoryRecursiveIterator::Close()
 {
-    while (!_dirStack.empty()) _dirStack.pop();
+    while (!_subdirStack.empty()) _subdirStack.pop();
     _dir.Close();
     _subSearch.Close();
     _fullDir = "";
@@ -391,7 +421,7 @@ bool DirectoryRecursiveIterator::Next()
 
 bool DirectoryRecursiveIterator::PushDir()
 {
-    if (_dirStack.size() == _maxLevel)
+    if (_subdirStack.size() == _maxLevel)
         return false; // no more nesting allowed
 
     const FileEntry entry = _subSearch.GetEntry();
@@ -403,7 +433,7 @@ bool DirectoryRecursiveIterator::PushDir()
     if (dir.AtEnd())
         return false; // dir is empty, or error
     DirectoryIterator dir_sub = DirectoryIterator::Open(path);
-    _dirStack.push(std::move(_dir)); // save previous dir iterator
+    _subdirStack.push(std::move(_subSearch)); // save previous subsearch iterator
     _dir = std::move(dir);
     _subSearch = std::move(dir_sub);
     _fullDir = path;
@@ -413,11 +443,11 @@ bool DirectoryRecursiveIterator::PushDir()
 
 bool DirectoryRecursiveIterator::PopDir()
 {
-    if (_dirStack.empty())
+    if (_subdirStack.empty())
         return false; // no more parent levels
     // restore parent level
-    _subSearch = std::move(_dirStack.top());
-    _dirStack.pop();
+    _subSearch = std::move(_subdirStack.top());
+    _subdirStack.pop();
     _fullDir = Path::GetParent(_fullDir);
     _curDir = Path::GetParent(_curDir);
     if (_curDir.Compare(".") == 0)
@@ -453,7 +483,7 @@ bool FindFile::Test()
     if (!std::regex_match(_di.Current().GetCStr(), mr, _regex))
         return false;
     const auto &e = _di.GetEntry();
-    return _doFiles && e.IsFile || _doDirs && e.IsDir;
+    return (_doFiles && e.IsFile) || (_doDirs && e.IsDir);
 }
 
 bool FindFile::Next()

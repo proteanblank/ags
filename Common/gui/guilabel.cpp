@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <algorithm>
@@ -18,8 +18,6 @@
 #include "gui/guimain.h"
 #include "util/stream.h"
 #include "util/string_utils.h"
-
-std::vector<AGS::Common::GUILabel> guilabels;
 
 #define GUILABEL_TEXTLENGTH_PRE272 200
 
@@ -32,7 +30,7 @@ GUILabel::GUILabel()
 {
     Font = 0;
     TextColor = 0;
-    TextAlignment = kHAlignLeft;
+    TextAlignment = kAlignTopLeft;
 
     _scEventCount = 0;
 }
@@ -55,12 +53,13 @@ GUILabelMacro GUILabel::GetTextMacros() const
 Rect GUILabel::CalcGraphicRect(bool clipped)
 {
     if (clipped)
-        return RectWH(0, 0, Width, Height);
+        return RectWH(0, 0, _width, _height);
+
     // TODO: need to find a way to text position, or there'll be some repetition
     // have to precache text and size on some events:
     // - translation change
     // - macro value change (score, overhotspot etc)
-    Rect rc = RectWH(0, 0, Width, Height);
+    Rect rc = RectWH(0, 0, _width, _height);
     if (PrepareTextToDraw() == 0)
         return rc;
     const int linespacing = // Older engine labels used (font height + 1) as linespacing for some reason
@@ -69,17 +68,10 @@ Rect GUILabel::CalcGraphicRect(bool clipped)
         get_font_linespacing(Font);
     // < 2.72 labels did not limit vertical size of text
     const bool limit_by_label_frame = loaded_game_file_version >= kGameVersion_272;
-    int at_y = 0;
-    Line max_line;
-    for (size_t i = 0;
-        i < Lines.Count() && (!limit_by_label_frame || at_y <= Height);
-        ++i, at_y += linespacing)
-    {
-        Line lpos = GUI::CalcTextPositionHor(Lines[i].GetCStr(), Font, 0, 0 + Width - 1, at_y,
-            (FrameAlignment)TextAlignment);
-        max_line.X2 = std::max(max_line.X2, lpos.X2);
-    }
-    return SumRects(rc, RectWH(0, 0, max_line.X2 - max_line.X1 + 1, at_y - linespacing + get_font_surface_height(Font)));
+
+    Rect text_rc = GUI::CalcTextGraphicalRect(Lines.GetVector(), Lines.Count(), Font, linespacing,
+        RectWH(0, 0, _width, _height), (FrameAlignment)TextAlignment, limit_by_label_frame);
+    return SumRects(rc, text_rc);
 }
 
 void GUILabel::Draw(Bitmap *ds, int x, int y)
@@ -96,14 +88,8 @@ void GUILabel::Draw(Bitmap *ds, int x, int y)
         get_font_linespacing(Font);
     // < 2.72 labels did not limit vertical size of text
     const bool limit_by_label_frame = loaded_game_file_version >= kGameVersion_272;
-    int at_y = y;
-    for (size_t i = 0;
-        i < Lines.Count() && (!limit_by_label_frame || at_y <= y + Height);
-        ++i, at_y += linespacing)
-    {
-        GUI::DrawTextAlignedHor(ds, Lines[i].GetCStr(), Font, text_color, x, x + Width - 1, at_y,
-            (FrameAlignment)TextAlignment);
-    }
+    GUI::DrawTextLinesAligned(ds, Lines.GetVector(), Lines.Count(), Font, linespacing, text_color,
+        RectWH(x, y, _width, _height), (FrameAlignment)TextAlignment, limit_by_label_frame);
 }
 
 void GUILabel::SetText(const String &text)
@@ -139,9 +125,9 @@ void GUILabel::ReadFromFile(Stream *in, GuiVersion gui_version)
     Font = in->ReadInt32();
     TextColor = in->ReadInt32();
     if (gui_version < kGuiVersion_350)
-        TextAlignment = ConvertLegacyGUIAlignment((LegacyGUIAlignment)in->ReadInt32());
+        TextAlignment = (FrameAlignment)ConvertLegacyGUIAlignment((LegacyGUIAlignment)in->ReadInt32());
     else
-        TextAlignment = (HorAlignment)in->ReadInt32();
+        TextAlignment = (FrameAlignment)in->ReadInt32();
 
     if (TextColor == 0)
         TextColor = 16;
@@ -156,7 +142,7 @@ void GUILabel::ReadFromSavegame(Stream *in, GuiSvgVersion svg_ver)
     TextColor = in->ReadInt32();
     Text = StrUtil::ReadString(in);
     if (svg_ver >= kGuiSvgVersion_350)
-        TextAlignment = (HorAlignment)in->ReadInt32();
+        TextAlignment = (FrameAlignment)in->ReadInt32();
 
     _textMacro = GUI::FindLabelMacros(Text);
 }

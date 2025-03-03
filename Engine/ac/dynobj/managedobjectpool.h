@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -19,9 +19,10 @@
 #include <queue>
 #include <unordered_map>
 
+#include "ac/dynobj/cc_scriptobject.h"   // IScriptObject
 #include "core/platform.h"
 #include "script/runtimescriptvalue.h"
-#include "ac/dynobj/cc_scriptobject.h"   // IScriptObject
+#include "util/string.h"
 
 namespace AGS { namespace Common { class Stream; }}
 using namespace AGS; // FIXME later
@@ -70,6 +71,10 @@ public:
     void WriteToDisk(Common::Stream *out);
     int ReadFromDisk(Common::Stream *in, ICCObjectCollectionReader *reader);
     void reset();
+
+    typedef void (*PfnProcessObject)(int handle, IScriptObject *obj);
+    void TraverseManagedObjects(const AGS::Common::String &type, PfnProcessObject proc);
+
     ManagedObjectPool();
 
     void *disableDisposeForObject {nullptr};

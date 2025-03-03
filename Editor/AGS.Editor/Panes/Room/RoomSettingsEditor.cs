@@ -11,6 +11,7 @@ using System.Windows.Forms;
 using AGS.Editor.Panes.Room;
 using AddressBarExt;
 using AddressBarExt.Controls;
+using AGS.Editor.Utils;
 
 namespace AGS.Editor
 {
@@ -110,6 +111,10 @@ namespace AGS.Editor
             }
             
             RefreshLayersTree();
+
+            // Customize AddressBar to display at minimum 16 items in dropdown menus;
+            // 16 is currently the number of walkable areas, walk-behinds and regions
+            _editAddressBar.MinDisplayedDropDownItems = 16;
             _editAddressBar.SelectionChange += editAddressBar_SelectionChange;
             _startNode = _editAddressBar.CurrentNode.UniqueID;
 
@@ -532,10 +537,11 @@ namespace AGS.Editor
 				Bitmap bmp = null;
                 try
                 {
-                    bmp = new Bitmap(selectedFile);
+                    bmp = BitmapExtensions.LoadNonLockedBitmap(selectedFile);
                     bmp = ExtendBitmapIfSmallerThanScreen(bmp);
                     bool doImport = true;
                     bool deleteExtraFrames = false;
+                    bool roomSizeChanged = false;
 					RoomResolution newResolution;
 					if (bgIndex > 0)
 					{
@@ -546,7 +552,12 @@ namespace AGS.Editor
 						newResolution = RoomResolution.Real;
 					}
 
-					if ((bmp.Width != _room.Width) || (bmp.Height != _room.Height) ||
+                    if ((Factory.AGSEditor.CurrentGame.Settings.ColorDepth == GameColorDepth.Palette) && (bmp.GetColorDepth() > 8))
+                    {
+                        Factory.GUIController.ShowMessage("You cannot import a hi-colour or true-colour image into a 256-colour game.", MessageBoxIcon.Warning);
+                        doImport = false;
+                    }
+                    else if ((bmp.Width != _room.Width) || (bmp.Height != _room.Height) ||
 						(newResolution != _room.Resolution))
                     {
                         if (bgIndex > 0)
@@ -562,17 +573,23 @@ namespace AGS.Editor
                             }
                             else
                             {
+                                roomSizeChanged = true;
                                 deleteExtraFrames = true;
                             }
                         }
                         if (doImport)
                         {
-                            if (Factory.GUIController.ShowQuestion("The new background is a different size to the old one. If you import it, all your regions, hotspots and walkable areas will be cleared. Do you want to proceed?") != DialogResult.Yes)
+                            if (Factory.GUIController.ShowQuestion("The new background is a different size to the old one. If you import it, all your regions, hotspots and walkable areas will be cleared, and edges reset to defaults. Do you want to proceed?") != DialogResult.Yes)
                             {
                                 doImport = false;
                             }
+                            else
+                            {
+                                roomSizeChanged = true;
+                            }
                         }
                     }
+
                     if (doImport)
                     {
 						_room.Resolution = newResolution;
@@ -589,6 +606,11 @@ namespace AGS.Editor
                             }
                         }
 
+                        if (roomSizeChanged)
+                        {
+                            OnRoomSizeChanged();
+                        }
+
                         // TODO: choose default zoom based on the room size vs window size?
                         SetZoomSliderToMultiplier(_room.Width <= 320 ? 2 : 1);
                     }
@@ -597,11 +619,21 @@ namespace AGS.Editor
                 {
                     Factory.GUIController.ShowMessage("The background could not be imported. The error was:" + Environment.NewLine + Environment.NewLine + ex.Message, MessageBoxIcon.Warning);
                 }
-				if (bmp != null)
-				{
-					bmp.Dispose();
-				}
+                finally
+                {
+                    if (bmp != null)
+                        bmp.Dispose();
+                }
             }
+        }
+
+        private void OnRoomSizeChanged()
+        {
+            // Reset room edges to the defaults at the new size
+            _room.LeftEdgeX = 0;
+            _room.RightEdgeX = _room.Width - 1;
+            _room.TopEdgeY = 0;
+            _room.BottomEdgeY = _room.Height - 1;
         }
 
         private void btnChangeImage_Click(object sender, EventArgs e)
@@ -629,7 +661,7 @@ namespace AGS.Editor
             string fileName = Factory.GUIController.ShowSaveFileDialog("Export background as...", Constants.IMAGE_FILE_FILTER);
             if (fileName != null)
             {
-                Bitmap bmp = Factory.NativeProxy.GetBitmapForBackground(_room, cmbBackgrounds.SelectedIndex);
+                Bitmap bmp = Factory.NativeProxy.ExportRoomBackground(_room, cmbBackgrounds.SelectedIndex);
                 ImportExport.ExportBitmapToFile(fileName, bmp);
                 bmp.Dispose();
             }
@@ -866,6 +898,10 @@ namespace AGS.Editor
                 return false;
             }
 
+            if (_layer != null && !IsLocked(_layer) && _layer.KeyReleased(keyData))
+            {
+                return true;
+            }
             return ProcessPanKeyRelease(keyData);
         }
 
@@ -936,10 +972,13 @@ namespace AGS.Editor
             }
 
             if (propertyName == RoomHotspot.PROPERTY_NAME_SCRIPT_NAME ||
-				propertyName == RoomObject.PROPERTY_NAME_SCRIPT_NAME ||
+                propertyName == RoomHotspot.PROPERTY_NAME_DESCRIPTION ||
+                propertyName == RoomObject.PROPERTY_NAME_SCRIPT_NAME ||
+                propertyName == RoomObject.PROPERTY_NAME_DESCRIPTION ||
                 propertyName == Character.PROPERTY_NAME_SCRIPTNAME ||
+                propertyName == Character.PROPERTY_NAME_DESCRIPTION ||
                 needRefresh)
-			{
+            {
                 if (_layer != null)
                 {
                     // Force the layer to refresh its property list with the new name   
@@ -948,7 +987,7 @@ namespace AGS.Editor
                     _layer.FilterOn();
                 }
                 RefreshLayersTree();
-			}
+            }
         }
 
 		protected override void OnWindowActivated()
@@ -1000,8 +1039,8 @@ namespace AGS.Editor
             _state.Offset = newOffset;
 
             // Update scroll positions and redraw
-            bufferedPanel1.HorizontalScroll.Value = _state.Offset.X;
-            bufferedPanel1.VerticalScroll.Value = _state.Offset.Y;
+            bufferedPanel1.HorizontalScroll.Value = MathExtra.Clamp(_state.Offset.X, bufferedPanel1.HorizontalScroll.Minimum, bufferedPanel1.HorizontalScroll.Maximum);
+            bufferedPanel1.VerticalScroll.Value = MathExtra.Clamp(_state.Offset.Y, bufferedPanel1.VerticalScroll.Minimum, bufferedPanel1.VerticalScroll.Maximum);
             bufferedPanel1.Invalidate();
             // Update slider position (in case zoom was set by other controls)
             sldZoomLevel.Value = zoom;

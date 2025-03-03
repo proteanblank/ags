@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -38,6 +38,7 @@ struct DynObjectRef
     DynObjectRef() = default;
     DynObjectRef(int handle, void *obj, IScriptObject *mgr)
         : Handle(handle), Obj(obj), Mgr(mgr) {}
+    inline operator bool() const { return Handle > 0; }
 };
 
 
@@ -60,12 +61,18 @@ struct IScriptObject
     // TODO: pass savegame format version
     virtual int Serialize(void *address, uint8_t *buffer, int bufsize) = 0;
 
+    // WARNING: following section is not a part of plugin API, therefore these methods
+    // should **never** be called for kScValPluginObject script objects!
 
     // Legacy support for reading and writing object values by their relative offset.
-    // WARNING: following were never a part of plugin API, therefore these methods
-    // should **never** be called for kScValPluginObject script objects!
+    // These methods allow to "remap" script struct field access, by taking the
+    // legacy offset, and using it rather as a field ID than an address, for example.
+    // Consequently these also let trigger side-effects, such as updating an object
+    // after a field value is written to.
     //
-    // RE: GetFieldPtr()
+    // GetFieldPtr is used to access a script struct member which is a raw buffer,
+    // such as a char array.
+    // RE: GetFieldPtr() -
     // According to AGS script specification, when the old-string pointer or char array is passed
     // as an argument, the byte-code does not include any specific command for the member variable
     // retrieval and instructs to pass an address of the object itself with certain offset.
@@ -75,11 +82,12 @@ struct IScriptObject
     // The worst thing here is that with the current byte-code structure we can never tell whether
     // offset 0 means getting pointer to whole object or a pointer to its first field.
     virtual void   *GetFieldPtr(void *address, intptr_t offset)               = 0;
-    virtual void    Read(void *address, intptr_t offset, uint8_t *dest, size_t size) = 0;
-    virtual uint8_t ReadInt8(void *address, intptr_t offset)                  = 0;
-    virtual int16_t ReadInt16(void *address, intptr_t offset)                 = 0;
-    virtual int32_t ReadInt32(void *address, intptr_t offset)                 = 0;
-    virtual float   ReadFloat(void *address, intptr_t offset)                 = 0;
+    virtual const void *GetFieldPtr(const void *address, intptr_t offset)     = 0;
+    virtual void    Read(const void *address, intptr_t offset, uint8_t *dest, size_t size) = 0;
+    virtual uint8_t ReadInt8(const void *address, intptr_t offset)            = 0;
+    virtual int16_t ReadInt16(const void *address, intptr_t offset)           = 0;
+    virtual int32_t ReadInt32(const void *address, intptr_t offset)           = 0;
+    virtual float   ReadFloat(const void *address, intptr_t offset)           = 0;
     virtual void    Write(void *address, intptr_t offset, const uint8_t *src, size_t size) = 0;
     virtual void    WriteInt8(void *address, intptr_t offset, uint8_t val)    = 0;
     virtual void    WriteInt16(void *address, intptr_t offset, int16_t val)   = 0;
@@ -103,12 +111,6 @@ struct ICCObjectCollectionReader
 struct ICCObjectReader
 {
     virtual void Unserialize(int32_t handle, const char *serializedData, int dataSize) = 0;
-};
-
-// The interface of a dynamic String allocator.
-struct ICCStringClass
-{
-    virtual DynObjectRef CreateString(const char *fromText) = 0;
 };
 
 #endif // __CC_SCRIPTOBJECT_H

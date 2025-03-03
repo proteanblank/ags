@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/keycode.h"
@@ -17,10 +17,9 @@
 #include "gui/guitextbox.h"
 #include "util/stream.h"
 #include "util/string_utils.h"
+#include "util/utf8.h"
 
 #define GUITEXTBOX_LEGACY_TEXTLEN 200
-
-std::vector<AGS::Common::GUITextBox> guitext;
 
 namespace AGS
 {
@@ -48,16 +47,38 @@ bool GUITextBox::IsBorderShown() const
     return (TextBoxFlags & kTextBox_ShowBorder) != 0;
 }
 
+Rect GUITextBox::CalcGraphicRect(bool clipped)
+{
+    if (clipped)
+        return RectWH(0, 0, _width, _height);
+
+    // TODO: need to find a way to cache text position, or there'll be some repetition
+    Rect rc = RectWH(0, 0, _width, _height);
+    Point text_at(1 + get_fixed_pixel_size(1), 1 + get_fixed_pixel_size(1));
+    Rect text_rc = GUI::CalcTextGraphicalRect(Text, Font, text_at);
+    if (GUI::IsGUIEnabled(this))
+    {
+        // add a cursor
+        Rect cur_rc = RectWH(
+            text_rc.Right + 3,
+            1 + get_font_height(Font),
+            get_fixed_pixel_size(5),
+            get_fixed_pixel_size(1) - 1);
+        text_rc = SumRects(text_rc, cur_rc);
+    }
+    return SumRects(rc, text_rc);
+}
+
 void GUITextBox::Draw(Bitmap *ds, int x, int y)
 {
     color_t text_color = ds->GetCompatibleColor(TextColor);
     color_t draw_color = ds->GetCompatibleColor(TextColor);
     if (IsBorderShown())
     {
-        ds->DrawRect(RectWH(x, y, Width, Height), draw_color);
+        ds->DrawRect(RectWH(x, y, _width, _height), draw_color);
         if (get_fixed_pixel_size(1) > 1)
         {
-            ds->DrawRect(Rect(x + 1, y + 1, x + Width - get_fixed_pixel_size(1), y + Height - get_fixed_pixel_size(1)), draw_color);
+            ds->DrawRect(Rect(x + 1, y + 1, x + _width - get_fixed_pixel_size(1), y + _height - get_fixed_pixel_size(1)), draw_color);
         }
     }
     DrawTextBoxContents(ds, x, y, text_color);
@@ -69,9 +90,8 @@ static void Backspace(String &text)
     if (get_uformat() == U_UTF8)
     {// Find where the last utf8 char begins
         const char *ptr_end = text.GetCStr() + text.GetLength();
-        const char *ptr = ptr_end - 1;
-        for (; ptr > text.GetCStr() && ((*ptr & 0xC0) == 0x80); --ptr);
-        text.ClipRight(ptr_end - ptr);
+        const char *ptr_prev = Utf8::BackOneChar(ptr_end, text.GetCStr());
+        text.ClipRight(ptr_end - ptr_prev);
     }
     else
     {
@@ -79,32 +99,34 @@ static void Backspace(String &text)
     }
 }
 
-void GUITextBox::OnKeyPress(const KeyInput &ki)
+bool GUITextBox::OnKeyPress(const KeyInput &ki)
 {
     switch (ki.Key)
     {
     case eAGSKeyCodeReturn:
         IsActivated = true;
-        return;
+        return true;
     case eAGSKeyCodeBackspace:
         Backspace(Text);
         MarkChanged();
-        return;
+        return true;
     default: break;
     }
 
     if (ki.UChar == 0)
-        return; // not a textual event
-    if ((ki.UChar >= 128) && (!font_supports_extended_characters(Font)))
-        return; // unsupported letter
+        return false; // not a textual event, don't handle
 
-    (get_uformat() == U_UTF8) ?
-        Text.Append(ki.Text) :
-        Text.AppendChar(ki.UChar);
+    if (get_uformat() == U_UTF8)
+        Text.Append(ki.Text); // proper unicode char
+    else if (ki.UChar < 256)
+        Text.AppendChar(static_cast<uint8_t>(ki.UChar)); // ascii/ansi-range char in ascii mode
+    else
+        return true; // char from an unsupported range, don't print but still report as handled
     // if the new string is too long, remove the new character
-    if (get_text_width(Text.GetCStr(), Font) > (Width - (6 + get_fixed_pixel_size(5))))
+    if (get_text_width(Text.GetCStr(), Font) > (_width - (6 + get_fixed_pixel_size(5))))
         Backspace(Text);
     MarkChanged();
+    return true;
 }
 
 void GUITextBox::SetShowBorder(bool on)

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/stdio_compat.h"
@@ -46,11 +46,42 @@ int	 ags_fseek(FILE * stream, file_off_t offset, int whence)
 #if defined(HAVE_FSEEKO) // Contemporary POSIX libc
     return fseeko(stream, offset, whence);
 #elif AGS_PLATFORM_OS_WINDOWS // MSVC
+    // MSVC 2015 has a weird bug in fseek, where it may fail to set certain
+    // position, unless stream is rewinded to 0 first. See commentary below *
+    #if (_MSC_VER <= 1900)
+        if (whence == SEEK_SET)
+            _fseeki64(stream, 0, whence); 
+    #endif
     return _fseeki64(stream, offset, whence); 
 #else // No distinct interface with off_t
     return fseek(stream, offset, whence);
 #endif
 }
+//-----------------------------------------------------------------------------
+// * A commentary on the MSVC 2015 fseek bug.
+// Replicating this error in real game may be nearly impossible,
+// so for the record, here's the confirmed failing case. Following are
+// seek-to / read-to pairs which, if executed sequentially, will produce the
+// erroneous effect. The test may be run on a generated file filled with zeros,
+// with only meaningful values at certain spot.
+//
+//  start    0x000000
+//  seek to  0xb19b00
+//  read to  0xb1bb00
+//  seek to  0xb1bb00    // no actual move
+//  read to  0xb1db00
+//  seek to  0xb1ca3a    // seeking back here
+//  read to  0xb69512
+//  seek to  0xb69512    // no actual move
+//  read to  0xb6ba3a
+//  seek to  0xb6ba3a    // no actual move
+//  read to  0xb6da3a
+//  seek to  0xb6ce45    // seeking back here
+//  --- fail location
+//  reading anything from here reads from (supposedly) further position.
+//  NOTE: in order to replicate this file must be few KBs bigger.
+//
+//-----------------------------------------------------------------------------
 
 file_off_t ags_ftell(FILE * stream) 
 {
@@ -95,17 +126,17 @@ int ags_directory_exists(const char *path)
 
 int ags_path_exists(const char *path)
 {
-    #if AGS_PLATFORM_OS_WINDOWS
-        WCHAR wstr[MAX_PATH_SZ];
-        MultiByteToWideChar(CP_UTF8, 0, path, -1, wstr, MAX_PATH_SZ);
-        return PathFileExistsW(wstr);
-    #else
-        struct stat path_stat;
-        if (stat(path, &path_stat) != 0) {
-            return 0;
-        }
-        return S_ISREG(path_stat.st_mode) || S_ISDIR(path_stat.st_mode);
-    #endif
+#if AGS_PLATFORM_OS_WINDOWS
+    WCHAR wstr[MAX_PATH_SZ];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wstr, MAX_PATH_SZ);
+    return PathFileExistsW(wstr);
+#else
+    struct stat path_stat;
+    if (stat(path, &path_stat) != 0) {
+        return 0;
+    }
+    return S_ISREG(path_stat.st_mode) || S_ISDIR(path_stat.st_mode);
+#endif
 }
 
 file_off_t ags_file_size(const char *path)
@@ -124,6 +155,25 @@ file_off_t ags_file_size(const char *path)
         return -1;
     }
     return path_stat.st_size;
+#endif
+}
+
+time_t ags_file_time(const char *path)
+{
+#if AGS_PLATFORM_OS_WINDOWS
+    WCHAR wstr[MAX_PATH_SZ];
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wstr, MAX_PATH_SZ);
+    struct _stat64 path_stat;
+    if (_wstat64(wstr, &path_stat) != 0) {
+        return -1;
+    }
+    return path_stat.st_mtime;
+#else
+    struct stat path_stat;
+    if (stat(path, &path_stat) != 0) {
+        return -1;
+    }
+    return path_stat.st_mtime;
 #endif
 }
 
@@ -161,7 +211,7 @@ int ags_file_copy(const char *src, const char *dst, int overwrite)
     int fd_src, fd_dst;
     int dst_flags;
     char buf[4096]; // CHECKME: larger buffer? malloc a bigger one on heap?
-    size_t read_num;
+    ssize_t read_num; // read returns -1 if there was an error, so we need a signed type.
 
     fd_src = open(src, O_RDONLY);
     if (fd_src < 0)
@@ -177,7 +227,7 @@ int ags_file_copy(const char *src, const char *dst, int overwrite)
 
     while ((read_num = read(fd_src, buf, sizeof(buf))) > 0) {
         char *out_ptr = buf;
-        size_t wrote_num;
+        ssize_t wrote_num; // write returns -1 if there was an error, so we need a signed type.
         do {
             wrote_num = write(fd_dst, out_ptr, read_num);
             if (wrote_num >= 0) {

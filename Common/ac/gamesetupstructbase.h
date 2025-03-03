@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -31,58 +31,60 @@ namespace AGS { namespace Common { class Stream; } }
 using namespace AGS; // FIXME later
 
 struct CharacterInfo;
-struct ccScript;
 
 
 struct GameSetupStructBase
 {
-    static const int  GAME_NAME_LENGTH = 50;
+    static const int  LEGACY_GAME_NAME_LENGTH = 50;
     static const int  MAX_OPTIONS = 100;
-    static const int  NUM_INTS_RESERVED = 17;
+    static const int  NUM_INTS_RESERVED = 16;
 
-    char              gamename[GAME_NAME_LENGTH];
-    int               options[MAX_OPTIONS];
-    unsigned char     paluses[256];
-    RGB               defpal[256];
-    int               numviews;
-    int               numcharacters;
-    int               playercharacter;
-    int               totalscore;
-    short             numinvitems;
-    int               numdialog, numdlgmessage;
-    int               numfonts;
-    int               color_depth;          // in bytes per pixel (ie. 1 or 2)
-    int               target_win;
-    int               dialog_bullet;        // 0 for none, otherwise slot num of bullet point
-    unsigned short    hotdot, hotdotouter;  // inv cursor hotspot dot color
-    int               uniqueid;    // random key identifying the game
-    int               numgui;
-    int               numcursors;
-    int               default_lipsync_frame; // used for unknown chars
-    int               invhotdotsprite;
-    int               reserved[NUM_INTS_RESERVED];
-    Common::String    messages[MAXGLOBALMES];
+    Common::String    gamename;
+    int               options[MAX_OPTIONS] = { 0 };
+    uint8_t           paluses[256] = { 0 };
+    RGB               defpal[256] = {};
+    int               numviews = 0;
+    int               numcharacters = 0;
+    int               playercharacter = -1;
+    int               totalscore = 0;
+    int               numinvitems = 0;
+    int               numdialog = 0;
+    int               numdlgmessage = 0;    // [DEPRECATED]
+    int               numfonts = 0;
+    int               color_depth = 0;      // in bytes per pixel (ie. 1, 2, 4)
+    int               target_win = 0;
+    int               dialog_bullet = 0;    // 0 for none, otherwise slot num of bullet point
+    int               hotdot = 0;           // inv cursor hotspot dot color
+    int               hotdotouter = 0;      // inv cursor hotspot cross color
+    int               uniqueid = 0;         // random key identifying the game
+    int               numgui = 0;
+    int               numcursors = 0;
+    int               default_lipsync_frame = 0; // used for unknown chars
+    int               invhotdotsprite = 0;
+    int               reserved[NUM_INTS_RESERVED] = { 0 };
+    Common::String    messages[MAXGLOBALMES] = {};
     std::unique_ptr<WordsDictionary> dict;
     std::vector<CharacterInfo> chars;
+    std::vector<CharacterInfo2> chars2; // extended character fields
 
-    GameSetupStructBase();
+    GameSetupStructBase() = default;
     GameSetupStructBase(GameSetupStructBase &&gss) = default;
-    ~GameSetupStructBase();
+    ~GameSetupStructBase() = default;
 
     GameSetupStructBase &operator =(GameSetupStructBase &&gss) = default;
 
-    void Free();
     void SetDefaultResolution(GameResolutionType type);
     void SetDefaultResolution(Size game_res);
     void SetGameResolution(GameResolutionType type);
     void SetGameResolution(Size game_res);
-
     // Tells whether the serialized game data contains certain components
     struct SerializeInfo
     {
         bool HasCCScript = false;
         bool HasWordsDict = false;
         std::array<int, MAXGLOBALMES> HasMessages{};
+        // File offset at which game data extensions begin
+        uint32_t ExtensionOffset = 0u;
     };
 
     void ReadFromFile(Common::Stream *in, GameDataVersion game_ver, SerializeInfo &info);
@@ -197,14 +199,22 @@ struct GameSetupStructBase
     }
 
     // Returns a list of game options that are forbidden to change at runtime
-    inline static std::array<int, 17> GetRestrictedOptions()
+    inline static std::array<int, 18> GetRestrictedOptions()
     {
-        return std::array<int,17> {{
+        return std::array<int, 18> {{
             OPT_DEBUGMODE, OPT_LETTERBOX, OPT_HIRES_FONTS, OPT_SPLITRESOURCES,
             OPT_STRICTSCRIPTING, OPT_LEFTTORIGHTEVAL, OPT_COMPRESSSPRITES, OPT_STRICTSTRINGS,
             OPT_NATIVECOORDINATES, OPT_SAFEFILEPATHS, OPT_DIALOGOPTIONSAPI, OPT_BASESCRIPTAPI,
             OPT_SCRIPTCOMPATLEV, OPT_RELATIVEASSETRES, OPT_GAMETEXTENCODING, OPT_KEYHANDLEAPI,
-            OPT_CUSTOMENGINETAG
+            OPT_CUSTOMENGINETAG, OPT_VOICECLIPNAMERULE
+        }};
+    }
+
+    // Returns a list of game options that must be preserved when restoring a save
+    inline static std::array<int, 1> GetPreservedOptions()
+    {
+        return std::array<int, 1> {{
+            OPT_SAVECOMPONENTSIGNORE
         }};
     }
 
@@ -214,7 +224,7 @@ private:
     void OnResolutionSet();
 
     // Game's native resolution ID, used to init following values.
-    GameResolutionType _resolutionType;
+    GameResolutionType _resolutionType = kGameResolution_Undefined;
 
     // Determines game's default screen resolution. Use for the reference
     // when comparing with actual screen resolution, which may be modified
@@ -230,11 +240,11 @@ private:
     Size _letterboxSize;
 
     // Game logic to game resolution coordinate factor
-    int _dataUpscaleMult;
+    int _dataUpscaleMult = 1;
     // Multiplier for various UI drawin sizes, meant to keep UI elements readable
-    int _relativeUIMult;
+    int _relativeUIMult = 1;
     // Game default resolution to actual game resolution factor
-    int _screenUpscaleMult;
+    int _screenUpscaleMult = 1;
 };
 
 #endif // __AGS_CN_AC__GAMESETUPSTRUCTBASE_H

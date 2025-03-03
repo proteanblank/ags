@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "font/ttffontrenderer.h"
@@ -21,7 +21,18 @@
 
 using namespace AGS::Common;
 
-// ***** TTF RENDERER *****
+TTFFontRenderer::TTFFontRenderer(AssetManager *amgr)
+    : _amgr(amgr)
+{
+    alfont_init();
+    alfont_text_mode(-1);
+}
+
+TTFFontRenderer::~TTFFontRenderer()
+{
+    alfont_exit();
+}
+
 void TTFFontRenderer::AdjustYCoordinateForFont(int *ycoord, int /*fontNumber*/)
 {
   // TTF fonts already have space at the top, so try to remove the gap
@@ -61,7 +72,7 @@ void TTFFontRenderer::RenderText(const char *text, int fontNumber, BITMAP *desti
 
 bool TTFFontRenderer::LoadFromDisk(int fontNumber, int fontSize)
 {
-  return LoadFromDiskEx(fontNumber, fontSize, nullptr, nullptr);
+  return LoadFromDiskEx(fontNumber, fontSize, nullptr, nullptr, nullptr);
 }
 
 bool TTFFontRenderer::IsBitmapFont()
@@ -78,37 +89,48 @@ static int GetAlfontFlags(int load_mode)
   if (((load_mode & FFLG_ASCENDERFIXUP) != 0) &&
       !(ShouldAntiAliasText() && (loaded_game_file_version < kGameVersion_341)))
       flags |= ALFONT_FLG_ASCENDER_EQ_HEIGHT;
+  // Precalculate real glyphs extent (will make loading fonts relatively slower)
+  flags |= ALFONT_FLG_PRECALC_MAX_CBOX;
   return flags;
 }
 
 // Loads a TTF font of a certain size
-static ALFONT_FONT *LoadTTF(const String &filename, int fontSize, int alfont_flags)
+static ALFONT_FONT *LoadTTFFromMem(const uint8_t *data, size_t data_len, int font_size, int alfont_flags)
 {
-    std::unique_ptr<Stream> reader(AssetMgr->OpenAsset(filename));
-    if (!reader)
-        return nullptr;
-
-    const size_t lenof = reader->GetLength();
-    std::vector<char> buf; buf.resize(lenof);
-    reader->Read(&buf.front(), lenof);
-    reader.reset();
-
-    ALFONT_FONT *alfptr = alfont_load_font_from_mem(&buf.front(), lenof);
+    ALFONT_FONT *alfptr = alfont_load_font_from_mem(reinterpret_cast<const char*>(data), data_len);
     if (!alfptr)
         return nullptr;
-    alfont_set_font_size_ex(alfptr, fontSize, alfont_flags);
+    alfont_set_font_size_ex(alfptr, font_size, alfont_flags);
     return alfptr;
 }
 
 // Fill the FontMetrics struct from the given ALFONT
 static void FillMetrics(ALFONT_FONT *alfptr, FontMetrics *metrics)
 {
-    metrics->Height = alfont_get_font_height(alfptr);
+    metrics->NominalHeight = alfont_get_font_height(alfptr);
     metrics->RealHeight = alfont_get_font_real_height(alfptr);
-    metrics->CompatHeight = metrics->Height; // just set to default here
+    metrics->CompatHeight = metrics->NominalHeight; // just set to default here
+    alfont_get_font_real_vextent(alfptr, &metrics->VExtent.first, &metrics->VExtent.second);
+    // fixup vextent to be *not less* than realheight
+    metrics->VExtent.first = std::min(0, metrics->VExtent.first);
+    metrics->VExtent.second = std::max(metrics->RealHeight, metrics->VExtent.second);
 }
 
-bool TTFFontRenderer::LoadFromDiskEx(int fontNumber, int fontSize,
+ALFONT_FONT *TTFFontRenderer::LoadTTF(const AGS::Common::String &filename, int font_size, int alfont_flags)
+{
+    auto reader = _amgr->OpenAsset(filename);
+    if (!reader)
+        return nullptr;
+
+    const size_t lenof = reader->GetLength();
+    std::vector<uint8_t> buf(lenof);
+    reader->Read(buf.data(), lenof);
+    reader.reset();
+
+    return LoadTTFFromMem(buf.data(), lenof, font_size, alfont_flags);
+}
+
+bool TTFFontRenderer::LoadFromDiskEx(int fontNumber, int fontSize, String *src_filename,
     const FontRenderParams *params, FontMetrics *metrics)
 {
     String filename = String::FromFormat("agsfnt%d.ttf", fontNumber);
@@ -126,6 +148,8 @@ bool TTFFontRenderer::LoadFromDiskEx(int fontNumber, int fontSize,
 
     _fontData[fontNumber].AlFont = alfptr;
     _fontData[fontNumber].Params = f_params;
+    if (src_filename)
+        *src_filename = filename;
     if (metrics)
         FillMetrics(alfptr, metrics);
     return true;

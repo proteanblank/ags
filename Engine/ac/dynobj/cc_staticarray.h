@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -17,6 +17,22 @@
 // real element size in the engine's memory.
 // The purpose of this is to remove size restriction from the engine's structs
 // exposed to scripts.
+//
+// FIXME: [ivan-mogilko] the above was meant to work, but in reality it doesn't
+// and won't, at least not without some extra workarounds.
+// The problem that I missed here is following:
+//   when the script compiler is told to get an Nth element of a global struct
+//   array, such as character[n], it calculates the memory address as
+//   array address + sizeof(Character) * n.
+//   If this address is used for the read/write operations, these ops can be
+//   intercepted by interpreter and remapped into the real fields
+//      (see IScriptObject::ReadN, WriteN interface)
+//   But if this address is used IN POINTER COMPARISON, then we cannot do
+//   anything. And if our real struct in the engine is stored on a different
+//   relative memory offset than one expected by compiler, then this pointer
+//   comparison will fail, e.g. script expression like
+//      if (player == character[n])
+//
 // NOTE: on the other hand, similar effect could be achieved by separating
 // object data into two or more structs, where "base" structs are stored in
 // the exposed arrays (part of API), while extending structs are stored
@@ -46,12 +62,18 @@ public:
         return static_cast<uint8_t*>(address) + (legacy_offset / _elemScriptSize) * _elemMemSize;
     }
 
+    inline const void *GetElementPtr(const void *address, intptr_t legacy_offset)
+    {
+        return static_cast<const uint8_t*>(address) + (legacy_offset / _elemScriptSize) * _elemMemSize;
+    }
+
     void   *GetFieldPtr(void *address, intptr_t offset) override;
-    void    Read(void *address, intptr_t offset, uint8_t *dest, size_t size) override;
-    uint8_t ReadInt8(void *address, intptr_t offset) override;
-    int16_t ReadInt16(void *address, intptr_t offset) override;
-    int32_t ReadInt32(void *address, intptr_t offset) override;
-    float   ReadFloat(void *address, intptr_t offset) override;
+    const void *GetFieldPtr(const void *address, intptr_t offset) override;
+    void    Read(const void *address, intptr_t offset, uint8_t *dest, size_t size) override;
+    uint8_t ReadInt8(const void *address, intptr_t offset) override;
+    int16_t ReadInt16(const void *address, intptr_t offset) override;
+    int32_t ReadInt32(const void *address, intptr_t offset) override;
+    float   ReadFloat(const void *address, intptr_t offset) override;
     void    Write(void *address, intptr_t offset, const uint8_t *src, size_t size) override;
     void    WriteInt8(void *address, intptr_t offset, uint8_t val) override;
     void    WriteInt16(void *address, intptr_t offset, int16_t val) override;

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/asset_helper.h"
@@ -22,6 +22,7 @@
 #include "ac/path_helper.h"
 #include "ac/runtime_defines.h"
 #include "ac/string.h"
+#include "ac/dynobj/cc_dynamicarray.h"
 #include "ac/dynobj/dynobj_manager.h"
 #include "debug/debug_log.h"
 #include "debug/debugger.h"
@@ -37,11 +38,10 @@
 #include "util/string_utils.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 extern GameSetupStruct game;
 extern AGSPlatformDriver *platform;
-
-extern size_t MAXSTRLEN;
 
 // object-based File routines
 
@@ -55,12 +55,155 @@ int File_Exists(const char *fnmm) {
   return 1; // was found in fs
 }
 
+ScriptDateTime* File_GetFileTime(const char *fnmm) {
+  const auto rp = ResolveScriptPathAndFindFile(fnmm, true);
+  if (!rp)
+    return nullptr;
+
+  time_t ft;
+  if (rp.AssetMgr)
+  {
+    if (!AssetMgr->GetAssetTime(rp.FullPath, ft, "*"))
+      return nullptr;
+  }
+  else
+  {
+    ft = File::GetFileTime(rp.FullPath);
+  }
+
+  ScriptDateTime *sdt = new ScriptDateTime(ft);
+  ccRegisterManagedObject(sdt, sdt);
+  return sdt;
+}
+
 int File_Delete(const char *fnmm) {
   const auto rp = ResolveScriptPathAndFindFile(fnmm, false);
   if (!rp)
     return 0;
 
   return File::DeleteFile(rp.FullPath) ? 1 : 0;
+}
+
+int File_Copy(const char *old_name, const char *new_name) {
+  // first path is readonly, second must be writeable and create dirs
+  const auto old_rp = ResolveScriptPathAndFindFile(old_name, true);
+  if (!old_rp)
+    return 0;
+  const auto new_rp = ResolveWritePathAndCreateDirs(new_name);
+  if (!new_rp)
+    return 0;
+
+  if (Path::ComparePaths(old_rp.FullPath, new_rp.FullPath) == 0)
+    return 0; // cannot copy into itself
+
+  if (!old_rp.AssetMgr)
+    return File::CopyFile(old_rp.FullPath, new_rp.FullPath, true) ? 1 : 0;
+
+  auto in = AssetMgr->OpenAsset(old_rp.FullPath, "*");
+  auto out = File::CreateFile(new_rp.FullPath);
+  if (!in || !out)
+    return 0;
+
+  return (CopyStream(in.get(), out.get(), in->GetLength()) == in->GetLength()) ? 1 : 0;
+}
+
+int File_Rename(const char *old_name, const char *new_name) {
+  // both paths must be writeable, but should also create dirs for the second
+  const auto old_rp = ResolveScriptPathAndFindFile(old_name, false);
+  if (!old_rp)
+    return 0;
+  const auto new_rp = ResolveWritePathAndCreateDirs(new_name);
+  if (!new_rp)
+    return 0;
+
+  if (Path::ComparePaths(old_rp.FullPath, new_rp.FullPath) == 0)
+    return 0; // cannot rename into itself
+
+  return File::RenameFile(old_rp.FullPath, new_rp.FullPath) ? 1 : 0;
+}
+
+static void FillDirList(std::vector<FileEntry> &files, const FSLocation &loc, const String &pattern)
+{
+    // Do ci search for the location, as parts of the path may have case mismatch
+    String path = File::FindFileCI(loc.BaseDir, loc.SubDir, true);
+    if (path.IsEmpty())
+        return;
+    Directory::GetFiles(path, files, pattern);
+}
+
+void FillDirList(std::vector<String> &files, const String &pattern, ScriptFileSortStyle file_sort, ScriptSortDirection sort_dir)
+{
+    ResolvedPath rp, alt_rp;
+    if (!ResolveScriptPath(pattern, true, rp, alt_rp))
+        return;
+
+    std::vector<FileEntry> fileents;
+    if (rp.AssetMgr)
+    {
+        AssetMgr->FindAssets(fileents, rp.FullPath, "*");
+    }
+    else
+    {
+        FillDirList(fileents, rp.Loc, Path::GetFilename(rp.FullPath));
+        if (alt_rp)
+        {
+            // Files from rp override alt_rp, so make certain we don't add matching files
+            if (fileents.empty())
+            {
+                FillDirList(fileents, alt_rp.Loc, Path::GetFilename(alt_rp.FullPath));
+            }
+            else
+            {
+                std::vector<FileEntry> fileents_alt;
+                FillDirList(fileents_alt, alt_rp.Loc, Path::GetFilename(alt_rp.FullPath));
+                std::sort(fileents.begin(), fileents.end(), FileEntryCmpByNameCI());
+                // TODO: following algorithm pushes element if not matching any existing;
+                // pick this out as a common algorithm somewhere?
+                size_t src_size = fileents.size();
+                for (const auto &alt_fe : fileents_alt)
+                {
+                    if (std::binary_search(fileents.begin(), fileents.begin() + src_size, alt_fe, FileEntryEqByNameCI()))
+                        continue;
+                    fileents.push_back(alt_fe);
+                }
+            }
+        }
+    }
+
+    const bool ascending = (sort_dir != kScSortDescending) || (file_sort == kScFileSort_None);
+    switch (file_sort)
+    {
+    case kScFileSort_Name:
+        if (ascending)
+            std::sort(fileents.begin(), fileents.end(), FileEntryCmpByNameCI());
+        else
+            std::sort(fileents.rbegin(), fileents.rend(), FileEntryCmpByNameCI());
+        break;
+    case kScFileSort_Time:
+        if (ascending)
+            std::sort(fileents.begin(), fileents.end(), FileEntryCmpByTime());
+        else
+            std::sort(fileents.rbegin(), fileents.rend(), FileEntryCmpByTime());
+        break;
+    default: break;
+    }
+
+    for (const auto &fe : fileents)
+    {
+        files.push_back(fe.Name);
+    }
+}
+
+void *File_GetFiles(const char *filemask, int file_sort, int sort_dir)
+{
+    file_sort = ValidateFileSort("ListBox.FillDirList", file_sort);
+    sort_dir = ValidateSortDirection("ListBox.FillDirList", sort_dir);
+
+    std::vector<String> files;
+    FillDirList(files, filemask, (ScriptFileSortStyle)file_sort, (ScriptSortDirection)sort_dir);
+
+    DynObjectRef arr = DynamicArrayHelpers::CreateStringArray(files);
+    return arr.Obj;
 }
 
 void *sc_OpenFile(const char *fnmm, int mode) {
@@ -96,12 +239,23 @@ void File_WriteInt(sc_File *fil, int towrite) {
   FileWriteInt(fil->handle, towrite);
 }
 
+void File_WriteFloat(sc_File *fil, float towrite) {
+  Stream *out = get_file_stream(fil->handle, "File.WriteFloat");
+  out->WriteInt8('F');
+  out->WriteFloat32(towrite);
+}
+
 void File_WriteRawChar(sc_File *fil, int towrite) {
   FileWriteRawChar(fil->handle, towrite);
 }
 
+void File_WriteRawFloat(sc_File *fil, float towrite) {
+  Stream *out = get_file_stream(fil->handle, "FileWriteRawFloat");
+  out->WriteFloat32(towrite);
+}
+
 void File_WriteRawInt(sc_File *fil, int towrite) {
-  Stream *out = get_valid_file_stream_from_handle(fil->handle, "FileWriteRawInt");
+  Stream *out = get_file_stream(fil->handle, "FileWriteRawInt");
   out->WriteInt32(towrite);
 }
 
@@ -114,7 +268,7 @@ void File_WriteRawLine(sc_File *fil, const char *towrite) {
 // guarantees null-terminator in the buffer.
 static bool File_ReadRawLineImpl(sc_File *fil, char* buffer, size_t buf_len) {
     if (buf_len == 0) return false;
-    Stream *in = get_valid_file_stream_from_handle(fil->handle, "File.ReadRawLine");
+    Stream *in = get_file_stream(fil->handle, "File.ReadRawLine");
     for (size_t i = 0; i < buf_len - 1; ++i)
     {
         int c = in->ReadByte();
@@ -138,8 +292,9 @@ static bool File_ReadRawLineImpl(sc_File *fil, char* buffer, size_t buf_len) {
 }
 
 void File_ReadRawLine(sc_File *fil, char* buffer) {
-  check_strlen(buffer);
-  File_ReadRawLineImpl(fil, buffer, MAXSTRLEN);
+  size_t buflen = check_scstrcapacity(buffer);
+  File_ReadRawLineImpl(fil, buffer, buflen);
+  commit_scstr_update(buffer);
 }
 
 const char* File_ReadRawLineBack(sc_File *fil) {
@@ -161,26 +316,38 @@ void File_ReadString(sc_File *fil, char *toread) {
 }
 
 const char* File_ReadStringBack(sc_File *fil) {
-  Stream *in = get_valid_file_stream_from_handle(fil->handle, "File.ReadStringBack");
+  Stream *in = get_file_stream(fil->handle, "File.ReadStringBack");
   if (in->EOS()) {
     return CreateNewScriptString("");
   }
 
-  size_t lle = (uint32_t)in->ReadInt32();
-  if (lle == 0)
+  size_t data_sz = (uint32_t)in->ReadInt32();
+  if (data_sz == 0)
   {
     debug_script_warn("File.ReadStringBack: file was not written by WriteString");
     return CreateNewScriptString("");;
   }
 
-  char *retVal = (char*)malloc(lle);
-  in->Read(retVal, lle);
-
-  return CreateNewScriptString(retVal, false);
+  // NOTE: support both deserialized with and without null terminator for varied use cases
+  auto buf = ScriptString::CreateBuffer(data_sz);
+  in->Read(buf.Get(), data_sz);
+  return CreateNewScriptString(std::move(buf));
 }
 
 int File_ReadInt(sc_File *fil) {
   return FileReadInt(fil->handle);
+}
+
+float File_ReadFloat(sc_File *fil) {
+  Stream *in = get_file_stream(fil->handle, "File.ReadFloat");
+  if (in->EOS())
+    return -1;
+  if (in->ReadInt8() != 'F')
+  {
+    debug_script_warn("File.ReadFloat: File read back in wrong order");
+    return -1;
+  }
+  return in->ReadFloat32();
 }
 
 int File_ReadRawChar(sc_File *fil) {
@@ -191,11 +358,67 @@ int File_ReadRawInt(sc_File *fil) {
   return FileReadRawInt(fil->handle);
 }
 
+float File_ReadRawFloat(sc_File *fil) {
+  Stream *out = get_file_stream(fil->handle, "File.ReadRawFloat");
+  return out->ReadFloat32();
+}
+
+int File_ReadRawBytes(sc_File *fil, void *arr_obj, int index, int count)
+{
+    Stream *in = get_file_stream(fil->handle, "File.ReadRawBytes");
+    const auto &hdr = CCDynamicArray::GetHeader(arr_obj);
+    if (hdr.GetElemCount() == 0)
+    {
+        debug_script_warn("File.ReadRawBytes: dynamic array has zero length");
+        return 0;
+    }
+    if (index < 0 || static_cast<uint32_t>(index) >= hdr.GetElemCount())
+    {
+        debug_script_warn("File.ReadRawBytes: starting index out of bounds: %d, range is %u..%u", index, 0u, hdr.GetElemCount() - 1);
+        return 0;
+    }
+    if (count < 0 || static_cast<uint32_t>(index) > hdr.GetElemCount() - index)
+    {
+        debug_script_warn("File.ReadRawBytes: invalid count: %d, valid range is %u..%u", count, 0u, hdr.GetElemCount() - index);
+        return 0;
+    }
+
+    uint32_t elem_size = hdr.TotalSize / hdr.GetElemCount();
+    uint32_t read_at = index * elem_size;
+    uint32_t read_count = std::min(static_cast<uint32_t>(count), hdr.TotalSize - read_at);
+    return static_cast<int>(in->Read(static_cast<uint8_t*>(arr_obj) + read_at, read_count));
+}
+
+int File_WriteRawBytes(sc_File *fil, void *arr_obj, int index, int count)
+{
+    Stream *out = get_file_stream(fil->handle, "File.WriteRawBytes");
+    const auto &hdr = CCDynamicArray::GetHeader(arr_obj);
+    if (hdr.GetElemCount() == 0)
+    {
+        debug_script_warn("File.WriteRawBytes: dynamic array has zero length");
+        return 0;
+    }
+    if (index < 0 || static_cast<uint32_t>(index) >= hdr.GetElemCount())
+    {
+        debug_script_warn("File.WriteRawBytes: starting index out of bounds: %d, range is %u..%u", index, 0u, hdr.GetElemCount() - 1);
+        return 0;
+    }
+    if (count < 0 || static_cast<uint32_t>(index) > hdr.GetElemCount() - index)
+    {
+        debug_script_warn("File.WriteRawBytes: invalid count: %d, valid range is %u..%u", count, 0u, hdr.GetElemCount() - index);
+        return 0;
+    }
+
+    uint32_t elem_size = hdr.TotalSize / hdr.GetElemCount();
+    uint32_t write_at = index * elem_size;
+    uint32_t write_count = std::min(static_cast<uint32_t>(count), hdr.TotalSize - write_at);
+    return static_cast<int>(out->Write(static_cast<uint8_t*>(arr_obj) + write_at, write_count));
+}
+
 int File_Seek(sc_File *fil, int offset, int origin)
 {
-    Stream *in = get_valid_file_stream_from_handle(fil->handle, "File.Seek");
-    if (!in->Seek(offset, (StreamSeek)origin)) { return -1; }
-    return in->GetPosition();
+    Stream *in = get_file_stream(fil->handle, "File.Seek");
+    return in->Seek(offset, (StreamSeek)origin);
 }
 
 int File_GetEOF(sc_File *fil) {
@@ -214,7 +437,7 @@ int File_GetPosition(sc_File *fil)
 {
     if (fil->handle <= 0)
         return -1;
-    Stream *stream = get_valid_file_stream_from_handle(fil->handle, "File.Position");
+    Stream *stream = get_file_stream(fil->handle, "File.Position");
     // TODO: a problem is that AGS script does not support unsigned or long int
     return (int)stream->GetPosition();
 }
@@ -223,7 +446,7 @@ const char *File_GetPath(sc_File *fil)
 {
     if (fil->handle <= 0)
         return nullptr;
-    Stream *stream = get_valid_file_stream_from_handle(fil->handle, "File.Path");
+    Stream *stream = get_file_stream(fil->handle, "File.Path");
     return CreateNewScriptString(stream->GetPath());
 }
 
@@ -287,8 +510,8 @@ FSLocation GetGlobalUserConfigDir()
 FSLocation GetGameUserConfigDir()
 {
     FSLocation dir = platform->GetUserConfigDirectory();
-    if (!usetup.user_conf_dir.IsEmpty()) // directive to use custom userconf location
-        return FSLocation(usetup.user_conf_dir);
+    if (!usetup.UserConfDir.IsEmpty()) // directive to use custom userconf location
+        return FSLocation(usetup.UserConfDir);
     else if (Path::IsRelativePath(dir.FullDir)) // relative dir is resolved relative to the game data dir
         return FSLocation(ResPaths.DataDir).Concat(dir.FullDir);
     // For absolute dir, we assume it's a special directory prepared for AGS engine
@@ -319,16 +542,16 @@ inline FSLocation MakeUserDataDir(const String &user_dir)
 
 FSLocation GetGameAppDataDir()
 {
-    if (usetup.shared_data_dir.IsEmpty())
+    if (usetup.AppDataDir.IsEmpty())
         return MakeDefaultDataDir(platform->GetAllUsersDataDirectory());
-    return MakeUserDataDir(usetup.shared_data_dir);
+    return MakeUserDataDir(usetup.AppDataDir);
 }
 
 FSLocation GetGameUserDataDir()
 {
-    if (usetup.user_data_dir.IsEmpty())
+    if (usetup.UserSaveDir.IsEmpty())
         return MakeDefaultDataDir(platform->GetUserSavedgamesDirectory());
-    return MakeUserDataDir(usetup.user_data_dir);
+    return MakeUserDataDir(usetup.UserSaveDir);
 }
 
 bool CreateFSDirs(const FSLocation &fs)
@@ -533,18 +756,18 @@ ResolvedPath ResolveWritePathAndCreateDirs(const String &sc_path)
     return ResolvedPath(res_path);
 }
 
-Stream *ResolveScriptPathAndOpen(const String &sc_path,
-    FileOpenMode open_mode, FileWorkMode work_mode)
+std::unique_ptr<Stream> ResolveScriptPathAndOpen(const String &sc_path,
+    FileOpenMode open_mode, StreamMode work_mode)
 {
     ResolvedPath rp;
-    if (open_mode == kFile_Open && work_mode == kFile_Read)
+    if (open_mode == kFile_Open && work_mode == kStream_Read)
         rp = ResolveScriptPathAndFindFile(sc_path, true);
     else
         rp = ResolveWritePathAndCreateDirs(sc_path);
 
     if (!rp)
         return nullptr;
-    Stream *s = rp.AssetMgr ?
+    auto s = rp.AssetMgr ?
         AssetMgr->OpenAsset(rp.FullPath, "*") :
         File::OpenFile(rp.FullPath, open_mode, work_mode);
     if (!s)
@@ -613,7 +836,7 @@ static int ags_pf_feof(void *userdata)
 
 static int ags_pf_ferror(void *userdata)
 {
-    return ((AGS_PACKFILE_OBJ*)userdata)->stream->HasErrors() ? 1 : 0;
+    return ((AGS_PACKFILE_OBJ*)userdata)->stream->GetError() ? 1 : 0;
 }
 
 // Custom PACKFILE callback table
@@ -630,14 +853,12 @@ static PACKFILE_VTABLE ags_packfile_vtable = {
 };
 //
 
-PACKFILE *PackfileFromAsset(const AssetPath &path)
+PACKFILE *PackfileFromStream(std::unique_ptr<Stream> stream)
 {
-    Stream *asset_stream = AssetMgr->OpenAsset(path);
-    if (!asset_stream) return nullptr;
-    const size_t asset_size = asset_stream->GetLength();
+    const size_t asset_size = stream->GetLength();
     if (asset_size == 0) return nullptr;
     AGS_PACKFILE_OBJ* obj = new AGS_PACKFILE_OBJ;
-    obj->stream.reset(asset_stream);
+    obj->stream = std::move(stream);
     obj->asset_size = asset_size;
     obj->remains = asset_size;
     return pack_fopen_vtable(&ags_packfile_vtable, obj);
@@ -648,13 +869,17 @@ String find_assetlib(const String &filename)
     String libname = File::FindFileCI(ResPaths.DataDir, filename);
     if (!libname.IsEmpty() && AssetManager::IsDataFile(libname))
         return libname;
-    if (!ResPaths.DataDir2.IsEmpty() &&
-        Path::ComparePaths(ResPaths.DataDir, ResPaths.DataDir2) != 0)
+
+    // Look up in the alternative locations;
+    // Test only locations that include "general data" filter (= empty filter)
+    for (const auto &opt_dir : ResPaths.OptDataDirs)
     {
-        // Hack for running in Debugger
-        libname = File::FindFileCI(ResPaths.DataDir2, filename);
-        if (!libname.IsEmpty() && AssetManager::IsDataFile(libname))
-            return libname;
+        if (opt_dir.second.FindSection("", ',') != String::NoIndex)
+        {
+            libname = File::FindFileCI(opt_dir.first, filename);
+            if (!libname.IsEmpty() && AssetManager::IsDataFile(libname))
+                return libname;
+        }
     }
     return "";
 }
@@ -669,50 +894,78 @@ AssetPath get_voice_over_assetpath(const String &filename)
     return AssetPath(filename, "voice");
 }
 
-ScriptFileHandle valid_handles[MAX_OPEN_SCRIPT_FILES + 1];
-// [IKM] NOTE: this is not precisely the number of files opened at this moment,
-// but rather maximal number of handles that were used simultaneously during game run
-int num_open_script_files = 0;
-ScriptFileHandle *check_valid_file_handle_ptr(Stream *stream_ptr, const char *operation_name)
-{
-  if (stream_ptr)
-  {
-      for (int i = 0; i < num_open_script_files; ++i)
-      {
-          if (stream_ptr == valid_handles[i].stream.get())
-          {
-              return &valid_handles[i];
-          }
-      }
-  }
+//=============================================================================
 
-  String exmsg = String::FromFormat("!%s: invalid file handle; file not previously opened or has been closed", operation_name);
-  quit(exmsg);
-  return nullptr;
+// ScriptFileHandle is a wrapper over a Stream object, prepared for script.
+class ScriptFileHandle
+{
+public:
+    ScriptFileHandle() = default;
+    ScriptFileHandle(std::unique_ptr<Stream> &&s, int32_t handle)
+        : _s(std::move(s)), _handle(handle) {}
+
+    Stream *GetStream() const { return _s.get(); }
+    int32_t GetHandle() const { return _handle; }
+
+    // Releases Stream ownership; used in case of temporary stream wrap
+    Stream *ReleaseStream() { return _s.release(); }
+
+private:
+    std::unique_ptr<Stream> _s;
+    int32_t _handle = 0;
+};
+
+std::vector<std::unique_ptr<ScriptFileHandle>> file_streams;
+
+int32_t add_file_stream(std::unique_ptr<Stream> &&stream, const char * /*operation_name*/)
+{
+    uint32_t handle = 1;
+    for (; handle < file_streams.size() && file_streams[handle]; ++handle) {}
+    if (handle >= file_streams.size())
+        file_streams.resize(handle + 1);
+    file_streams[handle].reset(new ScriptFileHandle(std::move(stream), handle));
+    return static_cast<int32_t>(handle);
 }
 
-ScriptFileHandle *check_valid_file_handle_int32(int32_t handle, const char *operation_name)
+static ScriptFileHandle *check_file_stream(int32_t fhandle, const char *operation_name)
 {
-  if (handle > 0)
-  {
-    for (int i = 0; i < num_open_script_files; ++i)
+    if (fhandle <= 0 || static_cast<uint32_t>(fhandle) >= file_streams.size()
+        || !file_streams[fhandle])
     {
-        if (handle == valid_handles[i].handle)
-        {
-            return &valid_handles[i];
-        }
+        quitprintf("!%s: invalid file handle; file not previously opened or has been closed", operation_name);
+        return nullptr;
     }
-  }
-
-  String exmsg = String::FromFormat("!%s: invalid file handle; file not previously opened or has been closed", operation_name);
-  quit(exmsg);
-  return nullptr;
+    return file_streams[fhandle].get();
 }
 
-Stream *get_valid_file_stream_from_handle(int32_t handle, const char *operation_name)
+void close_file_stream(int32_t fhandle, const char *operation_name)
 {
-    ScriptFileHandle *sc_handle = check_valid_file_handle_int32(handle, operation_name);
-    return sc_handle ? sc_handle->stream.get() : nullptr;
+    if (fhandle <= 0 || static_cast<uint32_t>(fhandle) >= file_streams.size()
+        || !file_streams[fhandle])
+    {
+        quitprintf("!%s: invalid file handle; file not previously opened or has been closed", operation_name);
+    }
+    else
+    {
+        file_streams[fhandle] = nullptr;
+    }
+}
+
+Stream *get_file_stream(int32_t fhandle, const char *operation_name)
+{
+    ScriptFileHandle *fh = check_file_stream(fhandle, operation_name);
+    return fh ? fh->GetStream() : nullptr;
+}
+
+IStreamBase *get_file_stream_iface(int32_t fhandle, const char *operation_name)
+{
+    ScriptFileHandle *fh = check_file_stream(fhandle, operation_name);
+    return fh ? fh->GetStream()->GetStreamBase() : nullptr;
+}
+
+void close_all_file_streams()
+{
+    file_streams.clear();
 }
 
 //=============================================================================
@@ -726,7 +979,11 @@ Stream *get_valid_file_stream_from_handle(int32_t handle, const char *operation_
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
 
-extern ScriptString myScriptStringImpl;
+
+RuntimeScriptValue Sc_File_Copy(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_INT_POBJ2(File_Copy, const char, const char);
+}
 
 // int (const char *fnmm)
 RuntimeScriptValue Sc_File_Delete(const RuntimeScriptValue *params, int32_t param_count)
@@ -738,6 +995,21 @@ RuntimeScriptValue Sc_File_Delete(const RuntimeScriptValue *params, int32_t para
 RuntimeScriptValue Sc_File_Exists(const RuntimeScriptValue *params, int32_t param_count)
 {
     API_SCALL_INT_POBJ(File_Exists, const char);
+}
+
+RuntimeScriptValue Sc_File_GetFileTime(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_OBJAUTO_POBJ(ScriptDateTime, File_GetFileTime, const char);
+}
+
+RuntimeScriptValue Sc_File_Rename(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_INT_POBJ2(File_Rename, const char, const char);
+}
+
+RuntimeScriptValue Sc_File_GetFiles(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_OBJ_POBJ_PINT2(void, globalDynamicArray, File_GetFiles, const char);
 }
 
 // void *(const char *fnmm, int mode)
@@ -763,10 +1035,20 @@ RuntimeScriptValue Sc_File_ReadInt(void *self, const RuntimeScriptValue *params,
     API_OBJCALL_INT(sc_File, File_ReadInt);
 }
 
+RuntimeScriptValue Sc_File_ReadFloat(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_FLOAT(sc_File, File_ReadFloat);
+}
+
 // int (sc_File *fil)
 RuntimeScriptValue Sc_File_ReadRawChar(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
     API_OBJCALL_INT(sc_File, File_ReadRawChar);
+}
+
+RuntimeScriptValue Sc_File_ReadRawFloat(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_FLOAT(sc_File, File_ReadRawFloat);
 }
 
 // int (sc_File *fil)
@@ -805,10 +1087,20 @@ RuntimeScriptValue Sc_File_WriteInt(void *self, const RuntimeScriptValue *params
     API_OBJCALL_VOID_PINT(sc_File, File_WriteInt);
 }
 
+RuntimeScriptValue Sc_File_WriteFloat(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_PFLOAT(sc_File, File_WriteFloat);
+}
+
 // void (sc_File *fil, int towrite)
 RuntimeScriptValue Sc_File_WriteRawChar(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
     API_OBJCALL_VOID_PINT(sc_File, File_WriteRawChar);
+}
+
+RuntimeScriptValue Sc_File_WriteRawFloat(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_VOID_PFLOAT(sc_File, File_WriteRawFloat);
 }
 
 RuntimeScriptValue Sc_File_WriteRawInt(void *self, const RuntimeScriptValue *params, int32_t param_count)
@@ -826,6 +1118,16 @@ RuntimeScriptValue Sc_File_WriteRawLine(void *self, const RuntimeScriptValue *pa
 RuntimeScriptValue Sc_File_WriteString(void *self, const RuntimeScriptValue *params, int32_t param_count)
 {
     API_OBJCALL_VOID_POBJ(sc_File, File_WriteString, const char);
+}
+
+RuntimeScriptValue Sc_File_ReadRawBytes(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT_POBJ_PINT2(sc_File, File_ReadRawBytes, void);
+}
+
+RuntimeScriptValue Sc_File_WriteRawBytes(void *self, const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_OBJCALL_INT_POBJ_PINT2(sc_File, File_WriteRawBytes, void);
 }
 
 RuntimeScriptValue Sc_File_Seek(void *self, const RuntimeScriptValue *params, int32_t param_count)
@@ -859,24 +1161,34 @@ RuntimeScriptValue Sc_File_GetPath(void *self, const RuntimeScriptValue *params,
 void RegisterFileAPI()
 {
     ScFnRegister file_api[] = {
+        { "File::Copy^2",             API_FN_PAIR(File_Copy) },
         { "File::Delete^1",           API_FN_PAIR(File_Delete) },
         { "File::Exists^1",           API_FN_PAIR(File_Exists) },
+        { "File::GetFileTime^1",      API_FN_PAIR(File_GetFileTime) },
+        { "File::GetFiles^3",         API_FN_PAIR(File_GetFiles) },
+        { "File::Rename^2",           API_FN_PAIR(File_Rename) },
         { "File::Open^2",             API_FN_PAIR(sc_OpenFile) },
         { "File::ResolvePath^1",      API_FN_PAIR(File_ResolvePath) },
 
         { "File::Close^0",            API_FN_PAIR(File_Close) },
         { "File::ReadInt^0",          API_FN_PAIR(File_ReadInt) },
+        { "File::ReadFloat^0",        API_FN_PAIR(File_ReadFloat) },
         { "File::ReadRawChar^0",      API_FN_PAIR(File_ReadRawChar) },
         { "File::ReadRawInt^0",       API_FN_PAIR(File_ReadRawInt) },
+        { "File::ReadRawFloat^0",     API_FN_PAIR(File_ReadRawFloat) },
         { "File::ReadRawLine^1",      API_FN_PAIR(File_ReadRawLine) },
         { "File::ReadRawLineBack^0",  API_FN_PAIR(File_ReadRawLineBack) },
         { "File::ReadString^1",       API_FN_PAIR(File_ReadString) },
         { "File::ReadStringBack^0",   API_FN_PAIR(File_ReadStringBack) },
         { "File::WriteInt^1",         API_FN_PAIR(File_WriteInt) },
+        { "File::WriteFloat^1",       API_FN_PAIR(File_WriteFloat) },
         { "File::WriteRawChar^1",     API_FN_PAIR(File_WriteRawChar) },
+        { "File::WriteRawFloat^1",    API_FN_PAIR(File_WriteRawFloat) },
         { "File::WriteRawInt^1",      API_FN_PAIR(File_WriteRawInt) },
         { "File::WriteRawLine^1",     API_FN_PAIR(File_WriteRawLine) },
         { "File::WriteString^1",      API_FN_PAIR(File_WriteString) },
+        { "File::ReadRawBytes^3",     API_FN_PAIR(File_ReadRawBytes) },
+        { "File::WriteRawBytes^3",    API_FN_PAIR(File_WriteRawBytes) },
         { "File::Seek^2",             API_FN_PAIR(File_Seek) },
         { "File::get_EOF",            API_FN_PAIR(File_GetEOF) },
         { "File::get_Error",          API_FN_PAIR(File_GetError) },

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -39,7 +39,6 @@
 #include "platform/base/agsplatformdriver.h"
 #include "script/cc_common.h"
 #include "script/script.h"
-#include "util/alignedstream.h"
 #include "util/stream.h"
 #include "util/textstreamreader.h"
 
@@ -114,7 +113,7 @@ HError preload_game_data()
     if (!err)
         return (HError)err;
     // Read only the particular data we need for preliminary game analysis
-    PreReadGameData(game, src.InputStream.get(), src.DataVersion);
+    PreReadGameData(game, std::move(src.InputStream), src.DataVersion);
     game.compiled_with = src.CompiledWith;
     FixupSaveDirectory(game);
     return HError::None();
@@ -134,31 +133,30 @@ static inline HError MakeScriptLoadError(const char *name)
 HError LoadGameScripts(LoadedGameEntities &ents)
 {
     // Global script
-    std::unique_ptr<Stream> in(AssetMgr->OpenAsset("GlobalScript.o"));
+    auto in = AssetMgr->OpenAsset("GlobalScript.o");
     if (in)
     {
-        PScript script(ccScript::CreateFromStream(in.get()));
+        PScript script(ccScript::CreateFromStream("GlobalScript.asc", in.get()));
         if (!script)
             return MakeScriptLoadError("GlobalScript.o");
         ents.GlobalScript = script;
     }
     // Dialog script
-    in.reset(AssetMgr->OpenAsset("DialogScript.o"));
+    in = AssetMgr->OpenAsset("DialogScripts.o");
     if (in)
     {
-        PScript script(ccScript::CreateFromStream(in.get()));
+        PScript script(ccScript::CreateFromStream("__DialogScripts.asc", in.get()));
         if (!script)
-            return MakeScriptLoadError("DialogScript.o");
+            return MakeScriptLoadError("DialogScripts.o");
         ents.DialogScript = script;
     }
     // Script modules
     // First load a modules list
     std::vector<String> modules;
-    in.reset(AssetMgr->OpenAsset("ScriptModules.lst"));
+    in = AssetMgr->OpenAsset("ScriptModules.lst");
     if (in)
     {
-        TextStreamReader reader(in.get());
-        in.release(); // TextStreamReader got it
+        TextStreamReader reader(std::move(in));
         while (!reader.EOS())
             modules.push_back(reader.ReadLine());
     }
@@ -167,10 +165,11 @@ HError LoadGameScripts(LoadedGameEntities &ents)
     // Now run by the list and try loading everything
     for (size_t i = 0; i < modules.size(); ++i)
     {
-        in.reset(AssetMgr->OpenAsset(modules[i]));
+        in = AssetMgr->OpenAsset(modules[i]);
         if (in)
         {
-            PScript script(ccScript::CreateFromStream(in.get()));
+            String script_name = Path::ReplaceExtension(modules[i], "asc");
+            PScript script(ccScript::CreateFromStream(script_name.ToStdString(), in.get()));
             if (!script)
                 return MakeScriptLoadError(modules[i].GetCStr());
             ents.ScriptModules[i] = script;
@@ -186,10 +185,9 @@ HError load_game_file()
     HError err = (HError)OpenMainGameFileFromDefaultAsset(src, AssetMgr.get());
     if (!err)
         return err;
-    err = (HError)ReadGameData(ents, src.InputStream.get(), src.DataVersion);
+    err = (HError)ReadGameData(ents, std::move(src.InputStream), src.DataVersion);
     if (!err)
         return err;
-    src.InputStream.reset();
 
     //-------------------------------------------------------------------------
     // Data overrides: for compatibility mode and custom engine support
@@ -203,7 +201,7 @@ HError load_game_file()
         game.options[OPT_CUSTOMENGINETAG] = CUSTOMENG_CLIFFTOP;
     }
     // Upscale mode -- for old games that supported it.
-    if ((loaded_game_file_version < kGameVersion_310) && usetup.override_upscale)
+    if ((loaded_game_file_version < kGameVersion_310) && usetup.Override.UpscaleResolution)
     {
         if (game.GetResolutionType() == kGameResolution_320x200)
             game.SetGameResolution(kGameResolution_640x400);
@@ -219,12 +217,17 @@ HError load_game_file()
     err = (HError)UpdateGameData(ents, src.DataVersion);
     if (!err)
         return err;
+    // Search the asset locations for old-style audio files and recreate clips array;
+    // we do this separately after UpdateGameData, because this involves scanning enviroment.
+    ScanOldStyleAudio(AssetMgr.get(), ents.Game, ents.Views, src.DataVersion);
     err = LoadGameScripts(ents);
     if (!err)
         return err;
     err = (HError)InitGameState(ents, src.DataVersion);
     if (!err)
         return err;
+
+    GUIE::MarkAllGUIForUpdate(true, true);
     return HError::None();
 }
 

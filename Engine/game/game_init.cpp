@@ -2,16 +2,15 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
-#include <numeric>
 #include <vector>
 #include "ac/character.h"
 #include "ac/dialog.h"
@@ -25,6 +24,7 @@
 #include "ac/gui.h"
 #include "ac/lipsync.h"
 #include "ac/movelist.h"
+#include "ac/spritecache.h"
 #include "ac/view.h"
 #include "ac/dynobj/all_dynamicclasses.h"
 #include "ac/dynobj/all_scriptclasses.h"
@@ -54,6 +54,7 @@ using namespace Engine;
 
 extern ScriptSystem scsystem;
 extern std::vector<ViewStruct> views;
+extern SpriteCache spriteset;
 
 extern CCGUIObject ccDynamicGUIObject;
 extern CCCharacter ccDynamicCharacter;
@@ -65,7 +66,6 @@ extern CCObject    ccDynamicObject;
 extern CCDialog    ccDynamicDialog;
 extern CCAudioChannel ccDynamicAudio;
 extern CCAudioClip ccDynamicAudioClip;
-extern ScriptString myScriptStringImpl;
 extern ScriptObject scrObj[MAX_ROOM_OBJECTS];
 extern std::vector<ScriptGUI> scrGui;
 extern ScriptHotspot scrHotspot[MAX_ROOM_HOTSPOTS];
@@ -162,7 +162,7 @@ void InitAndRegisterCharacters(GameSetupStruct &game)
         ccRegisterManagedObject(&game.chars[i], &ccDynamicCharacter);
 
         // export the character's script object
-        ccAddExternalScriptObject(game.chars[i].scrname, &game.chars[i], &ccDynamicCharacter);
+        ccAddExternalScriptObject(game.chars2[i].scrname_new, &game.chars[i], &ccDynamicCharacter);
     }
 }
 
@@ -201,10 +201,11 @@ HError InitAndRegisterGUI(GameSetupStruct &game)
         scrGui[i].id = -1;
     }
 
+    GUIRefCollection guictrl_refs(guibuts, guiinv, guilabels, guilist, guislider, guitext);
     for (int i = 0; i < game.numgui; ++i)
     {
         // link controls to their parent guis
-        HError err = guis[i].RebuildArray();
+        HError err = guis[i].RebuildArray(guictrl_refs);
         if (!err)
             return err;
         // export all the GUI's controls
@@ -296,7 +297,6 @@ HError InitAndRegisterGameEntities(GameSetupStruct &game)
     InitAndRegisterHotspots();
     InitAndRegisterRegions();
     InitAndRegisterRoomObjects();
-    play.CreatePrimaryViewportAndCamera();
 
     RegisterStaticArrays(game);
 
@@ -347,7 +347,7 @@ void LoadFonts(GameSetupStruct &game, GameDataVersion data_ver)
 
 void LoadLipsyncData()
 {
-    std::unique_ptr<Stream> speechsync( AssetMgr->OpenAsset("syncdata.dat", "voice") );
+    auto speechsync = AssetMgr->OpenAsset("syncdata.dat", "voice");
     if (!speechsync)
         return;
     // this game has voice lip sync
@@ -364,9 +364,9 @@ void LoadLipsyncData()
             splipsync[ee].numPhonemes = speechsync->ReadInt16();
             speechsync->Read(splipsync[ee].filename, 14);
             splipsync[ee].endtimeoffs.resize(splipsync[ee].numPhonemes);
-            speechsync->ReadArrayOfInt32(&splipsync[ee].endtimeoffs.front(), splipsync[ee].numPhonemes);
+            speechsync->ReadArrayOfInt32(splipsync[ee].endtimeoffs.data(), splipsync[ee].numPhonemes);
             splipsync[ee].frame.resize(splipsync[ee].numPhonemes);
-            speechsync->ReadArrayOfInt16(&splipsync[ee].frame.front(), splipsync[ee].numPhonemes);
+            speechsync->ReadArrayOfInt16(splipsync[ee].frame.data(), splipsync[ee].numPhonemes);
         }
     }
     Debug::Printf(kDbgMsg_Info, "Lipsync data found and loaded");
@@ -415,9 +415,8 @@ static void ConvertGuiToGameRes(GameSetupStruct &game, GameDataVersion data_ver)
             GUIObject *guio = cgp->GetControl(j);
             guio->X *= mul;
             guio->Y *= mul;
-            guio->Width *= mul;
-            guio->Height *= mul;
-            guio->IsActivated = false;
+            Size sz = guio->GetSize() * mul;
+            guio->SetSize(sz.Width, sz.Height);
             guio->OnResized();
         }
     }
@@ -449,8 +448,6 @@ void InitGameResolution(GameSetupStruct &game, GameDataVersion data_ver)
 {
     Debug::Printf("Initializing resolution settings");
     const Size game_size = game.GetGameRes();
-    usetup.textheight = get_font_height_outlined(0) + 1;
-
     Debug::Printf(kDbgMsg_Info, "Game native resolution: %d x %d (%d bit)%s", game_size.Width, game_size.Height, game.color_depth * 8,
         game.IsLegacyLetterbox() ? " letterbox-by-design" : "");
 
@@ -466,6 +463,7 @@ void InitGameResolution(GameSetupStruct &game, GameDataVersion data_ver)
     // Assign ScriptSystem's resolution variables
     scsystem.width = game.GetGameRes().Width;
     scsystem.height = game.GetGameRes().Height;
+    scsystem.coldepth = game.GetColorDepth();
     scsystem.viewport_width = game_to_data_coord(play.GetMainViewport().GetWidth());
     scsystem.viewport_height = game_to_data_coord(play.GetMainViewport().GetHeight());
 }
@@ -500,9 +498,19 @@ HGameInitError InitGameState(const LoadedGameEntities &ents, GameDataVersion dat
     //
     // 3. Allocate and init game objects
     //
+    spriteset.EnlargeTo(ents.SpriteCount - 1);
     charextra.resize(game.numcharacters);
     mls.resize(game.numcharacters + MAX_ROOM_OBJECTS + 1);
-    init_game_drawdata();
+    guis = std::move(ents.Guis);
+    guibuts = std::move(ents.GuiControls.Buttons);
+    guiinv = std::move(ents.GuiControls.InvWindows);
+    guilabels = std::move(ents.GuiControls.Labels);
+    guilist = std::move(ents.GuiControls.ListBoxes);
+    guislider = std::move(ents.GuiControls.Sliders);
+    guitext = std::move(ents.GuiControls.TextBoxes);
+    GUI::Context.Spriteset = &spriteset;
+    GUIRefCollection guictrl_refs(guibuts, guiinv, guilabels, guilist, guislider, guitext);
+    GUI::RebuildGUI(guis, guictrl_refs);
     views = std::move(ents.Views);
     play.charProps.resize(game.numcharacters);
     dialog = std::move(ents.Dialogs);
@@ -528,6 +536,7 @@ HGameInitError InitGameState(const LoadedGameEntities &ents, GameDataVersion dat
     //
     // 4. Initialize certain runtime variables
     //
+    // TODO: merge this with engine_init_game_settings()
     game_paused = 0;  // reset the game paused flag
     ifacepopped = -1;
 
@@ -538,20 +547,18 @@ HGameInitError InitGameState(const LoadedGameEntities &ents, GameDataVersion dat
 
     play.score_sound = game.scoreClipID;
     play.fade_effect = game.options[OPT_FADETYPE];
+    play.std_gui_textheight = get_font_height_outlined(0) + 1;
+    play.enable_antialiasing = usetup.AntialiasSprites;
 
     //
     // 5. Initialize runtime state of certain game objects
     //
     InitGameResolution(game, data_ver);
-    for (auto &label : guilabels)
-    {
-        // labels are not clickable by default
-        label.SetClickable(false);
-    }
-    play.gui_draw_order.resize(game.numgui);
-    std::iota(play.gui_draw_order.begin(), play.gui_draw_order.end(), 0);
-    update_gui_zorder();
+    prepare_gui_runtime(true /* startup */);
     calculate_reserved_channel_count();
+    // Default viewport and camera, draw data, etc, should be created when resolution is set
+    play.CreatePrimaryViewportAndCamera();
+    init_game_drawdata();
 
     //
     // 6. Register engine API exports
@@ -559,13 +566,12 @@ HGameInitError InitGameState(const LoadedGameEntities &ents, GameDataVersion dat
     // require access to script API at initialization time.
     //
     ccSetScriptAliveTimer(1000 / 60u, 1000u, 150000u);
-    ccSetStringClassImpl(&myScriptStringImpl);
     setup_script_exports(base_api, compat_api);
 
     //
     // 7. Start up plugins
     //
-    pl_register_plugins(ents.PluginInfos);
+    pl_register_plugins(ents.PluginInfos, !usetup.Override.NoPlugins);
     pl_startup_plugins();
 
     //
@@ -583,7 +589,29 @@ HGameInitError InitGameState(const LoadedGameEntities &ents, GameDataVersion dat
     if (create_global_script())
         return new GameInitError(kGameInitErr_ScriptLinkFailed, cc_get_error().ErrorString);
 
+    // Apply accessibility options, must be done last, because some
+    // may override startup game settings.
+    ApplyAccessibilityOptions();
+
     return HGameInitError::None();
+}
+
+void ApplyAccessibilityOptions()
+{
+    if (usetup.Access.SpeechSkipStyle != kSkipSpeechNone)
+    {
+        play.speech_skip_style = user_to_internal_skip_speech(usetup.Access.SpeechSkipStyle);
+    }
+    if (usetup.Access.TextSkipStyle != kSkipSpeechNone)
+    {
+        play.skip_display = usetup.Access.TextSkipStyle;
+        play.skip_timed_display = usetup.Access.TextSkipStyle;
+    }
+    if (usetup.Access.TextReadSpeed > 0)
+    {
+        play.text_speed = usetup.Access.TextReadSpeed;
+        play.text_min_display_time_ms = Math::Clamp((int)(1000 * (15.f / usetup.Access.TextReadSpeed)), 1000, 3000);
+    }
 }
 
 } // namespace Engine

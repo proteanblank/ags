@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -26,14 +26,14 @@ using namespace Common;
 namespace GfxUtil
 {
 
-Bitmap *ConvertBitmap(Bitmap *src, int dst_color_depth)
+Bitmap *ConvertBitmap(Bitmap *src, int dst_color_depth, bool keep_mask)
 {
     int src_col_depth = src->GetColorDepth();
     if (src_col_depth != dst_color_depth)
     {
         int old_conv = get_color_conversion();
         // TODO: find out what is this, and why do we need to call this every time (do we?)
-        set_color_conversion(COLORCONV_KEEP_TRANS | COLORCONV_TOTAL);
+        set_color_conversion((COLORCONV_KEEP_TRANS * keep_mask) | COLORCONV_TOTAL);
         Bitmap *dst = BitmapHelper::CreateBitmapCopy(src, dst_color_depth);
         set_color_conversion(old_conv);
         return dst;
@@ -111,45 +111,17 @@ void DrawSpriteWithTransparency(Bitmap *ds, Bitmap *sprite, int x, int y, int al
         return;
     }
 
-    Bitmap hctemp;
     const int surface_depth = ds->GetColorDepth();
     const int sprite_depth  = sprite->GetColorDepth();
 
-    if (sprite_depth < surface_depth)
+    // Allegro does not support masked blit or blend between different formats
+    // *except* when drawing 8-bit sprites.
+    std::unique_ptr<Bitmap> conv_bm;
+    if ((surface_depth != sprite_depth) && (sprite_depth > 8))
     {
-        // If sprite is lower color depth than destination surface, e.g.
-        // 8-bit sprites drawn on 16/32-bit surfaces.
-        if (sprite_depth == 8 && surface_depth >= 24)
-        {
-            // 256-col sprite -> truecolor background
-            // this is automatically supported by allegro, no twiddling needed
-            ds->Blit(sprite, x, y, kBitmap_Transparency);
-            return;
-        }
-
-        // 256-col sprite -> hi-color background, or
-        // 16-bit sprite -> 32-bit background
-        hctemp.CreateCopy(sprite, surface_depth);
-        if (sprite_depth == 8)
-        {
-            // only do this for 256-col -> hi-color, cos the Blit call converts
-            // transparency for 16->32 bit
-            color_t mask_color = hctemp.GetMaskColor();
-            for (int scan_y = 0; scan_y < hctemp.GetHeight(); ++scan_y)
-            {
-                // we know this must be 1 bpp source and 2 bpp pixel destination
-                const uint8_t *src_scanline = sprite->GetScanLine(scan_y);
-                uint16_t      *dst_scanline = (uint16_t*)hctemp.GetScanLineForWriting(scan_y);
-                for (int scan_x = 0; scan_x < hctemp.GetWidth(); ++scan_x)
-                {
-                    if (src_scanline[scan_x] == 0)
-                    {
-                        dst_scanline[scan_x] = mask_color;
-                    }
-                }
-            }
-        }
-        sprite = &hctemp;
+        // use ConvertBitmap in order to keep mask pixels
+        conv_bm.reset(ConvertBitmap(sprite, surface_depth));
+        sprite = conv_bm.get();
     }
 
     if ((alpha < 0xFF) && (surface_depth > 8) && (sprite_depth > 8))

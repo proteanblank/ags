@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "game/tra_file.h"
@@ -125,8 +125,8 @@ HError ReadTraBlock(Translation &tra, Stream *in, TraFileBlock block, const Stri
 class TRABlockReader : public DataExtReader
 {
 public:
-    TRABlockReader(Translation &tra, Stream *in)
-        : DataExtReader(in, kDataExt_NumID32 | kDataExt_File32)
+    TRABlockReader(Translation &tra, std::unique_ptr<Stream> &&in)
+        : DataExtReader(std::move(in), kDataExt_NumID32 | kDataExt_File32)
         , _tra(tra) {}
 
     // Reads only the Game ID block and stops
@@ -135,55 +135,55 @@ public:
         HError err = FindOne(kTraFblk_GameID);
         if (!err)
             return err;
-        return ReadTraBlock(_tra, _in, kTraFblk_GameID, "", _blockLen);
+        return ReadTraBlock(_tra, _in.get(), kTraFblk_GameID, "", _blockLen);
     }
 
 private:
     String GetOldBlockName(int block_id) const override
     { return GetTraBlockName((TraFileBlock)block_id); }
-    soff_t GetOverLeeway(int block_id) const
+    soff_t GetOverLeeway(int block_id) const override
     {
         // TRA files made by pre-3.0 editors have a block length miscount by 1 byte
         if (block_id == kTraFblk_GameID) return 1;
         return 0;
     }
-    HError ReadBlock(int block_id, const String &ext_id,
+    HError ReadBlock(Stream *in, int block_id, const String &ext_id,
         soff_t block_len, bool &read_next) override
     {
         read_next = true;
-        return ReadTraBlock(_tra, _in, (TraFileBlock)block_id, ext_id, block_len);
+        return ReadTraBlock(_tra, _in.get(), (TraFileBlock)block_id, ext_id, block_len);
     }
 
     Translation &_tra;
 };
 
 
-HError TestTraGameID(int game_uid, const String &game_name, Stream *in)
+HError TestTraGameID(int game_uid, const String &game_name, std::unique_ptr<Stream> &&in)
 {
-    HError err = OpenTraFile(in);
+    HError err = OpenTraFile(in.get());
     if (!err)
         return err;
 
     Translation tra;
-    TRABlockReader reader(tra, in);
+    TRABlockReader reader(tra, std::move(in));
     err = reader.ReadGameID();
     if (!err)
         return err;
     // Test the identifiers, if they are not present then skip the test
     if ((tra.GameUid != 0 && (game_uid != tra.GameUid)) ||
-        !tra.GameName.IsEmpty() && (game_name != tra.GameName))
+        (!tra.GameName.IsEmpty() && (game_name != tra.GameName)))
         return new TraFileError(kTraFileErr_GameIDMismatch,
             String::FromFormat("The translation is designed for '%s'", tra.GameName.GetCStr()));
     return HError::None();
 }
 
-HError ReadTraData(Translation &tra, Stream *in)
+HError ReadTraData(Translation &tra, std::unique_ptr<Stream> &&in)
 {
-    HError err = OpenTraFile(in);
+    HError err = OpenTraFile(in.get());
     if (!err)
         return err;
 
-    TRABlockReader reader(tra, in);
+    TRABlockReader reader(tra, std::move(in));
     return reader.Read();
 }
 
@@ -192,17 +192,17 @@ static const char *EncryptText(std::vector<char> &en_buf, const String &s)
 {
     if (en_buf.size() < s.GetLength() + 1)
         en_buf.resize(s.GetLength() + 1);
-    strncpy(&en_buf.front(), s.GetCStr(), s.GetLength() + 1);
-    encrypt_text(&en_buf.front());
-    return &en_buf.front();
+    memcpy(en_buf.data(), s.GetCStr(), s.GetLength() + 1);
+    encrypt_text(en_buf.data());
+    return en_buf.data();
 }
 
 // TODO: perhaps merge with encrypt/decrypt utilities
 static const char *EncryptEmptyString(std::vector<char> &en_buf)
 {
     en_buf[0] = 0;
-    encrypt_text(&en_buf.front());
-    return &en_buf.front();
+    encrypt_text(en_buf.data());
+    return en_buf.data();
 }
 
 void WriteGameID(const Translation &tra, Stream *out)
@@ -258,16 +258,16 @@ inline void WriteTraBlock(const Translation &tra, const String &ext_id,
         kDataExt_NumID32 | kDataExt_File32, out);
 }
 
-void WriteTraData(const Translation &tra, Stream *out)
+void WriteTraData(const Translation &tra, std::unique_ptr<Stream> &&out)
 {
     // Write header
     out->Write(TRASignature, strlen(TRASignature) + 1);
 
     // Write all blocks
-    WriteTraBlock(tra, kTraFblk_GameID, WriteGameID, out);
-    WriteTraBlock(tra, kTraFblk_Dict, WriteDict, out);
-    WriteTraBlock(tra, kTraFblk_TextOpts, WriteTextOpts, out);
-    WriteTraBlock(tra, "ext_sopts", WriteStrOptions, out);
+    WriteTraBlock(tra, kTraFblk_GameID, WriteGameID, out.get());
+    WriteTraBlock(tra, kTraFblk_Dict, WriteDict, out.get());
+    WriteTraBlock(tra, kTraFblk_TextOpts, WriteTextOpts, out.get());
+    WriteTraBlock(tra, "ext_sopts", WriteStrOptions, out.get());
 
     // Write ending
     out->WriteInt32(kTraFile_EOF);

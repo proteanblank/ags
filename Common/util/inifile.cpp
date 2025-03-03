@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/inifile.h"
@@ -17,6 +17,9 @@
 #include "util/textstreamreader.h"
 #include "util/textstreamwriter.h"
 
+// TODO: Unicode-aware implementation that potentially deals with
+// unicode spaces, replacing isblank and isspace usage.
+//
 // TODO: replace with C++11 std::isblank library function
 namespace agsstd
 {
@@ -200,9 +203,9 @@ IniFile::IniFile()
     _sections.push_back(SectionDef(""));
 }
 
-void IniFile::Read(Stream *in)
+void IniFile::Read(std::unique_ptr<Stream> &&in)
 {
-    TextStreamReader reader(in);
+    TextStreamReader reader(std::move(in));
     
     _sections.clear();
     // Create a global section;
@@ -279,13 +282,11 @@ void IniFile::Read(Stream *in)
         }
     }
     while (!reader.EOS());
-
-    reader.ReleaseStream();
 }
 
-void IniFile::Write(Stream *out) const
+void IniFile::Write(std::unique_ptr<Stream> &&out) const
 {
-    TextStreamWriter writer(out);
+    TextStreamWriter writer(std::move(out));
     for (ConstSectionIterator sec = _sections.begin(); sec != _sections.end(); ++sec)
     {
         if (sec != _sections.begin()) // do not write global section's name
@@ -293,7 +294,6 @@ void IniFile::Write(Stream *out) const
         for (ConstItemIterator item = sec->CBegin(); item != sec->CEnd(); ++item)
             writer.WriteLine(item->GetLine());
     }
-    writer.ReleaseStream();
 }
 
 } // namespace Common

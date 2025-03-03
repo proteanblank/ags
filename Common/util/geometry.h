@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -118,6 +118,35 @@ struct Point
     {
         return Point(X - p.X, Y - p.Y);
     }
+
+    inline Point operator *(int mul) const
+    {
+        return Point(X * mul, Y * mul);
+    }
+
+    inline Point operator /(int div) const
+    {
+        return Point(X / div, Y / div);
+    }
+
+    inline Point &operator *=(int mul)
+    {
+        X *= mul;
+        Y *= mul;
+        return *this;
+    }
+
+    inline Point &operator /=(int div)
+    {
+        X /= div;
+        Y /= div;
+        return *this;
+    }
+
+    inline bool Equals(const int x, const int y) const
+    {
+        return X == x && Y == y;
+    }
 };
 
 struct Line
@@ -184,17 +213,17 @@ struct Size
     }
 
     // Indicates if current size exceeds other size by any metric
-    inline bool ExceedsByAny(const Size size) const
+    inline bool ExceedsByAny(const Size &size) const
     {
         return Width > size.Width || Height > size.Height;
     }
 
-    inline bool operator==(const Size size) const
+    inline bool operator==(const Size &size) const
     {
         return Width == size.Width && Height == size.Height;
     }
 
-    inline bool operator!=(const Size size) const
+    inline bool operator!=(const Size &size) const
     {
         return Width != size.Width || Height != size.Height;
     }
@@ -422,8 +451,11 @@ bool IsRectInsideRect(const Rect &place, const Rect &item);
 // Calculates a distance between two axis-aligned rectangles, returns 0 if they intersect
 float DistanceBetween(const Rect &r1, const Rect &r2);
 
-int AlignInHRange(int x1, int x2, int off_x, int width, FrameAlignment align);
-int AlignInVRange(int y1, int y2, int off_y, int height, FrameAlignment align);
+// Align an item of certain width in the given horizontal frame; returns item's X position
+int AlignInHRange(int frame_x1, int frame_x2, int item_offx, int item_width, FrameAlignment align);
+// Align an item of certain height in the given vertical frame; returns item's Y position
+int AlignInVRange(int frame_y1, int frame_y2, int item_offy, int item_height, FrameAlignment align);
+// Align an item in the given frame, returns item's position as rectangle
 Rect AlignInRect(const Rect &frame, const Rect &item, FrameAlignment align);
 
 Size ProportionalStretch(int dest_w, int dest_h, int item_w, int item_h);
@@ -437,6 +469,11 @@ Rect PlaceInRect(const Rect &place, const Rect &item, const RectPlacement &place
 Rect SumRects(const Rect &r1, const Rect &r2);
 // Intersect two rectangles, the resolt is the rectangle bounding their intersection
 Rect IntersectRects(const Rect &r1, const Rect &r2);
+
+// Calculates the size of a rectangle necessary to accomodate the rect of original size
+// if it were rotated by the given angle (in degrees)
+Size RotateSize(Size sz, int degrees);
+
 //} // namespace Common
 //} // namespace AGS
 

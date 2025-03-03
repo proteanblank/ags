@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -55,8 +55,6 @@ extern GameSetupStruct game;
 extern SpriteCache spriteset;
 extern RoomStruct thisroom;
 extern RoomStatus troom;    // used for non-saveable rooms, eg. intro
-extern int our_eip;
-extern char pexbuf[STD_BUFFER_SIZE];
 extern int proper_exit;
 extern char check_dynamic_sprites_at_exit;
 extern int editor_debugging_initialized;
@@ -84,27 +82,27 @@ void quit_stop_cd()
         cd_manager(3,0);
 }
 
-void quit_shutdown_scripts()
-{
-    ccUnregisterAllObjects();
-}
-
 void quit_check_dynamic_sprites(QuitReason qreason)
 {
     if ((qreason & kQuitKind_NormalExit) && (check_dynamic_sprites_at_exit) && 
-        (game.options[OPT_DEBUGMODE] != 0)) {
-            // game exiting normally -- make sure the dynamic sprites
-            // have been deleted
-            for (size_t i = 1; i < spriteset.GetSpriteSlotCount(); i++) {
-                if (game.SpriteInfos[i].Flags & SPF_DYNAMICALLOC)
-                    debug_script_warn("Dynamic sprite %d was never deleted", i);
+        (game.options[OPT_DEBUGMODE] != 0))
+    {
+        // Check that the dynamic sprites have been deleted;
+        // ignore those that are owned by the game objects.
+        for (size_t i = 1; i < spriteset.GetSpriteSlotCount(); i++)
+        {
+            if ((game.SpriteInfos[i].Flags & SPF_DYNAMICALLOC) &&
+                ((game.SpriteInfos[i].Flags & SPF_OBJECTOWNED) == 0))
+            {
+                debug_script_warn("Dynamic sprite %d was never deleted", i);
             }
+        }
     }
 }
 
 void quit_shutdown_audio()
 {
-    our_eip = 9917;
+    set_our_eip(9917);
     game.options[OPT_CROSSFADEMUSIC] = 0;
     shutdown_sound();
 }
@@ -143,7 +141,7 @@ QuitReason quit_check_for_error_state(const char *qmsg, String &errmsg, String &
                 "(Engine version %s)\n\n", EngineVersion.LongString.GetCStr());
         }
 
-        alertis.Append(cc_get_error().CallStack);
+        alertis.Append(cc_get_err_callstack());
 
         if (qreason != kQuit_UserAbort)
         {
@@ -157,7 +155,7 @@ QuitReason quit_check_for_error_state(const char *qmsg, String &errmsg, String &
         qmsg++;
         alertis.Format("A warning has been generated. This is not normally fatal, but you have selected "
             "to treat warnings as errors.\n"
-            "(Engine version %s)\n\n%s\n%s", EngineVersion.LongString.GetCStr(), cc_get_error().CallStack.GetCStr(),
+            "(Engine version %s)\n\n%s\n%s", EngineVersion.LongString.GetCStr(), cc_get_err_callstack().GetCStr(),
             qmsg);
         errmsg = qmsg;
         return kQuit_GameWarning;
@@ -170,12 +168,6 @@ QuitReason quit_check_for_error_state(const char *qmsg, String &errmsg, String &
             "\nError: %s", EngineVersion.LongString.GetCStr(), qmsg);
         return kQuit_FatalError;
     }
-}
-
-void quit_release_data()
-{
-    unload_game_file();
-    AssetMgr.reset();
 }
 
 // quit - exits the engine, shutting down everything gracefully
@@ -203,39 +195,24 @@ void quit(const char *quitmsg)
 
     quit_tell_editor_debugger(errmsg, qreason);
 
-    our_eip = 9900;
+    set_our_eip(9900);
 
     quit_stop_cd();
+    if (use_cdplayer)
+        platform->ShutdownCDPlayer();
+    video_shutdown();
+    quit_shutdown_audio();
 
-    our_eip = 9020;
+    set_our_eip(9908);
 
-    quit_shutdown_scripts();
+    // Release game data and unregister assets
+    quit_check_dynamic_sprites(qreason);
+    shutdown_game_state();
+    unload_game();
+    AssetMgr.reset();
 
     // Be sure to unlock mouse on exit, or users will hate us
     sys_window_lock_mouse(false);
-
-    our_eip = 9016;
-
-    quit_check_dynamic_sprites(qreason);
-
-    if (use_cdplayer)
-        platform->ShutdownCDPlayer();
-
-    our_eip = 9019;
-
-    video_shutdown();
-    quit_shutdown_audio();
-    
-    our_eip = 9901;
-
-    spriteset.Reset();
-
-    our_eip = 9908;
-
-    shutdown_pathfinder();
-
-    quit_release_data();
-
     engine_shutdown_gfxmode();
 
     platform->PreBackendExit();
@@ -255,7 +232,7 @@ void quit(const char *quitmsg)
 
     platform->PostBackendExit();
 
-    our_eip = 9903;
+    set_our_eip(9903);
 
     proper_exit=1;
 
@@ -264,7 +241,7 @@ void quit(const char *quitmsg)
     shutdown_debug();
     AGSPlatformDriver::Shutdown();
 
-    our_eip = 9904;
+    set_our_eip(9904);
     exit(EXIT_NORMAL);
 }
 

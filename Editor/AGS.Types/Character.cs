@@ -12,9 +12,9 @@ namespace AGS.Types
     public class Character : ICustomTypeDescriptor, IToXml, IComparable<Character>
     {
         public const string PROPERTY_NAME_SCRIPTNAME = "ScriptName";
+        public const string PROPERTY_NAME_DESCRIPTION = "RealName";
         public const string PROPERTY_NAME_STARTINGROOM = "StartingRoom";
         public const int NARRATOR_CHARACTER_ID = 999;
-        public const int MAX_SCRIPTNAME_LENGTH = 19; // restricted by data format
 
         private static InteractionSchema _interactionSchema;
 
@@ -41,26 +41,27 @@ namespace AGS.Types
         private bool _useRoomAreaScaling = true;
         private bool _useRoomAreaLighting = true;
         private bool _turnBeforeWalking = true;
+        private bool _turnWhenFacing = true;
         private bool _diagonalLoops = true;
         private bool _adjustSpeedWithScaling;
         private bool _adjustVolumeWithScaling;
         private bool _movementLinkedToAnimation = true;
-        private CustomProperties _properties;
+        private CustomProperties _properties = new CustomProperties(CustomPropertyAppliesTo.Characters);
         private Interactions _interactions = new Interactions(_interactionSchema);
 
         static Character()
         {
-            _interactionSchema = new InteractionSchema(new string[] {"$$01 character",
+            _interactionSchema = new InteractionSchema(Script.GLOBAL_SCRIPT_FILE_NAME, false,
+                new string[] {"$$01 character",
                 "$$02 character","$$03 character","Use inventory on character",
                 "Any click on character", "$$05 character","$$08 character", 
                 "$$09 character"}, 
                 new string[] { "Look", "Interact", "Talk", "UseInv", "AnyClick", "PickUp", "Mode8", "Mode9" },
-                "Character *c, CursorMode mode");
+                "Character *theCharacter, CursorMode mode");
         }
 
         public Character()
         {
-            _properties = new CustomProperties();
         }
 
         [Description("The ID number of the character")]
@@ -78,7 +79,7 @@ namespace AGS.Types
         public string ScriptName
         {
             get { return _scriptName; }
-            set { _scriptName = Utilities.ValidateScriptName(value, MAX_SCRIPTNAME_LENGTH); }
+            set { _scriptName = Utilities.ValidateScriptName(value); }
         }
 
         [Description("The full name of the character")]
@@ -116,13 +117,13 @@ namespace AGS.Types
             set { _idleView = Math.Max(0, value); }
         }
 
-        [Description("Delay before the idle view activates, in seconds")]
+        [Description("Delay before the idle view activates, in seconds. Setting this to 0 causes the idle view to be looped continuously when the character is not moving.")]
         [Category("Appearance")]
         [DefaultValue(20)]
         public int IdleDelay
         {
             get { return _idleDelay; }
-            set { _idleDelay = value; }
+            set { _idleDelay = Math.Max(0, value); }
         }
 
         [Description("Delay between changing frames whilst idle animation")]
@@ -293,12 +294,20 @@ namespace AGS.Types
             set { _useRoomAreaLighting = value; }
         }
 
-        [Description("Whether the character will turn to face their new direction before walking")]
+        [Description("Whether the character will turn on the spot to face their new direction before walking")]
         [Category("Movement")]
         public bool TurnBeforeWalking
         {
             get { return _turnBeforeWalking; }
             set { _turnBeforeWalking = value; }
+        }
+
+        [Description("Whether the character will turn on the spot to face the new standing direction")]
+        [Category("Movement")]
+        public bool TurnWhenFacing
+        {
+            get { return _turnWhenFacing; }
+            set { _turnWhenFacing = value; }
         }
 
         [Description("Specifies that the walking view is using loops 4-7 for diagonal directions")]
@@ -341,12 +350,14 @@ namespace AGS.Types
 
         [AGSSerializeClass()]
         [Description("Custom properties for this character")]
-        [Category("Properties")]
-        [EditorAttribute(typeof(CustomPropertiesUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
         public CustomProperties Properties
         {
             get { return _properties; }
-            protected set { _properties = value; }
+            protected set 
+            {
+                _properties = value;
+                _properties.AppliesTo = CustomPropertyAppliesTo.Characters;
+            }
         }
 
         [AGSNoSerialize()]
@@ -359,7 +370,7 @@ namespace AGS.Types
         [Browsable(false)]
         public string PropertyGridTitle
         {
-            get { return _scriptName + " (Character; ID " + _id + ")"; }
+            get { return TypesHelper.MakePropertyGridTitle("Character", _scriptName, _fullName, _id); }
         }
 
         public Character(XmlNode node)

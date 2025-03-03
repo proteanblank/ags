@@ -159,13 +159,13 @@ namespace AGS.Editor
             if (stream == null)
             {
                 // try in the Audio folder if not found
-                tomake = Path.Combine("AudioCache", fileName);
+                tomake = Path.Combine(Components.AudioComponent.AUDIO_CACHE_DIRECTORY, fileName);
                 stream = TryFileOpen(tomake, FileAccess.Read);
             }
             if (stream == null)
             {
                 // no? maybe Speech then, templates include this
-                tomake = Path.Combine("Speech", fileName);
+                tomake = Path.Combine(Components.SpeechComponent.SPEECH_DIRECTORY, fileName);
                 stream = TryFileOpen(tomake, FileAccess.Read);
             }
             buffer = tomake;
@@ -292,7 +292,10 @@ namespace AGS.Editor
         /// <param name="text"></param>
         public static string TextProperty(string text)
         {
-            return Regex.Unescape(text);
+            // Escape backslashes before brackets: for '\[' support;
+            // this is needed because Unescape will delete '\' in unrecognized sequence.
+            string escapedText = text.Replace("\\[", "\\\\[");
+            return Regex.Unescape(escapedText);
         }
 
         /// <summary>
@@ -492,9 +495,11 @@ namespace AGS.Editor
                 splitSize, baseFileName, makeFileNameAssumptions);
         }
 
-        private static void WriteGameSetupStructBase_Aligned(BinaryWriter writer, Game game)
+        private static void WriteGameSetupStructBase(BinaryWriter writer, Game game, out long ext_off_pos)
         {
-            // assume stream is aligned at start
+            // NOTE: historically the struct was saved by dumping whole memory
+            // into the file stream, which added padding from memory alignment;
+            // here we mark the padding bytes, as they do not belong to actual data.
             WriteString(SafeTruncate(TextProperty(game.Settings.GameName), 49), 50, writer);
             writer.Write(new byte[2]); // alignment padding
             int[] options = new int[100];
@@ -526,14 +531,15 @@ namespace AGS.Editor
             options[NativeConstants.GameOptions.OPT_FADETYPE] = (int)game.Settings.RoomTransition;
             options[NativeConstants.GameOptions.OPT_RUNGAMEDLGOPTS] = (game.Settings.RunGameLoopsWhileDialogOptionsDisplayed ? 1 : 0);
             options[NativeConstants.GameOptions.OPT_SAVESCREENSHOT] = (game.Settings.SaveScreenshots ? 1 : 0);
+            options[NativeConstants.GameOptions.OPT_SAVESCREENSHOTLAYER] = -1; // all layers by default
             options[NativeConstants.GameOptions.OPT_NOSKIPTEXT] = (int)game.Settings.SkipSpeech;
             options[NativeConstants.GameOptions.OPT_PORTRAITSIDE] = (int)game.Settings.SpeechPortraitSide;
             options[NativeConstants.GameOptions.OPT_SPEECHTYPE] = (int)game.Settings.SpeechStyle;
             options[NativeConstants.GameOptions.OPT_SPLITRESOURCES] = game.Settings.SplitResources;
             options[NativeConstants.GameOptions.OPT_TWCUSTOM] = game.Settings.TextWindowGUI;
             options[NativeConstants.GameOptions.OPT_THOUGHTGUI] = game.Settings.ThoughtGUI;
-            options[NativeConstants.GameOptions.OPT_TURNTOFACELOC] = (game.Settings.TurnBeforeFacing ? 1 : 0);
-            options[NativeConstants.GameOptions.OPT_ROTATECHARS] = (game.Settings.TurnBeforeWalking ? 1 : 0);
+            options[NativeConstants.GameOptions.OPT_CHARTURNWHENFACE] = (game.Settings.TurnBeforeFacing ? 1 : 0);
+            options[NativeConstants.GameOptions.OPT_CHARTURNWHENWALK] = (game.Settings.TurnBeforeWalking ? 1 : 0);
             options[NativeConstants.GameOptions.OPT_NATIVECOORDINATES] = (game.Settings.UseLowResCoordinatesInScript ? 0 : 1);
             options[NativeConstants.GameOptions.OPT_WALKONLOOK] = (game.Settings.WalkInLookMode ? 1 : 0);
             options[NativeConstants.GameOptions.OPT_DISABLEOFF] = (int)game.Settings.WhenInterfaceDisabled;
@@ -546,13 +552,16 @@ namespace AGS.Editor
             options[NativeConstants.GameOptions.OPT_WALKSPEEDABSOLUTE] = (game.Settings.ScaleMovementSpeedWithMaskResolution ? 0 : 1);
             options[NativeConstants.GameOptions.OPT_CLIPGUICONTROLS] = (game.Settings.ClipGUIControls ? 1 : 0);
             options[NativeConstants.GameOptions.OPT_GAMETEXTENCODING] = game.TextEncoding.CodePage;
-            options[NativeConstants.GameOptions.OPT_KEYHANDLEAPI] = (game.Settings.UseOldKeyboardHandling ? 0 : 1);
+            options[NativeConstants.GameOptions.OPT_KEYHANDLEAPI] = (game.Settings.UseOldKeyboardHandling ? 0 : 1); // inverted, 0 for old
+            options[NativeConstants.GameOptions.OPT_SCALECHAROFFSETS] = (game.Settings.ScaleCharacterSpriteOffsets ? 1 : 0);
+            options[NativeConstants.GameOptions.OPT_VOICECLIPNAMERULE] = (game.Settings.UseOldVoiceClipNaming ? 0 : 1); // inverted, 0 for old
+            options[NativeConstants.GameOptions.OPT_GAMEFPS] = game.Settings.GameFPS;
             options[NativeConstants.GameOptions.OPT_LIPSYNCTEXT] = (game.LipSync.Type == LipSyncType.Text ? 1 : 0);
-            for (int i = 0; i < options.Length; ++i) // writing only ints, alignment preserved
+            for (int i = 0; i < options.Length; ++i)
             {
                 writer.Write(options[i]);
             }
-            for (int i = 0; i < 256; ++i) // writing 256 bytes, alignment preserved
+            for (int i = 0; i < 256; ++i)
             {
                 if (game.Palette[i].ColourType == PaletteColourType.Background)
                 {
@@ -560,7 +569,7 @@ namespace AGS.Editor
                 }
                 else writer.Write((byte)0); // PAL_GAMEWIDE
             }
-            for (int i = 0; i < 256; ++i) // writing 256*4 bytes, alignment preserved
+            for (int i = 0; i < 256; ++i)
             {
                 writer.Write((byte)(game.Palette[i].Colour.R / 4));
                 writer.Write((byte)(game.Palette[i].Colour.G / 4));
@@ -571,17 +580,17 @@ namespace AGS.Editor
             writer.Write(game.Characters.Count);
             writer.Write(game.PlayerCharacter.ID);
             writer.Write(game.Settings.MaximumScore);
-            writer.Write((short)(game.InventoryItems.Count + 1));
+            writer.Write((short)(game.InventoryItems.Count + 1)); // +1 for a dummy item at id 0
             writer.Write(new byte[2]); // alignment padding
             writer.Write(game.Dialogs.Count);
             writer.Write(0); // numdlgmessage
             writer.Write(game.Fonts.Count);
             writer.Write((int)game.Settings.ColorDepth);
             writer.Write(0); // target_win
-            writer.Write(game.Settings.DialogOptionsBullet); // aligned so far
+            writer.Write(game.Settings.DialogOptionsBullet);
             writer.Write(game.Settings.InventoryHotspotMarker.Style != InventoryHotspotMarkerStyle.None ?
-                (short)game.Settings.InventoryHotspotMarker.DotColor : (short)0); // need 2 bytes for alignment
-            writer.Write((short)game.Settings.InventoryHotspotMarker.CrosshairColor); // aligned again
+                (short)game.Settings.InventoryHotspotMarker.DotColor : (short)0);
+            writer.Write((short)game.Settings.InventoryHotspotMarker.CrosshairColor);
             writer.Write(game.Settings.UniqueID);
             writer.Write(game.GUIs.Count);
             writer.Write(game.Cursors.Count);
@@ -598,17 +607,20 @@ namespace AGS.Editor
             writer.Write(game.LipSync.DefaultFrame);
             writer.Write(game.Settings.InventoryHotspotMarker.Style == InventoryHotspotMarkerStyle.Sprite ?
                 game.Settings.InventoryHotspotMarker.Image : 0);
-            writer.Write(new byte[17 * sizeof(int)]); // reserved; 17 ints, alignment preserved
-            for (int i = 0; i < 500; ++i) // MAXGLOBALMES; write 500 ints, alignment preserved
+            writer.Write(new byte[16 * sizeof(int)]); // reserved; 16 ints
+
+            // reserve a 32-bit position for extension offset
+            ext_off_pos = writer.BaseStream.Position;
+            writer.Write((uint)0);
+
+            for (int i = 0; i < 500; ++i) // MAXGLOBALMES; write 500 ints
             {
                 writer.Write(string.IsNullOrEmpty(game.GlobalMessages[i]) ? 0 : 1);
             }
-            // the rest are ints, alignment is correct
             writer.Write(1); // dict != null
             writer.Write(0); // globalscript != null
             writer.Write(0); // chars != null
             writer.Write(1); // compiled_script != null
-            // no final padding required
         }
 
         private static void UpdateSpriteFlags(SpriteFolder folder, byte[] flags, out int mostTopmost)
@@ -778,19 +790,20 @@ namespace AGS.Editor
 
         static void SerializeInteractionScripts(Interactions interactions, BinaryWriter writer)
         {
+            writer.Write((int)3060200); // kInterEvents_v362 version
+            FilePutString(interactions.ScriptModule, writer);
             writer.Write(interactions.ScriptFunctionNames.Length);
             foreach (string funcName in interactions.ScriptFunctionNames)
             {
-                if (funcName == null)
-                {
-                    writer.Write((byte)0);
-                }
-                else
-                {
-                    WriteString(funcName, funcName.Length, writer);
-                    writer.Write((byte)0);
-                }
+                FilePutString(funcName, writer);
             }
+        }
+
+        static void SerializeEmptyInteractionScripts(BinaryWriter writer)
+        {
+            writer.Write((int)3060200); // kInterEvents_v362 version
+            writer.Write((int)0); // empty ScriptModule string
+            writer.Write((int)0); // zero list length
         }
 
         // Encrypts an ANSI string
@@ -883,22 +896,30 @@ namespace AGS.Editor
             }
         }
 
-        class GUIsWriter
+        /// <summary>
+        /// GUIControlsCollection stores flat lists of all controls of all GUIs.
+        /// This is necessary because GUI controls (and some of the extended data)
+        /// are saved as flat arrays into the compiled game.
+        /// </summary>
+        class GUIControlsCollection
         {
-            private List<GUIButtonOrTextWindowEdge> GUIButtonsAndTextWindowEdges = new List<GUIButtonOrTextWindowEdge>();
-            private List<GUILabel> GUILabels = new List<GUILabel>();
-            private List<GUIInventory> GUIInvWindows = new List<GUIInventory>();
-            private List<GUISlider> GUISliders = new List<GUISlider>();
-            private List<GUITextBox> GUITextBoxes = new List<GUITextBox>();
-            private List<GUIListBox> GUIListBoxes = new List<GUIListBox>();
-            private BinaryWriter writer;
-            private Game game;
-
-            public GUIsWriter(BinaryWriter writer, Game game)
+            public GUIControlsCollection()
             {
-                this.writer = writer;
-                this.game = game;
             }
+
+            private List<GUIButtonOrTextWindowEdge> _guiButtons = new List<GUIButtonOrTextWindowEdge>();
+            private List<GUILabel> _guiLabels = new List<GUILabel>();
+            private List<GUIInventory> _guiInvWindows = new List<GUIInventory>();
+            private List<GUISlider> _guiSliders = new List<GUISlider>();
+            private List<GUITextBox> _guiTextBoxes = new List<GUITextBox>();
+            private List<GUIListBox> _guiListBoxes = new List<GUIListBox>();
+
+            public List<GUIButtonOrTextWindowEdge> GUIButtons { get { return _guiButtons; } }
+            public List<GUILabel> GUILabels { get { return _guiLabels; } }
+            public List<GUIInventory> GUIInvWindows { get { return _guiInvWindows; } }
+            public List<GUISlider> GUISliders { get { return _guiSliders; } }
+            public List<GUITextBox> GUITextBoxes { get { return _guiTextBoxes; } }
+            public List<GUIListBox> GUIListBoxes { get { return _guiListBoxes; } }
 
             /// <summary>
             /// The engine treats GUITextWindowEdges as GUIButtons, and they
@@ -910,7 +931,7 @@ namespace AGS.Editor
             /// GUIControl that is neither a GUIButton nor a GUITextWindowEdge
             /// is cast to this type then null is returned.
             /// </summary>
-            private class GUIButtonOrTextWindowEdge
+            public class GUIButtonOrTextWindowEdge
             {
                 private GUIControl _ctrl;
 
@@ -1047,6 +1068,36 @@ namespace AGS.Editor
                     }
                 }
 
+                public int TextPaddingHorizontal
+                {
+                    get
+                    {
+                        GUIButton button = (GUIButton)this;
+                        if (button != null) return button.TextPaddingHorizontal;
+                        return 0;
+                    }
+                }
+
+                public int TextPaddingVertical
+                {
+                    get
+                    {
+                        GUIButton button = (GUIButton)this;
+                        if (button != null) return button.TextPaddingVertical;
+                        return 0;
+                    }
+                }
+
+                public bool WrapText
+                {
+                    get
+                    {
+                        GUIButton button = (GUIButton)this;
+                        if (button != null) return button.WrapText;
+                        return false;
+                    }
+                }
+
                 public string OnClick
                 {
                     get
@@ -1066,6 +1117,18 @@ namespace AGS.Editor
                         return false;
                     }
                 }
+            }
+        }
+
+        class GUIsWriter : GUIControlsCollection
+        {
+            private BinaryWriter writer;
+            private Game game;
+
+            public GUIsWriter(BinaryWriter writer, Game game)
+            {
+                this.writer = writer;
+                this.game = game;
             }
 
             private int MakeCommonGUIControlFlags(GUIControl control)
@@ -1106,11 +1169,12 @@ namespace AGS.Editor
 
             private void WriteAllButtonsAndTextWindowEdges()
             {
-                writer.Write(GUIButtonsAndTextWindowEdges.Count);
-                foreach (GUIButtonOrTextWindowEdge ctrl in GUIButtonsAndTextWindowEdges)
+                writer.Write(GUIButtons.Count);
+                foreach (GUIButtonOrTextWindowEdge ctrl in GUIButtons)
                 {
                     int flags;
-                    flags = (ctrl.ClipImage ? NativeConstants.GUIF_CLIP : 0);
+                    flags = (ctrl.ClipImage ? NativeConstants.GUIF_CLIP : 0) |
+                            (ctrl.WrapText ? NativeConstants.GUIF_WRAPTEXT : 0);
                     WriteGUIControl(ctrl, flags, new string[] { ctrl.OnClick });
                     writer.Write(ctrl.Image); // pic
                     writer.Write(ctrl.MouseoverImage); // overpic
@@ -1235,8 +1299,8 @@ namespace AGS.Editor
                         GUITextWindowEdge textWindowEdge = control as GUITextWindowEdge;
                         if ((button != null) || (textWindowEdge != null))
                         {
-                            objrefptrs[gui.ID][numobjs] = (NativeConstants.GOBJ_BUTTON << 16) | GUIButtonsAndTextWindowEdges.Count;
-                            GUIButtonsAndTextWindowEdges.Add(button != null ?
+                            objrefptrs[gui.ID][numobjs] = (NativeConstants.GOBJ_BUTTON << 16) | GUIButtons.Count;
+                            GUIButtons.Add(button != null ?
                                 (GUIButtonOrTextWindowEdge)button :
                                 (GUIButtonOrTextWindowEdge)textWindowEdge);
                         }
@@ -1371,6 +1435,24 @@ namespace AGS.Editor
             return true;
         }
 
+        private static List<Script> GetScriptModuleList(Game game)
+        {
+            var scriptModules = new List<Script>();
+            foreach (ScriptAndHeader scriptAndHeader in game.ScriptsToCompile)
+            {
+                Script script = scriptAndHeader.Script;
+                if (script != null)
+                {
+                    if ((!script.FileName.Equals(Script.GLOBAL_SCRIPT_FILE_NAME)) &&
+                        (!script.FileName.Equals(Script.DIALOG_SCRIPTS_FILE_NAME)))
+                    {
+                        scriptModules.Add(script);
+                    }
+                }
+            }
+            return scriptModules;
+        }
+
         public static bool SaveThisGameToFile(string fileName, Game game, CompileMessages errors)
         {
             FileStream ostream = File.Create(fileName);
@@ -1391,7 +1473,8 @@ namespace AGS.Editor
             //   foreach (cap in caps)
             //       FilePutString(cap.Name);
             //
-            WriteGameSetupStructBase_Aligned(writer, game);
+            long ext_off_pos; // position to write extensions offset to
+            WriteGameSetupStructBase(writer, game, out ext_off_pos);
             WriteString(game.Settings.GUIDAsString, NativeConstants.MAX_GUID_LENGTH, writer);
             WriteString(game.Settings.SaveGameFileExtension, NativeConstants.MAX_SG_EXT_LENGTH, writer);
             WriteString(game.Settings.SaveGameFolderName, NativeConstants.MAX_SG_FOLDER_LEN, writer);
@@ -1436,6 +1519,7 @@ namespace AGS.Editor
             writer.Write(new byte[68]); // inventory item slot 0 is unused
             for (int i = 0; i < game.InventoryItems.Count; ++i)
             {
+                // legacy name field of fixed length
                 WriteString(TextProperty(game.InventoryItems[i].Description), 24, writer);
                 writer.Write(new byte[4]); // null terminator plus 3 bytes padding
                 writer.Write(game.InventoryItems[i].Image);
@@ -1462,19 +1546,22 @@ namespace AGS.Editor
                     if (game.Cursors[i].AnimateOnlyWhenMoving) flags |= NativeConstants.MCF_ANIMMOVE;
                 }
                 else writer.Write((short)-1);
+                // legacy scriptname field of fixed length
                 WriteString(game.Cursors[i].Name, 9, writer);
                 writer.Write((byte)0); // null terminator
                 if (game.Cursors[i].StandardMode) flags |= NativeConstants.MCF_STANDARD;
                 writer.Write(flags);
                 writer.Write(new byte[3]); // 3 bytes padding
             }
+            // Pre-3.6.2 InteractionEvents: write zero-sized dummy lists here,
+            // proper events will be written in the "v362_eventscmod" extension
             for (int i = 0; i < game.Characters.Count; ++i)
             {
-                SerializeInteractionScripts(game.Characters[i].Interactions, writer);
+                writer.Write((int)0);
             }
-            for (int i = 1; i <= game.InventoryItems.Count; ++i)
+            for (int i = 1; i <= game.InventoryItems.Count; ++i) // NOTE: we write inv interactions from 1th here
             {
-                SerializeInteractionScripts(game.InventoryItems[i - 1].Interactions, writer);
+                writer.Write((int)0);
             }
             writer.Write(game.TextParser.Words.Count);
             for (int i = 0; i < game.TextParser.Words.Count; ++i)
@@ -1489,19 +1576,7 @@ namespace AGS.Editor
             }
             // Extract all the scripts we want to persist (all the non-headers, except
             // the global script which was already written)
-            List<Script> scriptsToWrite = new List<Script>();
-            foreach (ScriptAndHeader scriptAndHeader in game.ScriptsToCompile)
-            {
-                Script script = scriptAndHeader.Script;
-                if (script != null)
-                {
-                    if ((!script.FileName.Equals(Script.GLOBAL_SCRIPT_FILE_NAME)) &&
-                        (!script.FileName.Equals(Script.DIALOG_SCRIPTS_FILE_NAME)))
-                    {
-                        scriptsToWrite.Add(script);
-                    }
-                }
-            }
+            List<Script> scriptsToWrite = GetScriptModuleList(game);
             writer.Write(scriptsToWrite.Count);
             foreach (Script script in scriptsToWrite)
             {
@@ -1524,7 +1599,8 @@ namespace AGS.Editor
                 if (!character.DiagonalLoops) flags |= NativeConstants.CHF_NODIAGONAL;
                 if (character.MovementLinkedToAnimation) flags |= NativeConstants.CHF_ANTIGLIDE;
                 if (!character.Solid) flags |= NativeConstants.CHF_NOBLOCKING;
-                if (!character.TurnBeforeWalking) flags |= NativeConstants.CHF_NOTURNING;
+                if (!character.TurnBeforeWalking) flags |= NativeConstants.CHF_NOTURNWHENWALK;
+                if (character.TurnWhenFacing) flags |= NativeConstants.CHF_TURNWHENFACE;
                 if (!character.UseRoomAreaLighting) flags |= NativeConstants.CHF_NOLIGHTING;
                 if (!character.UseRoomAreaScaling) flags |= NativeConstants.CHF_MANUALSCALING;
                 writer.Write(character.NormalView - 1);                // defview
@@ -1583,7 +1659,8 @@ namespace AGS.Editor
                 }
                 writer.Write((short)0);                                // actx
                 writer.Write((short)0);                                // acty
-                WriteString(TextProperty(character.RealName), 40, writer);           // name
+                // legacy name and scriptname fields of fixed length
+                WriteString(TextProperty(character.RealName), 40, writer); // name
                 WriteString(character.ScriptName, NativeConstants.MAX_SCRIPT_NAME_LEN, writer); // scrname
                 writer.Write((char)1);                                 // on
                 writer.Write((byte)0);                                 // alignment padding
@@ -1694,6 +1771,7 @@ namespace AGS.Editor
             {
                 AudioClip clip = allClips[i];
                 writer.Write(clip.ID); // id
+                // legacy scriptname and filename fields of fixed length
                 WriteString(SafeTruncate(clip.ScriptName, 29), 30, writer); // scriptName
                 WriteString(SafeTruncate(clip.CacheFileNameWithoutPath, 14), 15, writer); // fileName
                 writer.Write((byte)clip.BundlingType); // bundlingType
@@ -1726,9 +1804,18 @@ namespace AGS.Editor
             // Extensions list
             // Use WriteExtension to write them according to format and provide your method
             // of type WriteExtensionProc that does the actual writing job.
+            long ext_off = writer.BaseStream.Position;
+            writer.Seek((int)ext_off_pos, SeekOrigin.Begin);
+            writer.Write((uint)ext_off);
+            writer.Seek((int)ext_off, SeekOrigin.Begin);
 
-            WriteExtension("v360_fonts", WriteExt_360Fonts, writer, game, errors);
-            WriteExtension("v360_cursors", WriteExt_360Cursors, writer, game, errors);
+            WriteExtEntities gameEnts = new WriteExtEntities(game, guisWriter);
+
+            WriteExtension("v360_fonts", WriteExt_360Fonts, writer, gameEnts, errors);
+            WriteExtension("v360_cursors", WriteExt_360Cursors, writer, gameEnts, errors);
+            WriteExtension("v361_objnames", WriteExt_361ObjNames, writer, gameEnts, errors);
+            WriteExtension("v362_interevent2", WriteExt_362InteractionEvents, writer, gameEnts, errors);
+            WriteExtension("v362_guictrls", WriteExt_362GUIControls, writer, gameEnts, errors);
 
             // End of extensions list
             writer.Write((byte)0xff);
@@ -1739,8 +1826,9 @@ namespace AGS.Editor
         }
 
         // >= 3.6.0: font outline properties
-        private static void WriteExt_360Fonts(BinaryWriter writer, Game game, CompileMessages errors)
+        private static void WriteExt_360Fonts(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
         {
+            Game game = ents.Game;
             // adjustable font outlines
             for (int i = 0; i < game.Fonts.Count; ++i)
             {
@@ -1755,8 +1843,9 @@ namespace AGS.Editor
         }
 
         // >= 3.6.0: extended cursor properties
-        private static void WriteExt_360Cursors(BinaryWriter writer, Game game, CompileMessages errors)
+        private static void WriteExt_360Cursors(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
         {
+            Game game = ents.Game;
             // adjustable font outlines
             for (int i = 0; i < game.Cursors.Count; ++i)
             {
@@ -1768,9 +1857,108 @@ namespace AGS.Editor
             }
         }
 
-        private delegate void WriteExtensionProc(BinaryWriter writer, Game game, CompileMessages errors);
+        // >= 3.6.1: object script names and names of unrestricted length
+        // this saves only those properties that were restricted in length previously
+        private static void WriteExt_361ObjNames(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
+        {
+            Game game = ents.Game;
+            FilePutString(game.Settings.GameName, writer);
+            FilePutString(game.Settings.SaveGameFolderName, writer);
+            // Characters
+            writer.Write((int)game.Characters.Count);
+            for (int i = 0; i < game.Characters.Count; ++i)
+            {
+                FilePutString(game.Characters[i].ScriptName, writer);
+                FilePutString(TextProperty(game.Characters[i].RealName), writer);
+            }
+            // Inventory items
+            writer.Write((int)game.InventoryItems.Count + 1); // +1 for a dummy item at id 0
+            writer.Write((int)0); // inventory slot 0 is unused, so its name is just a single 0-length
+            for (int i = 0; i < game.InventoryItems.Count; ++i)
+            {
+                FilePutString(TextProperty(game.InventoryItems[i].Description), writer);
+            }
+            // Mouse cursors
+            writer.Write((int)game.Cursors.Count);
+            for (int i = 0; i < game.Cursors.Count; ++i)
+            {
+                FilePutString(game.Cursors[i].ScriptID, writer);
+            }
+            // Audio clips
+            writer.Write((int)game.AudioClips.Count);
+            for (int i = 0; i < game.AudioClips.Count; ++i)
+            {
+                FilePutString(game.AudioClips[i].ScriptName, writer);
+                FilePutString(game.AudioClips[i].CacheFileNameWithoutPath, writer);
+            }
+        }
 
-        private static void WriteExtension(string ext_id, WriteExtensionProc proc, BinaryWriter writer, Game game, CompileMessages errors)
+        // >= 3.6.1: object script names and names of unrestricted length
+        // this saves only those properties that were restricted in length previously
+        private static void WriteExt_362InteractionEvents(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
+        {
+            Game game = ents.Game;
+            var globalScript = game.ScriptsToCompile.GetScriptByFilename(Script.GLOBAL_SCRIPT_FILE_NAME);
+            var dialogScript = game.ScriptsToCompile.GetScriptByFilename(Script.DIALOG_SCRIPTS_FILE_NAME);
+            List<Script> scriptModules = GetScriptModuleList(game);
+            FilePutString(globalScript != null ? Script.GLOBAL_SCRIPT_FILE_NAME : string.Empty, writer);
+            FilePutString(dialogScript != null ? Script.DIALOG_SCRIPTS_FILE_NAME : string.Empty, writer);
+            writer.Write(scriptModules.Count);
+            foreach (var scriptModule in scriptModules)
+            {
+                FilePutString(scriptModule.FileName, writer);
+            }
+
+            writer.Write(game.Characters.Count);
+            for (int i = 0; i < game.Characters.Count; ++i)
+            {
+                SerializeInteractionScripts(game.Characters[i].Interactions, writer);
+            }
+            writer.Write((int)game.InventoryItems.Count + 1); // +1 for a dummy item at id 0
+            // inventory slot 0 is unused, so write a dummy interactions struct
+            SerializeEmptyInteractionScripts(writer);
+            for (int i = 0; i < game.InventoryItems.Count; ++i)
+            {
+                SerializeInteractionScripts(game.InventoryItems[i].Interactions, writer);
+            }
+
+            writer.Write(game.GUIs.Count);
+            foreach (GUI gui in game.GUIs)
+            {
+                FilePutString(gui.ScriptModule, writer);
+            }
+        }
+
+        private static void WriteExt_362GUIControls(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
+        {
+            writer.Write(ents.GUIControls.GUIButtons.Count);
+            foreach (var button in ents.GUIControls.GUIButtons)
+            {
+                writer.Write(button.TextPaddingHorizontal);
+                writer.Write(button.TextPaddingVertical);
+                writer.Write((int)0);
+                writer.Write((int)0);
+            }
+        }
+
+        /// <summary>
+        /// Helper struct for gathering objects that may be useful when writing extensions.
+        /// </summary>
+        private struct WriteExtEntities
+        {
+            public readonly Game Game;
+            public readonly GUIControlsCollection GUIControls;
+
+            public WriteExtEntities(Game game, GUIControlsCollection guiControls)
+            {
+                Game = game;
+                GUIControls = guiControls;
+            }
+        }
+
+        private delegate void WriteExtensionProc(BinaryWriter writer, WriteExtEntities ents, CompileMessages errors);
+
+        private static void WriteExtension(string ext_id, WriteExtensionProc proc, BinaryWriter writer, WriteExtEntities ents, CompileMessages errors)
         {
             // The block meta format:
             //    - 1 byte - an old-style unsigned numeric ID, for compatibility with room file format:
@@ -1783,7 +1971,7 @@ namespace AGS.Editor
             var data_len_pos = writer.BaseStream.Position;
             writer.Write((long)0);
             var start_pos = writer.BaseStream.Position;
-            proc(writer, game, errors);
+            proc(writer, ents, errors);
             var end_pos = writer.BaseStream.Position;
             var data_len = end_pos - start_pos;
             writer.Seek((int)data_len_pos, SeekOrigin.Begin);
