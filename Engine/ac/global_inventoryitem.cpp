@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <stdio.h>
@@ -19,19 +19,18 @@
 #include "ac/global_gui.h"
 #include "ac/global_inventoryitem.h"
 #include "ac/global_translation.h"
+#include "ac/gui.h"
 #include "ac/inventoryitem.h"
 #include "ac/invwindow.h"
 #include "ac/properties.h"
 #include "ac/string.h"
 #include "ac/dynobj/cc_inventory.h"
-#include "gui/guimain.h"
-#include "gui/guiinv.h"
 #include "script/script.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 extern GameSetupStruct game;
-extern GameState play;
 extern int mousex, mousey;
 extern int mouse_ifacebut_xoffs,mouse_ifacebut_yoffs;
 extern CharacterInfo*playerchar;
@@ -46,7 +45,8 @@ void set_inv_item_pic(int invi, int piccy) {
     if (game.invinfo[invi].pic == piccy)
         return;
 
-    if (game.invinfo[invi].pic == game.invinfo[invi].cursorPic)
+    if ((loaded_game_file_version < kGameVersion_362) &&
+        game.invinfo[invi].pic == game.invinfo[invi].cursorPic)
     {
         // Backwards compatibility -- there didn't used to be a cursorPic,
         // so if they're the same update both.
@@ -54,19 +54,16 @@ void set_inv_item_pic(int invi, int piccy) {
     }
 
     game.invinfo[invi].pic = piccy;
-    GUI::MarkInventoryForUpdate(-1, false);
+    GUIE::MarkInventoryForUpdate(-1, false);
 }
 
 void SetInvItemName(int invi, const char *newName) {
     if ((invi < 1) || (invi > game.numinvitems))
         quit("!SetInvName: invalid inventory item specified");
 
-    // set the new name, making sure it doesn't overflow the buffer
-    strncpy(game.invinfo[invi].name, newName, 25);
-    game.invinfo[invi].name[24] = 0;
-
+    game.invinfo[invi].name = newName;
     // might need to redraw the GUI if it has the inv item name on it
-    GUI::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
+    GUIE::MarkSpecialLabelsForUpdate(kLabelMacro_Overhotspot);
 }
 
 int GetInvAt(int atx, int aty) {
@@ -88,7 +85,7 @@ int GetInvAt(int atx, int aty) {
 void GetInvName(int indx,char*buff) {
   VALIDATE_STRING(buff);
   if ((indx<0) | (indx>=game.numinvitems)) quit("!GetInvName: invalid inventory item specified");
-  snprintf(buff, MAX_MAXSTRLEN, "%s", get_translation(game.invinfo[indx].name));
+  snprintf(buff, MAX_MAXSTRLEN, "%s", get_translation(game.invinfo[indx].name.GetCStr()));
 }
 
 int GetInvGraphic(int indx) {
@@ -123,7 +120,7 @@ void RunInventoryInteraction (int iit, int mood) {
     if (evnt < 0) // on any non-supported mode - use "other-click"
         evnt = otherclick_evt;
 
-    const auto obj_evt = ObjectEvent("inventory%d", iit,
+    const auto obj_evt = ObjectEvent(kScTypeGame, "inventory%d", iit,
         RuntimeScriptValue().SetScriptObject(&scrInv[iit], &ccDynamicInv), mood);
     if (loaded_game_file_version > kGameVersion_272)
     {

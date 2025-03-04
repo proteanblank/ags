@@ -24,10 +24,19 @@ namespace AGS.Editor
 
         private const string ANDROID_CFG = "android.cfg";
 
-        private const string PROJECT_DIR = "icons\\android";
+        private const string ICON_PROJECT_DIR = "icons\\android";
         private const string ICON_FILENAME = "ic_launcher.png";
         private const string ICON_ROUND_FILENAME = "ic_launcher_round.png";
         private const string ICON_RES_DIR = "app\\src\\main\\res";
+        private const string ANDROID_ARCH_X86 = "x86";
+        private const string ANDROID_ARCH_X86_64 = "x86_64";
+        private const string ANDROID_ARCH_ARM_V7A = "armeabi-v7a";
+        private const string ANDROID_ARCH_ARM64_V8A = "arm64-v8a";
+
+        private static readonly IList<string> ANDROID_ARCHS = new ReadOnlyCollection<string>(new List<string> {
+            ANDROID_ARCH_X86, ANDROID_ARCH_X86_64, ANDROID_ARCH_ARM_V7A, ANDROID_ARCH_ARM64_V8A,
+        });
+
         public static readonly IList<string> ICON_DIRS = new ReadOnlyCollection<string> (new List<string> {
             "mipmap-hdpi", "mipmap-mdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi",
         });
@@ -42,77 +51,84 @@ namespace AGS.Editor
             // These option values are not present in the Setup properties at the moment,
             // so we read them from the file, in case the file has been modified by a user manually
             // (this is a temporary measure, to avoid not letting a user to define these values).
-            string config_enabled = NativeProxy.GetIniString("misc", "config_enabled", "1", configPath);
-            string clear_cache = NativeProxy.GetIniString("compatibility", "clear_cache_on_room_change", "0", configPath);
-            string sound_enabled = NativeProxy.GetIniString("sound", "enabled", "1", configPath);
-            string sound_cache_size = NativeProxy.GetIniString("sound", "cache_size", "32768", configPath);
-            string frame_drop = NativeProxy.GetIniString("video", "framedrop", "0", configPath);
-            string super_sampling = NativeProxy.GetIniString("graphics", "super_sampling", "0", configPath);
-            string logging = NativeProxy.GetIniString("debug", "logging", "0", configPath);
+            var cfg = new Dictionary<string, Dictionary<string, string>>();
+            NativeProxy.Instance.ReadIniFile(configPath, cfg);
+            string config_enabled = Utilities.GetConfigString(cfg, "misc", "config_enabled", "1");
+            string clear_cache = Utilities.GetConfigString(cfg, "compatibility", "clear_cache_on_room_change", "0");
+            string sound_enabled = Utilities.GetConfigString(cfg, "sound", "enabled", "1");
+            string sound_cache_size = Utilities.GetConfigString(cfg, "sound", "cache_size", "32768");
+            string logging = Utilities.GetConfigString(cfg, "debug", "logging", "0");
 
-            NativeProxy.WritePrivateProfileString("misc", "config_enabled", config_enabled, configPath);
+            cfg = new Dictionary<string, Dictionary<string, string>>();
+            cfg.Add("compatibility", new Dictionary<string, string>());
+            cfg.Add("controls", new Dictionary<string, string>());
+            cfg.Add("debug", new Dictionary<string, string>());
+            cfg.Add("graphics", new Dictionary<string, string>());
+            cfg.Add("misc", new Dictionary<string, string>());
+            cfg.Add("sound", new Dictionary<string, string>());
+            cfg.Add("video", new Dictionary<string, string>());
+
+            cfg["misc"]["config_enabled"] = config_enabled;
 
             // Misc options
             int rotation = (int)setup.Rotation;
-            NativeProxy.WritePrivateProfileString("misc", "rotation", rotation.ToString(), configPath);
-            NativeProxy.WritePrivateProfileString("misc", "translation", setup.Translation, configPath);
-            NativeProxy.WritePrivateProfileString("compatibility", "clear_cache_on_room_change", clear_cache, configPath);
+            cfg["misc"]["rotation"] = rotation.ToString();
+            cfg["misc"]["translation"] = setup.Translation;
+            cfg["compatibility"]["clear_cache_on_room_change"] = clear_cache;
 
             // Touch-to-mouse options
             int mouse_emulation = (int)setup.TouchToMouseEmulation;
             int mouse_speed = (int)Math.Round(setup.MouseSpeed * 10.0f);
             int mouse_control_mode = (int)setup.TouchToMouseMotionMode;
-            NativeProxy.WritePrivateProfileString("controls", "mouse_emulation", mouse_emulation.ToString(), configPath);
-            NativeProxy.WritePrivateProfileString("controls", "mouse_speed", mouse_speed.ToString(), configPath);
-            NativeProxy.WritePrivateProfileString("controls", "mouse_method", mouse_control_mode.ToString(), configPath);
+            cfg["controls"]["mouse_emulation"] = mouse_emulation.ToString();
+            cfg["controls"]["mouse_speed"] = mouse_speed.ToString();
+            cfg["controls"]["mouse_method"] = mouse_control_mode.ToString();
 
             // Sound options
-            NativeProxy.WritePrivateProfileString("sound", "enabled", sound_enabled, configPath);
-            NativeProxy.WritePrivateProfileString("sound", "cache_size", sound_cache_size, configPath);
-
-            // Video options
-            NativeProxy.WritePrivateProfileString("video", "framedrop", frame_drop, configPath);
+            cfg["sound"]["enabled"] = sound_enabled;
+            cfg["sound"]["cache_size"] = sound_cache_size;
 
             // Graphic options
             if (setup.GraphicsDriver == GraphicsDriver.Software) {
-                NativeProxy.WritePrivateProfileString("graphics", "renderer", "0", configPath);
+                cfg["graphics"]["renderer"] = "0";
             } else {
-                NativeProxy.WritePrivateProfileString("graphics", "renderer", "1", configPath);
+                cfg["graphics"]["renderer"] = "1";
             }
 
-            if (setup.GraphicsFilter == "StdScale") {
-                NativeProxy.WritePrivateProfileString("graphics", "smoothing", "0", configPath);
+            if (setup.GraphicsFilter == RuntimeSetup.DEFAULT_GFX_FILTER_NAME) {
+                cfg["graphics"]["smoothing"] = "0";
             } else {
-                NativeProxy.WritePrivateProfileString("graphics", "smoothing", "1", configPath);
+                cfg["graphics"]["smoothing"] = "1";
             }
 
             if (setup.FullscreenGameScaling == GameScaling.ProportionalStretch) {
-                NativeProxy.WritePrivateProfileString("graphics", "scaling", "1", configPath);
+                cfg["graphics"]["scaling"] = "1";
             } else if (setup.FullscreenGameScaling == GameScaling.StretchToFit) {
-                NativeProxy.WritePrivateProfileString("graphics", "scaling", "2", configPath);
+                cfg["graphics"]["scaling"] = "2";
             } else {
-                NativeProxy.WritePrivateProfileString("graphics", "scaling", "0", configPath);
+                cfg["graphics"]["scaling"] = "0";
             }
 
-            NativeProxy.WritePrivateProfileString("graphics", "super_sampling", super_sampling, configPath);
-            NativeProxy.WritePrivateProfileString("graphics", "smooth_sprites", setup.AAScaledSprites ? "1" : "0", configPath);
+            cfg["graphics"]["smooth_sprites"] = setup.AAScaledSprites ? "1" : "0";
 
             // Debug options
             if (Factory.AGSEditor.CurrentGame.Settings.DebugMode) // Make sure to not have debug options in production
             {
-                NativeProxy.WritePrivateProfileString("debug", "show_fps", setup.ShowFPS ? "1" : "0", configPath);
-                NativeProxy.WritePrivateProfileString("debug", "logging", logging, configPath);
+                cfg["debug"]["show_fps"] = setup.ShowFPS ? "1" : "0";
+                cfg["debug"]["logging"] = logging;
             } 
             else
             {
-                NativeProxy.WritePrivateProfileString("debug", "show_fps", "0", configPath);
-                NativeProxy.WritePrivateProfileString("debug", "logging", "0", configPath);
+                cfg["debug"]["show_fps"] = "0";
+                cfg["debug"]["logging"] = "0";
             }
+
+            NativeProxy.Instance.WriteIniFile(configPath, cfg, true);
         }
 
         private IconAssetType GetGameIconType()
         {
-            string projIconDir = PROJECT_DIR;
+            string projIconDir = ICON_PROJECT_DIR;
 
             if (!Directory.Exists(projIconDir)) return IconAssetType.NoIconFiles;
 
@@ -136,7 +152,7 @@ namespace AGS.Editor
 
         private void SetGameIcons(IconAssetType icType, string destDir)
         {
-            string projIconDir = PROJECT_DIR;
+            string projIconDir = ICON_PROJECT_DIR;
             string destIconDir = Path.Combine(destDir, ICON_RES_DIR);
 
             switch (icType)
@@ -215,6 +231,11 @@ namespace AGS.Editor
             string packages = "\"build-tools;34.0.0\" \"ndk;25.2.9519653\" \"platforms;android-34\"";
 
             AndroidUtilities.RunSdkManager(packages, prjDir);
+        }
+
+        private string GetEditorAndroidBundleDir()
+        {
+            return Path.Combine(Factory.AGSEditor.EditorDirectory, ANDROID_DIR);
         }
 
         private string GetAndroidProjectInCompiledDir()
@@ -371,11 +392,58 @@ namespace AGS.Editor
             WriteStringToFile(fileName, fileText);
         }
 
+        private IDictionary<string, string> GetRequiredPluginFilePaths(CompileMessages errors)
+        {
+            Dictionary<string, string> paths = new Dictionary<string, string>();
+
+            string androidDir = GetEditorAndroidBundleDir();
+            string pluginDir = "plugins";
+
+            foreach (Plugin plugin in Factory.AGSEditor.CurrentGame.Plugins)
+            {
+                string soName = "lib" + plugin.FileName.Substring(0, plugin.FileName.Length - 3) + "so";
+
+                bool hasPluginSo = false;
+                string missing_archs = "";
+                foreach (string arch in ANDROID_ARCHS)
+                {
+                    string pluginSoDir = Path.Combine(pluginDir, Path.Combine(arch, soName));
+                    string pluginSoDirInEditor = Path.Combine(androidDir, pluginSoDir);
+                    bool hasThisSo = File.Exists(pluginSoDirInEditor);
+                    if(hasThisSo)
+                    {
+                        paths.Add(pluginSoDir, androidDir);
+                    }
+                    else
+                    {
+                        missing_archs += arch + ", ";
+                    }
+
+                    hasPluginSo |= hasThisSo;
+                }
+                if (hasPluginSo)
+                {
+                    if (!string.IsNullOrEmpty(missing_archs))
+                    {
+                        missing_archs = missing_archs.Substring(0, missing_archs.Length - 2);
+                        string warn_msg = "Android: plugin " + soName + " is missing for " + missing_archs + ".";
+                        errors.Add(new CompileWarning(warn_msg));
+                    }
+                }
+                else
+                {
+                    errors.Add(new CompileWarning("Android: plugin " + soName + " not found for any arch."));
+                }
+            }
+
+            return paths;
+        }
+
         public override IDictionary<string, string> GetRequiredLibraryPaths()
         {
             Dictionary<string, string> paths = new Dictionary<string, string>();
 
-            string androidDir = Path.Combine(Factory.AGSEditor.EditorDirectory, ANDROID_DIR);
+            string androidDir = GetEditorAndroidBundleDir();
 
             List<string> files = new List<string>()
             {
@@ -491,7 +559,8 @@ namespace AGS.Editor
                 "mygame\\play_licensing_library\\src\\main\\java\\com\\google\\android\\vending\\licensing\\StrictPolicy.java",
                 "mygame\\play_licensing_library\\src\\main\\java\\com\\google\\android\\vending\\licensing\\ValidationException.java",
                 "mygame\\play_licensing_library\\src\\main\\java\\com\\google\\android\\vending\\licensing\\util\\Base64.java",
-                "mygame\\play_licensing_library\\src\\main\\java\\com\\google\\android\\vending\\licensing\\util\\Base64DecoderException.java"
+                "mygame\\play_licensing_library\\src\\main\\java\\com\\google\\android\\vending\\licensing\\util\\Base64DecoderException.java",
+                "plugins\\plugins_go_here.txt"
             };
 
             foreach(string file in files)
@@ -508,9 +577,7 @@ namespace AGS.Editor
 
         public override void DeleteMainGameData(string name)
         {
-            string assetsDir = GetAssetsDir();
-            string filename = Path.Combine(assetsDir, name + ".ags");
-            Utilities.TryDeleteFile(filename);
+            DeleteCommonGameFiles(GetAssetsDir(), name);
         }
 
         public override bool Build(CompileMessages errors, bool forceRebuild)
@@ -551,7 +618,14 @@ namespace AGS.Editor
             GenerateConfigFile(assetsDir);
             WriteAndroidCfg(assetsDir);
 
-            foreach (KeyValuePair<string, string> pair in GetRequiredLibraryPaths())
+            Dictionary<string, string> all_file_paths = new Dictionary<string, string>(GetRequiredLibraryPaths());
+            {
+                Dictionary<string, string> plugin_paths = new Dictionary<string, string>(GetRequiredPluginFilePaths(errors));
+                foreach (var plugin_path in plugin_paths)
+                    all_file_paths.Add(plugin_path.Key, plugin_path.Value);
+            }
+
+            foreach (KeyValuePair<string, string> pair in all_file_paths)
             {
                 string fileName = pair.Key;
                 string originDir = pair.Value;

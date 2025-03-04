@@ -2,17 +2,16 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/math.h"
-#include "util/stream.h"
 #include "util/textstreamreader.h"
 
 namespace AGS
@@ -20,30 +19,9 @@ namespace AGS
 namespace Common
 {
 
-TextStreamReader::TextStreamReader(Stream *stream)
-    : _stream(stream)
-{
-}
-
-TextStreamReader::~TextStreamReader()
-{
-    // TODO: use shared ptr
-    delete _stream;
-}
-
 bool TextStreamReader::IsValid() const
 {
     return _stream && _stream->CanRead();
-}
-
-const Stream *TextStreamReader::GetStream() const
-{
-    return _stream;
-}
-
-void TextStreamReader::ReleaseStream()
-{
-    _stream = nullptr;
 }
 
 bool TextStreamReader::EOS() const
@@ -59,7 +37,7 @@ char TextStreamReader::ReadChar()
 String TextStreamReader::ReadString(size_t length)
 {
     // TODO: remove carriage-return characters
-    return String::FromStreamCount(_stream, length);
+    return String::FromStreamCount(_stream.get(), length);
 }
 
 String TextStreamReader::ReadLine()
@@ -121,7 +99,8 @@ String TextStreamReader::ReadLine()
 
 String TextStreamReader::ReadAll()
 {
-    size_t len = Math::InRangeOrDef<size_t>(_stream->GetLength() - _stream->GetPosition(), SIZE_MAX);
+    size_t len = Math::InRangeOrDef<size_t>(
+        static_cast<uint64_t>(_stream->GetLength() - _stream->GetPosition()), SIZE_MAX);
     return ReadString(len);
 }
 

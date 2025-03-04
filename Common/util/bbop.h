@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -35,9 +35,9 @@ enum DataEndianess
     kBigEndian,
     kLittleEndian,
 #if defined (BITBYTE_BIG_ENDIAN)
-    kDefaultSystemEndianess = kBigEndian
+    kSystemEndianess = kBigEndian
 #else
-    kDefaultSystemEndianess = kLittleEndian
+    kSystemEndianess = kLittleEndian
 #endif
 };
 
@@ -61,6 +61,18 @@ inline int FlagToNoFlag(int value, int flag1, int flag2)
 
 namespace BitByteOperations
 {
+    struct IntFloatSwap
+    {
+        union
+        {
+            float    f;
+            int32_t  i32;
+        } val;
+
+        explicit IntFloatSwap(int32_t i) { val.i32 = i; }
+        explicit IntFloatSwap(float f) { val.f = f; }
+    };
+
     inline int16_t SwapBytesInt16(const int16_t val)
     {
         return ((val >> 8) & 0xFF) | ((val << 8) & 0xFF00);
@@ -78,17 +90,11 @@ namespace BitByteOperations
               ((val << 24) & 0xFF0000000000LL) | ((val << 40) & 0xFF000000000000LL) | ((val << 56) & 0xFF00000000000000LL);
     }
 
-    inline float SwapBytesFloat(const float val)
+    inline float SwapBytesFloat32(const float val)
     {
-        // (c) SDL2
-        union
-        {
-            float f;
-            uint32_t ui32;
-        } swapper;
-        swapper.f = val;
-        swapper.ui32 = SwapBytesInt32(swapper.ui32);
-        return swapper.f;
+        IntFloatSwap swap(val);
+        swap.val.i32 = SwapBytesInt32(swap.val.i32);
+        return swap.val.f;
     }
 
     inline int16_t Int16FromLE(const int16_t val)
@@ -118,10 +124,10 @@ namespace BitByteOperations
 #endif
     }
 
-    inline float FloatFromLE(const float val)
+    inline float Float32FromLE(const float val)
     {
 #if defined (BITBYTE_BIG_ENDIAN)
-        return SwapBytesFloat(val);
+        return SwapBytesFloat32(val);
 #else
         return val;
 #endif
@@ -154,12 +160,12 @@ namespace BitByteOperations
 #endif
     }
 
-    inline float FloatFromBE(const float val)
+    inline float Float32FromBE(const float val)
     {
 #if defined (BITBYTE_BIG_ENDIAN)
         return val;
 #else
-        return SwapBytesFloat(val);
+        return SwapBytesFloat32(val);
 #endif
     }
 

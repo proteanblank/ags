@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -41,9 +41,9 @@ public:
     ScriptUserObject() = default;
     ~ScriptUserObject() = default;
 
-    inline static const Header &GetHeader(void *address)
+    inline static const Header &GetHeader(const void *address)
     {
-        return reinterpret_cast<const Header&>(*(static_cast<uint8_t*>(address) - MemHeaderSz));
+        return reinterpret_cast<const Header&>(*(static_cast<const uint8_t*>(address) - MemHeaderSz));
     }
 
     // Create managed struct object and return a pointer to the beginning of a buffer
@@ -62,9 +62,9 @@ private:
 
     // Savegame serialization
     // Calculate and return required space for serialization, in bytes
-    size_t CalcSerializeSize(void *address) override;
+    size_t CalcSerializeSize(const void *address) override;
     // Write object data into the provided stream
-    void Serialize(void *address, AGS::Common::Stream *out) override;
+    void Serialize(const void *address, AGS::Common::Stream *out) override;
 };
 
 extern ScriptUserObject globalDynamicStruct;

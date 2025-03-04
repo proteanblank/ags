@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -37,7 +37,10 @@ using Common::Bitmap;
 namespace GfxUtil
 {
     // Creates a COPY of the source bitmap, converted to the given format.
-    Bitmap *ConvertBitmap(Bitmap *src, int dst_color_depth);
+    // By default this keeps mask pixels intact, only converting mask color
+    // value as necessary; but optionally you may request to ignore mask pixels
+    // and treat them as regular color.
+    Bitmap *ConvertBitmap(Bitmap *src, int dst_color_depth, bool keep_mask = true);
 
     // Considers the given information about source and destination surfaces,
     // then draws a bimtap over another either using requested blending mode,
@@ -49,7 +52,7 @@ namespace GfxUtil
     // Draws a bitmap over another one with given alpha level (0 - 255),
     // takes account of the bitmap's mask color,
     // ignores image's alpha channel, even if there's one;
-    // does proper conversion depending on respected color depths.
+    // does a conversion if sprite and destination color depths do not match.
     void DrawSpriteWithTransparency(Bitmap *ds, Bitmap *sprite, int x, int y, int alpha = 0xFF);
 } // namespace GfxUtil
 

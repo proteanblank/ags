@@ -53,21 +53,16 @@ namespace AGS.Types
             set { _familyName = value; }
         }
 
-        [Browsable(false)]
+        [Description("The nominal size that this font was imported at")]
+        [Category("Appearance")]
+        [DisplayName("Font Size")]
+        [EditorAttribute(typeof(FontSizeUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
+        [TypeConverter(typeof(FontSizeTypeConverter))]
         // NOTE: this property's name is incorrect, as it's not really a "point size"
         public int PointSize
         {
             get { return _fontSize; }
             set { _fontSize = value; }
-        }
-
-        [Description("The nominal size that this TTF font was imported at")]
-        [Category("Appearance")]
-        [DisplayName("Font Size")]
-        // NOTE: this property's name is incorrect, as it's not really a "point size"
-        public string PointSizeDescription
-        {
-            get { return (_fontSize < 1) ? "N/A" : _fontSize.ToString(); }
         }
 
         [AGSNoSerialize]
@@ -89,7 +84,8 @@ namespace AGS.Types
             set { _name = value; }
         }
 
-		[Description("The name with which the script will access this font")]
+        [AGSNoSerialize]
+        [Description("The name with which the script will access this font")]
 		[Category("Design")]
 		public string ScriptID
 		{
@@ -102,7 +98,7 @@ namespace AGS.Types
 				string scriptName = "eFont" + Name;
 				for (int i = 0; i < scriptName.Length; i++)
 				{
-					if (!Char.IsLetterOrDigit(scriptName[i]))
+					if (!scriptName[i].IsScriptWordChar())
 					{
 						scriptName = scriptName.Replace(scriptName[i].ToString(), string.Empty);
 					}
@@ -115,6 +111,12 @@ namespace AGS.Types
         public string WindowTitle
         {
             get { return "Font: " + this.Name; }
+        }
+
+        [Browsable(false)]
+        public string PropertyGridTitle
+        {
+            get { return TypesHelper.MakePropertyGridTitle("Font", _name, _id); }
         }
 
         [Description("Font to use as an outline for this one")]
@@ -159,8 +161,9 @@ namespace AGS.Types
 
 		[Description("The file path that this font was imported from")]
 		[Category("Design")]
-		[ReadOnly(true)]
-		public string SourceFilename
+        [EditorAttribute(typeof(FontFileUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
+        [TypeConverter(typeof(ReadOnlyConverter))]
+        public string SourceFilename
 		{
 			get { return _sourceFilename; }
 			set { _sourceFilename = value; }

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -18,18 +18,16 @@
 #include "ac/common.h"
 
 int sc_GetTime(int whatti) {
-    ScriptDateTime *sdt = DateTime_Now_Core();
+    ScriptDateTime sdt(ScriptDateTime::SystemClock::now());
     int returnVal = 0;
 
-    if (whatti == 1) returnVal = sdt->hour;
-    else if (whatti == 2) returnVal = sdt->minute;
-    else if (whatti == 3) returnVal = sdt->second;
-    else if (whatti == 4) returnVal = sdt->day;
-    else if (whatti == 5) returnVal = sdt->month;
-    else if (whatti == 6) returnVal = sdt->year;
+    if (whatti == 1) returnVal = sdt.Hour();
+    else if (whatti == 2) returnVal = sdt.Minute();
+    else if (whatti == 3) returnVal = sdt.Second();
+    else if (whatti == 4) returnVal = sdt.Day();
+    else if (whatti == 5) returnVal = sdt.Month();
+    else if (whatti == 6) returnVal = sdt.Year();
     else quit("!GetTime: invalid parameter passed");
-
-    delete sdt;
 
     return returnVal;
 }

@@ -1,4 +1,5 @@
 using AGS.Types;
+using AGS.Editor.Components;
 using AGS.Editor.Utils;
 using System;
 using System.Collections.Generic;
@@ -10,6 +11,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
+using System.Reflection;
 
 namespace AGS.Editor
 {
@@ -105,7 +107,9 @@ namespace AGS.Editor
         {
             // TODO: This list partially contradicts the Output Target concepts,
             // because it explicitly mentions Data target's directories
-            List<string> foldersToCreate = new List<string> { "Speech", AudioClip.AUDIO_CACHE_DIRECTORY,
+            List<string> foldersToCreate = new List<string> {
+                SpeechComponent.SPEECH_DIRECTORY,
+                AudioComponent.AUDIO_CACHE_DIRECTORY,
                 AGSEditor.OUTPUT_DIRECTORY, Path.Combine(AGSEditor.OUTPUT_DIRECTORY, AGSEditor.DATA_OUTPUT_DIRECTORY) };
             foreach (string folderName in foldersToCreate)
             {
@@ -142,18 +146,33 @@ namespace AGS.Editor
             }
         }
 
-        public static string GetRelativeToProjectPath(string absolutePath)
+        public static string GetRelativeToBasePath(string absolutePath, string basePath)
         {
             if (String.IsNullOrEmpty(absolutePath) ||
-                !absolutePath.Contains(Factory.AGSEditor.CurrentGame.DirectoryPath))
+                !absolutePath.Contains(basePath))
             {
                 return absolutePath;
             }
 
-            Uri currentProjectUri = new Uri(Factory.AGSEditor.CurrentGame.DirectoryPath + Path.DirectorySeparatorChar);
+            Uri basePathUri = new Uri(basePath + Path.DirectorySeparatorChar);
             Uri currentPathUri = new Uri(absolutePath);
 
-            return Uri.UnescapeDataString(currentProjectUri.MakeRelativeUri(currentPathUri).OriginalString);
+            return Uri.UnescapeDataString(basePathUri.MakeRelativeUri(currentPathUri).OriginalString);
+        }
+
+        public static string GetRelativeToProjectPath(string absolutePath)
+        {
+            return GetRelativeToBasePath(absolutePath, Factory.AGSEditor.CurrentGame.DirectoryPath);
+        }
+
+        public static string[] GetRelativeToProjectPath(string[] absolutePaths)
+        {
+            string[] normalizedPaths = new string[absolutePaths.Length];
+            for (int i = 0; i < absolutePaths.Length; i++)
+            {
+                normalizedPaths[i] = GetRelativeToProjectPath(absolutePaths[i]);
+            }
+            return normalizedPaths;
         }
 
         public static string ResolveSourcePath(string sourcePath)
@@ -174,6 +193,11 @@ namespace AGS.Editor
             Uri uri1 = new Uri(path1);
             Uri uri2 = new Uri(path2);
             return uri1.Equals(uri2);
+        }
+
+        public static bool AnyPathsAreEqual(string path1, string path2)
+        {
+            return PathsAreEqual(ResolveSourcePath(path1), ResolveSourcePath(path2));
         }
 
         /// <summary>
@@ -205,6 +229,55 @@ namespace AGS.Editor
         }
 
         /// <summary>
+        /// Replaces "oldBase" parent part of the "path" with the "newBase", assigns "newPath" and returns a result.
+        /// If "path" does not contain "oldBase", then fails.
+        /// </summary>
+        public static bool ReplacePathBase(string path, string oldBase, string newBase, out string newPath)
+        {
+            Uri oldBaseUri = new Uri(oldBase + Path.DirectorySeparatorChar);
+            Uri pathUri = new Uri(path);
+            if (!oldBaseUri.IsBaseOf(pathUri))
+            {
+                newPath = path;
+                return false;
+            }
+
+            Uri relativeUri = pathUri.MakeRelativeUri(oldBaseUri);
+            Uri newBaseUri = new Uri(newBase + Path.DirectorySeparatorChar);
+            Uri absoluteUri;
+            if (Uri.TryCreate(newBaseUri, relativeUri, out absoluteUri))
+            {
+                if (pathUri.IsFile)
+                    newPath = Path.Combine(absoluteUri.LocalPath, Path.GetFileName(path));
+                else
+                    newPath = absoluteUri.LocalPath;
+                return true;
+            }
+            newPath = path;
+            return false;
+        }
+
+        public static bool ReplacePathBaseProjectRelative(string path, string oldBase, string newBase, out string newPath)
+        {
+            string originalPath = path;
+            if (!Path.IsPathRooted(oldBase))
+                oldBase = Path.Combine(Factory.AGSEditor.CurrentGame.DirectoryPath, oldBase);
+            if (!Path.IsPathRooted(newBase))
+                newBase = Path.Combine(Factory.AGSEditor.CurrentGame.DirectoryPath, newBase);
+            if (!Path.IsPathRooted(path))
+                path = Path.Combine(Factory.AGSEditor.CurrentGame.DirectoryPath, path);
+
+            if (!ReplacePathBase(path, oldBase, newBase, out newPath))
+            {
+                newPath = originalPath;
+                return false;
+            }
+
+            newPath = GetRelativeToProjectPath(newPath);
+            return true;
+        }
+
+        /// <summary>
         /// Wraps Directory.GetFiles in a handler to deal with an exception
         /// erroneously being thrown on Linux network shares if no files match.
         /// </summary>
@@ -232,6 +305,9 @@ namespace AGS.Editor
         /// <summary>
         /// Returns whether the sourceFile is newer than the destinationFile or
         /// if the destinationFile doesn't exist.
+        /// 
+        /// Exceptions:
+        ///  - ArgumentException: if source file does not exist
         /// </summary>
         public static bool DoesFileNeedRecompile(string sourceFile, string destinationFile)
         {
@@ -387,7 +463,7 @@ namespace AGS.Editor
                 g.Clear(backgroundColour);
                 int x = 0, y = 0;
 
-                using (Bitmap bitmapToDraw = Factory.NativeProxy.GetBitmapForSprite(sprite.Number, newWidth, newHeight))
+                using (Bitmap bitmapToDraw = Factory.NativeProxy.GetSpriteBitmapAs32Bit(sprite.Number, newWidth, newHeight))
                 {
                     Bitmap bmp = bitmapToDraw ?? SpriteTools.GetPlaceHolder();
                     if (centreInNewCanvas)
@@ -513,11 +589,11 @@ namespace AGS.Editor
             Rectangle rect = new Rectangle(0, 0, source.Width, source.Height);
             BitmapData sourceData = source.LockBits(rect, ImageLockMode.ReadOnly, source.PixelFormat);
             BitmapData destData = newImage.LockBits(rect, ImageLockMode.WriteOnly, newImage.PixelFormat);
-            int sourceAddress = sourceData.Scan0.ToInt32();
-            int destAddress = destData.Scan0.ToInt32();
+            IntPtr sourceAddress = sourceData.Scan0;
+            IntPtr destAddress = destData.Scan0;
             for (int y = 0; y < newImage.Height; y++)
             {
-                Utilities.CopyMemory(new IntPtr(sourceAddress), new IntPtr(destAddress), destData.Stride);
+                Utilities.CopyMemory(sourceAddress, destAddress, destData.Stride);
 
                 sourceAddress += sourceData.Stride;
                 destAddress += destData.Stride;
@@ -658,6 +734,67 @@ namespace AGS.Editor
             float proportion = (float)(graphics.DpiY / 96.0);
             graphics.Dispose();
             return proportion;
+        }
+
+        public static bool OpenFileOrDirInFileExplorer(string path)
+        {
+            if (File.Exists(path))
+            {
+                if (Utilities.IsMonoRunning())
+                {
+                    // FIXME - this probably needs to be more platform specific
+                    Process.Start(path);
+                }
+                else
+                {
+                    Hacks.ShowInExplorer(path);
+                }
+                return true;
+            }
+            else if(Directory.Exists(path))
+            {
+                if (Utilities.IsMonoRunning())
+                {
+                    // FIXME - this probably needs to be more platform specific
+                    Process.Start(path);
+                }
+                else
+                {
+                    Hacks.ShowInExplorer(path, null);
+                }
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Tries to get a config value stored in particular section, under certain key.
+        /// If either section or key does not exist, then returns provided default value.
+        /// </summary>
+        public static string GetConfigString(Dictionary<string, Dictionary<string, string>> cfg, string section, string key, string def)
+        {
+            Dictionary<string, string> secmap;
+            if (!cfg.TryGetValue(section, out secmap))
+                return def;
+            string value;
+            if (!secmap.TryGetValue(key, out value))
+                return def;
+            return value;
+        }
+
+        /// <summary>
+        /// Do a simple shallow copy of properties that are both readableand writeable from one object to the other
+        /// TO-DO: If we do add a Clone or Duplicate to the objects in AGS.Types, move this to Utilities there.
+        /// </summary>
+        public static void NaiveCopyProperties(object source_obj, object clone)
+        {
+            IEnumerable<PropertyInfo> properties = source_obj.GetType().GetProperties()
+                .Where(f => f.CanWrite && f.CanRead);
+
+            foreach (PropertyInfo prop in properties)
+            {
+                prop.SetValue(clone, prop.GetValue(source_obj));
+            }
         }
     }
 }

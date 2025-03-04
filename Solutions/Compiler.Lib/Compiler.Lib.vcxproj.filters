@@ -41,7 +41,7 @@
     <ClCompile Include="..\..\Compiler\script\cc_internallist.cpp">
       <Filter>Source Files\script</Filter>
     </ClCompile>
-    <ClCompile Include="..\..\Compiler\script\cc_macrotable.cpp">
+    <ClCompile Include="..\..\Compiler\preproc\cc_macrotable.cpp">
       <Filter>Source Files\script</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Compiler\script\cc_symboltable.cpp">
@@ -51,9 +51,6 @@
       <Filter>Source Files\script</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Compiler\script\cs_parser.cpp">
-      <Filter>Source Files\script</Filter>
-    </ClCompile>
-    <ClCompile Include="..\..\Compiler\script\cs_parser_common.cpp">
       <Filter>Source Files\script</Filter>
     </ClCompile>
     <ClCompile Include="..\..\Compiler\preproc\preprocessor.cpp">
@@ -81,22 +78,19 @@
     <ClInclude Include="..\..\Compiler\preproc\preprocessor.h">
       <Filter>Header Files\preproc</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\..\Compiler\fmem.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Common\script\cc_error.h">
-      <Filter>Header Files\cs</Filter>
-    </ClInclude>
-    <ClInclude Include="..\..\Common\script\cc_options.h">
+    <ClInclude Include="..\..\Common\script\cc_internal.h">
       <Filter>Header Files\cs</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Common\script\cc_script.h">
       <Filter>Header Files\cs</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Common\script\script_common.h">
+    <ClInclude Include="..\..\Common\script\cc_common.h">
       <Filter>Header Files\cs</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\..\Compiler\fmem.h">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Compiler\script\cc_compiledscript.h">
       <Filter>Header Files\script</Filter>
@@ -104,7 +98,7 @@
     <ClInclude Include="..\..\Compiler\script\cc_internallist.h">
       <Filter>Header Files\script</Filter>
     </ClInclude>
-    <ClInclude Include="..\..\Compiler\script\cc_macrotable.h">
+    <ClInclude Include="..\..\Compiler\preproc\cc_macrotable.h">
       <Filter>Header Files\script</Filter>
     </ClInclude>
     <ClInclude Include="..\..\Compiler\script\cc_symboldef.h">

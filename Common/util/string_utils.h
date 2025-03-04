@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -55,6 +55,9 @@ namespace StrUtil
     // Converts a classic wildcard search pattern into C++11 compatible regex pattern
     String          WildcardToRegex(const String &wildcard);
 
+    // Remove double quotes from the string
+    inline String   Undoublequote(const String &s) { String und = s; und.Trim('\"'); return und; }
+
     // Serialize and unserialize unterminated string prefixed with 32-bit length;
     // length is presented as 32-bit integer integer
     String          ReadString(Stream *in);
@@ -67,12 +70,24 @@ namespace StrUtil
     void            WriteString(const char *cstr, size_t len, Stream *out);
 
     // Serialize and unserialize string as c-string (null-terminated sequence)
+    //
+    // Reads a null-terminated string until getting a null-terminator.
+    // writes into the buffer up to the buf_limit.
+    // Note that this will keep reading the stream out until 0 is read,
+    // even if buffer is already full.
+    // Guarantees that output buffer will contain a null-terminator.
     void            ReadCStr(char *buf, Stream *in, size_t buf_limit);
+    // Reads N characters into the provided buffer.
+    // Guarantees that output buffer will contain a null-terminator.
+    void            ReadCStrCount(char *buf, Stream *in, size_t count);
     // Reads a null-terminated string and !! mallocs !! a char buffer for it;
     // returns nullptr if the read string is empty.
     // Buffer is hard-limited to 1024 bytes, including null-terminator.
     // Strictly for compatibility with the C lib code!
     char *          ReadMallocCStrOrNull(Stream *in);
+    // Variant of above, that allocates std::string.
+    // Buffer is hard-limited to 1024 bytes, including null-terminator.
+    std::string     ReadCStrAsStdString(Stream *in);
     void            SkipCStr(Stream *in);
     void            WriteCStr(const char *cstr, Stream *out);
     void            WriteCStr(const String &s, Stream *out);
@@ -83,25 +98,51 @@ namespace StrUtil
 
 
     // Parses enum value by name, using provided C-string array,
-    // where strings are compared as case-insensitive; returns def_val if failed;
+    // where strings are compared as case-insensitive; returns def_val if failed
     template<typename T, std::size_t SIZE>
-    T ParseEnum(const String &option, const CstrArr<SIZE>& arr, const T def_val = static_cast<T>(-1))
+    T ParseEnum(const String &option, const CstrArr<SIZE> &arr, const T &def_val)
     {
         for (auto it = arr.cbegin(); it < arr.cend(); ++it)
             if ((*it && *it[0] != 0) && (option.CompareNoCase(*it) == 0))
                 return static_cast<T>(it - arr.begin());
         return def_val;
     }
-    // Parses enum value either as a number, or searching withing the C-string array,
-    // where strings are compared as case-insensitive; returns def_val if failed to do both
+    // Parses enum value by name, using provided C-string array and a base value (e.g. 0, -1, +1, etc),
+    // where strings are compared as case-insensitive; returns def_val if failed
     template<typename T, std::size_t SIZE>
-    T ParseEnumAllowNum(const String &option, const CstrArr<SIZE>& arr, const T def_val = static_cast<T>(-1))
+    T ParseEnumWithBase(const String &option, const CstrArr<SIZE> &arr, const T &base_val, const T &def_val)
     {
-        int num = StrUtil::StringToInt(option, -1);
-        if (num >= 0) return static_cast<T>(num);
         for (auto it = arr.cbegin(); it < arr.cend(); ++it)
             if ((*it && *it[0] != 0) && (option.CompareNoCase(*it) == 0))
-                return static_cast<T>(it - arr.begin());
+                return static_cast<T>(it - arr.begin() + base_val);
+        return def_val;
+    }
+    // Parses enum value either as a number, or searching withing the C-string array,
+    // where strings are compared as case-insensitive; defines a base value (e.g. 0, -1, +1, etc);
+    // returns def_val if failed to do both
+    template<typename T, std::size_t SIZE>
+    T ParseEnumAllowNum(const String &option, const CstrArr<SIZE> &arr, const T &base_val, const T &def_val)
+    {
+        // Try parse as a number, detect failure by returning an out-of-range "default value"
+        int num = StrUtil::StringToInt(option, base_val - 1);
+        if (num >= base_val)
+            return num < static_cast<int>(SIZE + base_val) ? static_cast<T>(num) : def_val;
+        // Try parse as an option from array
+        for (auto it = arr.cbegin(); it < arr.cend(); ++it)
+            if ((*it && *it[0] != 0) && (option.CompareNoCase(*it) == 0))
+                return static_cast<T>(it - arr.begin() + base_val);
+        return def_val;
+    }
+    // Parses enum value by name, using provided map of correspondence between
+    // C-strings and enum constants, where strings are compared as case-insensitive;
+    // returns def_val if failed
+    template<typename T, std::size_t SIZE>
+    T ParseEnumOptions(const String &option, const std::array<std::pair<const char*, T>, SIZE> &arr,
+        const T &def_val)
+    {
+        for (auto it = arr.cbegin(); it < arr.cend(); ++it)
+            if ((it->first && it->first[0] != 0) && (option.CompareNoCase(it->first) == 0))
+                return static_cast<T>(it->second);
         return def_val;
     }
 

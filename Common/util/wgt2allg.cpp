@@ -2,19 +2,50 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "util/wgt2allg.h"
 #include "gfx/bitmap.h"
 
 using namespace AGS::Common;
+
+  void __my_setcolor(int *ctset, int newcol, int wantColDep)
+  {
+    if (wantColDep == 8)
+    {
+      ctset[0] = newcol;
+    }
+    else if ((newcol >= 32) && (wantColDep > 16))
+    {
+      // true-color
+      ctset[0] = makeacol32(getr16(newcol), getg16(newcol), getb16(newcol), 255);
+    }
+    else if (newcol >= 32)
+    {
+      // If it's 15-bit, convert the color
+      if (wantColDep == 15)
+        ctset[0] = (newcol & 0x001f) | ((newcol >> 1) & 0x7fe0);
+      else
+        ctset[0] = newcol;
+    } 
+    else
+    {
+      // indexed color, use palette
+      ctset[0] = makecol_depth(wantColDep, col_lookups[newcol] >> 16,
+                               (col_lookups[newcol] >> 8) & 0x000ff, col_lookups[newcol] & 0x000ff);
+
+      // in case it's used on an alpha-channel sprite, make sure it's visible
+      if (wantColDep > 16)
+        ctset[0] |= 0xff000000;
+    }
+  }
 
   void wsetrgb(int coll, int r, int g, int b, RGB * pall)
   {
@@ -92,14 +123,11 @@ using namespace AGS::Common;
     0xA0A0A0, 0xB0B0B0, 0xC0C0C0, 0xD0D0D0, 0xE0E0E0, 0xF0F0F0
   };
 
-  int __wremap_keep_transparent = 1;
-
-  void wremap(RGB * pal1, Bitmap *picc, RGB * pal2)
+  void wremap(const RGB * pal1, Bitmap *picc, const RGB * pal2, bool keep_transparent)
   {
-    int jj;
     unsigned char color_mapped_table[256];
 
-    for (jj = 0; jj < 256; jj++)
+    for (int jj = 0; jj < 256; jj++)
     {
       if ((pal1[jj].r == 0) && (pal1[jj].g == 0) && (pal1[jj].b == 0))
       {
@@ -111,27 +139,25 @@ using namespace AGS::Common;
       }
     }
 
-    if (__wremap_keep_transparent > 0) {
+    if (keep_transparent) {
       // keep transparency
       color_mapped_table[0] = 0;
       // any other pixels which are being mapped to 0, map to 16 instead
-      for (jj = 1; jj < 256; jj++) {
+      for (int jj = 1; jj < 256; jj++) {
         if (color_mapped_table[jj] == 0)
           color_mapped_table[jj] = 16;
       }
     }
 
     int pic_size = picc->GetWidth() * picc->GetHeight();
-    for (jj = 0; jj < pic_size; jj++) {
+    for (int jj = 0; jj < pic_size; jj++) {
       int xxl = jj % (picc->GetWidth()), yyl = jj / (picc->GetWidth());
       int rr = picc->GetPixel(xxl, yyl);
       picc->PutPixel(xxl, yyl, color_mapped_table[rr]);
     }
   }
 
-  void wremapall(RGB * pal1, Bitmap *picc, RGB * pal2)
+  void wremapall(const RGB * pal1, Bitmap *picc, const RGB * pal2)
   {
-    __wremap_keep_transparent--;
-    wremap(pal1, picc, pal2);
-    __wremap_keep_transparent++;
+    wremap(pal1, picc, pal2, false);
   }

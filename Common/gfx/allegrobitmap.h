@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -21,9 +21,11 @@
 #ifndef __AGS_CN_GFX__ALLEGROBITMAP_H
 #define __AGS_CN_GFX__ALLEGROBITMAP_H
 
+#include <memory>
 #include <allegro.h> // BITMAP
 #include "core/types.h"
 #include "gfx/bitmap.h"
+#include "gfx/bitmapdata.h"
 #include "util/string.h"
 
 namespace AGS
@@ -34,11 +36,21 @@ namespace Common
 class Bitmap
 {
 public:
-    Bitmap();
+    Bitmap() = default;
     Bitmap(int width, int height, int color_depth = 0);
+    Bitmap(PixelBuffer &&pxbuf);
+    // Constructs a sub-bitmap, referencing parent
     Bitmap(Bitmap *src, const Rect &rc);
+    // Wraps Allegro BITMAP object, optionally owning it
     Bitmap(BITMAP *al_bmp, bool shared_data);
+    // Copy-constructor: constructs a full Bitmap copy
+    Bitmap(const Bitmap &bmp);
+    // Move-constructor: moves pixel data from another bitmap
+    Bitmap(Bitmap &&bmp);
     ~Bitmap();
+
+    Bitmap &operator =(const Bitmap &bmp);
+    Bitmap &operator =(Bitmap &&bmp) = default;
 
     // Allocate new bitmap.
     // NOTE: color_depth is in BITS per pixel (i.e. 8, 16, 24, 32...).
@@ -50,6 +62,8 @@ public:
     bool    Create(int width, int height, int color_depth = 0);
     // Create Bitmap and clear to transparent color
     bool    CreateTransparent(int width, int height, int color_depth = 0);
+    // Create Bitmap and attach prepared pixel buffer
+    bool    Create(PixelBuffer &&pxbuf);
     // Creates a sub-bitmap of the given bitmap; the sub-bitmap is a reference to
     // particular region inside a parent.
     // WARNING: the parent bitmap MUST be kept in memory for as long as sub-bitmap exists!
@@ -58,22 +72,29 @@ public:
     bool    ResizeSubBitmap(int width, int height);
     // Creates a plain copy of the given bitmap, optionally converting to a different color depth;
     // pass color depth 0 to keep the original one.
-    bool	CreateCopy(Bitmap *src, int color_depth = 0);
+    bool	CreateCopy(const Bitmap *src, int color_depth = 0);
     // TODO: this is a temporary solution for plugin support
     // Wraps a raw allegro BITMAP object, optionally owns it (will delete on disposal)
     bool    WrapAllegroBitmap(BITMAP *al_bmp, bool shared_data);
-    // Releases a reference to raw allegro BITMAP object without deleting it
+    // Releases a reference to raw allegro BITMAP object without deleting it;
+    // WARNING: this is meant strictly as a workaround in case third-party lib
+    // have deleted our owned BITMAP object.
     void    ForgetAllegroBitmap();
     // Deallocate bitmap
     void	Destroy();
 
-    bool    SaveToFile(const String &filename, const void *palette)
+    bool    SaveToFile(const String &filename, const RGB *palette)
             { return SaveToFile(filename.GetCStr(), palette); }
-    bool    SaveToFile(const char *filename, const void *palette);
+    bool    SaveToFile(const char *filename, const RGB *palette);
 
     // TODO: This is temporary solution for cases when we cannot replace
 	// use of raw BITMAP struct with Bitmap
     inline BITMAP *GetAllegroBitmap()
+    {
+        return _alBitmap;
+    }
+
+    inline const BITMAP *GetAllegroBitmap() const
     {
         return _alBitmap;
     }
@@ -125,7 +146,7 @@ public:
         return (GetColorDepth() + 7) / 8;
     }
 
-    // CHECKME: probably should not be exposed, see comment to GetData()
+    // Gets size of Bitmap's pixel data, in bytes
 	inline int  GetDataSize() const
     {
         return GetWidth() * GetHeight() * GetBPP();
@@ -136,9 +157,7 @@ public:
         return GetWidth() * GetBPP();
     }
 
-	// TODO: replace with byte *
 	// Gets a pointer to underlying graphic data
-	// FIXME: actually not a very good idea, since there's no 100% guarantee the scanline positions in memory are sequential
     inline const unsigned char *GetData() const
     {
         return _alBitmap->line[0];
@@ -149,6 +168,17 @@ public:
     {
         assert(index >= 0 && index < GetHeight());
         return _alBitmap->line[index];
+    }
+
+    // Get bitmap data wrapped in a PixelBuffer struct
+    inline const BitmapData GetBitmapData() const
+    {
+        return BitmapData(GetData(), GetDataSize(), GetLineLength(), GetWidth(), GetHeight(), ColorDepthToPixelFormat(GetColorDepth()));
+    }
+
+    inline BitmapData GetBitmapData()
+    {
+        return BitmapData(GetDataForWriting(), GetDataSize(), GetLineLength(), GetWidth(), GetHeight(), ColorDepthToPixelFormat(GetColorDepth()));
     }
 
 	// Get bitmap's mask color (transparent color)
@@ -162,6 +192,12 @@ public:
     // but that's a mistake, because in retrospect is has nothing to do with
     // bitmap itself and should rather be a part of the game data logic.
     color_t GetCompatibleColor(color_t color);
+
+    // Tells if the given point lies within the bitmap bounds
+    inline bool IsOnBitmap(int x, int y) const
+    {
+        return x >= 0 && y >= 0 && x < GetWidth() && y < GetHeight();
+    }
 
     //=========================================================================
     // Clipping
@@ -178,7 +214,7 @@ public:
     void    Blit(Bitmap *src, int dst_x = 0, int dst_y = 0, BitmapMaskOption mask = kBitmap_Copy);
     void    Blit(Bitmap *src, int src_x, int src_y, int dst_x, int dst_y, int width, int height, BitmapMaskOption mask = kBitmap_Copy);
     // Draw other bitmap in a masked mode (kBitmap_Transparency)
-    void    MaskedBlit(Bitmap *src, int dst_x, int dst_y);
+    void    MaskedBlit(Bitmap *src, int dst_x = 0, int dst_y = 0);
     // Draw other bitmap, stretching or shrinking its size to given values
     void    StretchBlt(Bitmap *src, const Rect &dst_rc, BitmapMaskOption mask = kBitmap_Copy);
     void    StretchBlt(Bitmap *src, const Rect &src_rc, const Rect &dst_rc, BitmapMaskOption mask = kBitmap_Copy);
@@ -187,13 +223,16 @@ public:
     void    AAStretchBlt(Bitmap *src, const Rect &src_rc, const Rect &dst_rc, BitmapMaskOption mask = kBitmap_Copy);
     // TODO: find more general way to call these operations, probably require pointer to Blending data struct?
     // Draw bitmap using translucency preset
-    void    TransBlendBlt(Bitmap *src, int dst_x, int dst_y);
+    void    TransBlendBlt(Bitmap *src, int dst_x = 0, int dst_y = 0);
     // Draw bitmap using lighting preset
     void    LitBlendBlt(Bitmap *src, int dst_x, int dst_y, int light_amount);
     // TODO: generic "draw transformed" function? What about mask option?
     void    FlipBlt(Bitmap *src, int dst_x, int dst_y, GraphicFlip flip);
-    void    RotateBlt(Bitmap *src, int dst_x, int dst_y, fixed_t angle);
-    void    RotateBlt(Bitmap *src, int dst_x, int dst_y, int pivot_x, int pivot_y, fixed_t angle);
+    // Draws rotated bitmap, using angle given in degrees.
+    // Warning: does not resize destination bitmap; if it's not large enough
+    // then the resulting image may end up cropped.
+    void    RotateBlt(Bitmap *src, int dst_x, int dst_y, int angle);
+    void    RotateBlt(Bitmap *src, int dst_x, int dst_y, int pivot_x, int pivot_y, int angle);
 
     //=========================================================================
     // Pixel operations
@@ -240,8 +279,9 @@ public:
     void    SetScanLine(int index, unsigned char *data, int data_size = -1);
 
 private:
-	BITMAP			*_alBitmap;
-	bool			_isDataOwner;
+    std::unique_ptr<uint8_t[]> _pixelData;
+    BITMAP *_alBitmap = nullptr;
+    bool    _isDataOwner = false;
 };
 
 

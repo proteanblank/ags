@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/draw.h"
@@ -19,6 +19,8 @@
 
 using namespace AGS::Common;
 
+// FIXME: don't use global variables here, have access to a GameState or some kind of a camera manager etc
+extern int displayed_room;
 extern RoomStruct thisroom;
 
 void Camera::SetID(int id)
@@ -37,8 +39,11 @@ void Camera::SetSize(const Size cam_size)
 {
     // TODO: currently we don't support having camera larger than room background
     // (or rather - looking outside of the room background); look into this later
-    const Size real_room_sz = Size(data_to_game_coord(thisroom.Width), data_to_game_coord(thisroom.Height));
-    Size real_size = Size::Clamp(cam_size, Size(1, 1), real_room_sz);
+    const Size real_room_sz = (displayed_room >= 0 && (thisroom.Width > 0 && thisroom.Height > 0)) ?
+        Size(data_to_game_coord(thisroom.Width), data_to_game_coord(thisroom.Height)) :
+        Size(INT32_MAX, INT32_MAX);
+
+    const Size real_size = Size::Clamp(cam_size, Size(1, 1), real_room_sz);
     if (_position.GetWidth() == real_size.Width && _position.GetHeight() == real_size.Height)
         return;
 

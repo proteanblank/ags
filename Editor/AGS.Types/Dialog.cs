@@ -46,10 +46,13 @@ namespace AGS.Types
             set { _name = Utilities.ValidateScriptName(value); }
         }
 
+        [Browsable(false)]
         public string FileName { get { return "Dialog " + ID; } }
 
+        [Browsable(false)]
         public string Text { get { return _script; } }
 
+        [Browsable(false)]
         public ScriptAutoCompleteData AutoCompleteData { get { return null; } }
 
         [Description("Whether to show a text box along with the options so that the user can type in custom text")]
@@ -99,6 +102,12 @@ namespace AGS.Types
         public string WindowTitle
         {
             get { return string.IsNullOrEmpty(this.Name) ? ("Dialog " + this.ID) : ("Dialog: " + this.Name); }
+        }
+
+        [Browsable(false)]
+        public string PropertyGridTitle
+        {
+            get { return TypesHelper.MakePropertyGridTitle("Dialog", _name, _id); }
         }
 
         public Dialog(XmlNode node)

@@ -1,27 +1,30 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace AGS.Types
 {
+    /// <summary>
+    /// InteractionPropertyDescriptor defines a real property from
+    /// Interactions type, wrapped and depicted as being a property of
+    /// another type instead, such as e.g. Character type.
+    /// This allows to have this pseudo-property displayed on that type's
+    /// Events properties tab.
+    /// </summary>
     public class InteractionPropertyDescriptor : PropertyDescriptor
     {
         private Type _componentType;
-        private int _eventIndex;
+        private bool _isReadonly;
 
-        public InteractionPropertyDescriptor(object component, int eventIndex, string eventName, string displayName,
-                string parameterList)
-            :
-            base(eventName, new Attribute[]{new DisplayNameAttribute(displayName), 
-                new EditorAttribute(typeof(ScriptFunctionUIEditor), typeof(System.Drawing.Design.UITypeEditor)),
-                new CategoryAttribute("Events"),
-                new DefaultValueAttribute(string.Empty),
-                new ScriptFunctionParametersAttribute(parameterList)})
+        public InteractionPropertyDescriptor(object component, string propertyName, Attribute[] attributes, bool isReadOnly)
+            : base(propertyName, attributes)
         {
             _componentType = component.GetType();
-            _eventIndex = eventIndex;
+            _isReadonly = isReadOnly;
         }
 
         public override bool CanResetValue(object component)
@@ -38,12 +41,13 @@ namespace AGS.Types
         {
             PropertyInfo interactionsProperty = component.GetType().GetProperty("Interactions");
             Interactions interactions = (Interactions)interactionsProperty.GetValue(component, null);
-            return interactions.ScriptFunctionNames[_eventIndex];
+            var valueProperty = typeof(Interactions).GetProperty(Name);
+            return valueProperty.GetValue(interactions);
         }
 
         public override bool IsReadOnly
         {
-            get { return false; }
+            get { return _isReadonly; }
         }
 
         public override Type PropertyType
@@ -58,9 +62,13 @@ namespace AGS.Types
 
         public override void SetValue(object component, object value)
         {
+            if (_isReadonly)
+                return;
+
             PropertyInfo interactionsProperty = component.GetType().GetProperty("Interactions");
             Interactions interactions = (Interactions)interactionsProperty.GetValue(component, null);
-            interactions.ScriptFunctionNames[_eventIndex] = value.ToString();
+            var valueProperty = typeof(Interactions).GetProperty(Name);
+            valueProperty.SetValue(interactions, value);
         }
 
         public override bool ShouldSerializeValue(object component)
@@ -68,5 +76,4 @@ namespace AGS.Types
             return false;
         }
     }
-
 }

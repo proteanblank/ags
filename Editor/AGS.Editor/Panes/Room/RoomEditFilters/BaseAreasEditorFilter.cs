@@ -1,3 +1,4 @@
+using AGS.Editor.Utils;
 using AGS.Types;
 using System;
 using System.Collections.Generic;
@@ -8,14 +9,13 @@ using System.Windows.Forms;
 
 namespace AGS.Editor
 {
-    public abstract class BaseAreasEditorFilter : IRoomEditorFilter
+    public abstract class BaseAreasEditorFilter : BaseRoomEditorFilter, IRoomEditorFilter
     {
         protected const string SELECT_AREA_COMMAND = "SelectArea";
         protected const string DRAW_LINE_COMMAND = "DrawLine";
         protected const string DRAW_FREEHAND_COMMAND = "DrawFreehand";
 		protected const string DRAW_RECTANGLE_COMMAND = "DrawRectangle";
 		protected const string DRAW_FILL_COMMAND = "DrawFill";
-        protected const string COPY_WALKABLE_AREA_MASK_COMMAND = "CopyWalkableMaskToRegions";
         protected const string IMPORT_MASK_COMMAND = "ImportAreaMask";
         protected const string EXPORT_MASK_COMMAND = "ExportAreaMask";
         protected const string UNDO_COMMAND = "UndoAreaDraw";
@@ -50,7 +50,11 @@ namespace AGS.Editor
         private int _mouseDownX, _mouseDownY;
         private int _currentMouseX, _currentMouseY;
 
+        // FIXME: why these are "static"? investigate, and change what's possible to to regular (except icons?)
+        // Active draw mode, may be modified by temporary states or actions
         private static AreaDrawMode _drawMode = AreaDrawMode.Select;
+        // Base draw mode, set by a mode toggle command
+        private static AreaDrawMode _baseDrawMode = AreaDrawMode.Select;
         private static List<MenuCommand> _toolbarIcons = null;
         private static bool _registeredIcons = false;
         private static Cursor _selectCursor;
@@ -67,7 +71,6 @@ namespace AGS.Editor
 				Factory.GUIController.RegisterIcon("DrawFillIcon", Resources.ResourceManager.GetIcon("drawfill.ico"));
                 Factory.GUIController.RegisterIcon("ImportMaskIcon", Resources.ResourceManager.GetIcon("importmask.ico"));
                 Factory.GUIController.RegisterImage("ExportMaskIcon", Resources.ResourceManager.GetBitmap("exportmask.png"));
-                Factory.GUIController.RegisterIcon("CopyWalkableAreaMaskIcon", Resources.ResourceManager.GetIcon("copymask.ico"));
 				Factory.GUIController.RegisterIcon("GreyedOutMasksIcon", Resources.ResourceManager.GetIcon("greymasks.ico"));                
 				_selectCursor = Resources.ResourceManager.GetCursor("findarea.cur");
                 _registeredIcons = true;
@@ -84,9 +87,8 @@ namespace AGS.Editor
             _toolbarIcons.Add(new MenuCommand(UNDO_COMMAND, "Undo (Ctrl+Z)", "UndoIcon"));
 			_toolbarIcons.Add(new MenuCommand(IMPORT_MASK_COMMAND, "Import mask from file", "ImportMaskIcon"));
             _toolbarIcons.Add(new MenuCommand(EXPORT_MASK_COMMAND, "Export mask to file", "ExportMaskIcon"));
-            _toolbarIcons.Add(new MenuCommand(COPY_WALKABLE_AREA_MASK_COMMAND, "Copy walkable area mask to regions", "CopyWalkableAreaMaskIcon"));
 			_toolbarIcons.Add(new MenuCommand(GREYED_OUT_MASKS_COMMAND, "Show non-selected masks greyed out", "GreyedOutMasksIcon"));
-			_toolbarIcons[(int)_drawMode].Checked = true;
+			_toolbarIcons[(int)_baseDrawMode].Checked = true;
 			_toolbarIcons[TOOLBAR_INDEX_GREY_OUT_MASKS].Checked = _greyedOutMasks;
 
             _room = room;
@@ -114,9 +116,13 @@ namespace AGS.Editor
             get;
         }
 
+// currently we don't raise these events at BaseAreasEditorFilter but we do raise for specific layers.
+// this quiets the "event is never used" warning for both events below
+#pragma warning disable 67
         public event EventHandler OnItemsChanged;
-        public event EventHandler<SelectedRoomItemEventArgs> OnSelectedItemChanged;
         public event EventHandler<RoomFilterContextMenuArgs> OnContextMenu;
+#pragma warning restore 67
+        public event EventHandler<SelectedRoomItemEventArgs> OnSelectedItemChanged;
 
         public abstract int ItemCount { get; }
 
@@ -234,6 +240,8 @@ namespace AGS.Editor
 
         public virtual bool MouseDown(MouseEventArgs e, RoomEditorState state)
         {
+            UpdateModKeyState();
+
             if (e.Button == MouseButtons.Middle) return false;
             if (e.Button == MouseButtons.Right && Control.ModifierKeys != Keys.None) return false;
             
@@ -300,6 +308,8 @@ namespace AGS.Editor
 
         public virtual bool MouseUp(MouseEventArgs e, RoomEditorState state)
         {
+            UpdateModKeyState();
+
             if (e.Button == MouseButtons.Middle) return false;
             if (!_mouseDown) return false; // drawing was not triggered
 
@@ -333,6 +343,8 @@ namespace AGS.Editor
 
         public virtual bool MouseMove(int x, int y, RoomEditorState state)
         {
+            UpdateModKeyState();
+
             _currentMouseX = state.WindowXToRoom(x);
             _currentMouseY = state.WindowYToRoom(y);
 
@@ -356,6 +368,8 @@ namespace AGS.Editor
 
 		public bool KeyPressed(Keys key)
 		{
+            UpdateModKeyState();
+
 			if ((key == (Keys.Control | Keys.Z)) && (_toolbarIcons[TOOLBAR_INDEX_UNDO].Enabled))
 			{
 				CommandClick(UNDO_COMMAND);
@@ -380,8 +394,34 @@ namespace AGS.Editor
 			{
 				CommandClick(SELECT_AREA_COMMAND);
 			}
-            return false;
+            else
+            {
+                return false; // not handled
+            }
+            return true; // handled
 		}
+
+        public bool KeyReleased(Keys key)
+        {
+            UpdateModKeyState();
+            return false; // not handled
+        }
+
+        private void UpdateModKeyState()
+        {
+            // Don't change anything while drawing
+            if (_mouseDown)
+                return;
+
+            if ((Control.ModifierKeys & Keys.Control) != 0)
+            {
+                _drawMode = AreaDrawMode.Select;
+            }
+            else
+            {
+                _drawMode = _baseDrawMode;
+            }
+        }
 
         public virtual void CommandClick(string command)
         {
@@ -395,23 +435,23 @@ namespace AGS.Editor
 
             if (command == SELECT_AREA_COMMAND)
             {
-                _drawMode = AreaDrawMode.Select;
+                _baseDrawMode = AreaDrawMode.Select;
             }
             else if (command == DRAW_LINE_COMMAND)
             {
-                _drawMode = AreaDrawMode.Line;
+                _baseDrawMode = AreaDrawMode.Line;
             }
             else if (command == DRAW_FREEHAND_COMMAND)
             {
-                _drawMode = AreaDrawMode.Freehand;
+                _baseDrawMode = AreaDrawMode.Freehand;
             }
 			else if (command == DRAW_RECTANGLE_COMMAND)
 			{
-				_drawMode = AreaDrawMode.Rectangle;
+                _baseDrawMode = AreaDrawMode.Rectangle;
 			}
 			else if (command == DRAW_FILL_COMMAND)
 			{
-				_drawMode = AreaDrawMode.Fill;
+                _baseDrawMode = AreaDrawMode.Fill;
 			}
 			else if (command == UNDO_COMMAND)
 			{
@@ -437,15 +477,6 @@ namespace AGS.Editor
                     ExportMaskFromFile(fileName);
                 }
             }
-            else if (command == COPY_WALKABLE_AREA_MASK_COMMAND)
-			{
-				if (Factory.GUIController.ShowQuestion("This will overwrite your Regions mask with a copy of your Walkable Areas mask. Are you sure you want to do this?") == DialogResult.Yes)
-				{
-					Factory.NativeProxy.CopyWalkableAreaMaskToRegions(_room);
-					_room.Modified = true;
-					_panel.Invalidate();
-				}
-			}
 			else if (command == GREYED_OUT_MASKS_COMMAND)
 			{
 				_greyedOutMasks = !_greyedOutMasks;
@@ -454,27 +485,46 @@ namespace AGS.Editor
 				_panel.Invalidate();
 			}
 
-            _toolbarIcons[(int)_drawMode].Checked = true;
+            _drawMode = _baseDrawMode;
+
+            _toolbarIcons[(int)_baseDrawMode].Checked = true;
             Factory.ToolBarManager.RefreshCurrentPane();
+        }
+
+        private string GetMaskName(RoomAreaMaskType maskType)
+        {
+            switch (maskType)
+            {
+                case RoomAreaMaskType.Hotspots: return "Hotspots"; break;
+                case RoomAreaMaskType.Regions: return "Regions"; break;
+                case RoomAreaMaskType.WalkableAreas: return "Walkable Areas"; break;
+                case RoomAreaMaskType.WalkBehinds: return "Walk-behinds"; break;
+                default: return string.Empty; break;
+            }
         }
 
         private void ImportMaskFromFile(string fileName)
         {
+            Bitmap bmp = null;
             try
             {
-                Bitmap bmp = new Bitmap(fileName);
+                bmp = BitmapExtensions.LoadNonLockedBitmap(fileName);
 
-                if (!(((bmp.Width == _room.Width) && (bmp.Height == _room.Height)) ||
-                    ((bmp.Width == _room.Width / 2) && (bmp.Height == _room.Height / 2))))
+                int maskFactor = (MaskToDraw == RoomAreaMaskType.WalkBehinds) ? 1 : _room.MaskResolution;
+                if ((bmp.Width != _room.Width / maskFactor) || (bmp.Height != _room.Height / maskFactor))
                 {
-                    Factory.GUIController.ShowMessage("This file cannot be imported because it is not the same size as the room background." +
-                        "\nFile size: " + bmp.Width + " x " + bmp.Height +
-                        "\nRoom size: " + _room.Width + " x " + _room.Height, MessageBoxIcon.Warning);
+                    Factory.GUIController.ShowMessage($"This image cannot be imported as a {GetMaskName(MaskToDraw)} mask, because it does not match the size of the room background (accounting to Mask Resolution setting)." +
+                        $"\nImage size: {bmp.Width} x {bmp.Height}" +
+                        $"\nRoom size: {_room.Width} x {_room.Height}" +
+                        $"\nExpected mask size: {_room.Width / maskFactor} x {_room.Height / maskFactor}",
+                        MessageBoxIcon.Warning);
                     bmp.Dispose();
                     return;
                 }
 
-                if (bmp.PixelFormat != PixelFormat.Format8bppIndexed)
+                if (bmp.PixelFormat != PixelFormat.Format8bppIndexed &&
+                    bmp.PixelFormat != PixelFormat.Format4bppIndexed &&
+                    bmp.PixelFormat != PixelFormat.Format1bppIndexed)
                 {
                     Factory.GUIController.ShowMessage("This is not a valid mask bitmap. Masks must be 256-colour (8-bit) images, using the first colours in the palette to draw the room areas.", MessageBoxIcon.Warning);
                     bmp.Dispose();
@@ -492,6 +542,11 @@ namespace AGS.Editor
             {
                 Factory.GUIController.ShowMessage("There was an error importing the area mask. The error was: " + ex.Message, MessageBoxIcon.Warning);
             }
+            finally
+            {
+                if (bmp != null)
+                    bmp.Dispose();
+            }
         }
 
         private void ExportMaskFromFile(string fileName)
@@ -499,7 +554,7 @@ namespace AGS.Editor
             try
             {
                 Bitmap bmp = Factory.NativeProxy.ExportAreaMask(_room, this.MaskToDraw);
-                bmp.Save(fileName, ImageFormat.Bmp);
+                ImportExport.ExportBitmapToFile(fileName, bmp);
                 bmp.Dispose();
             }
             catch (Exception ex)
@@ -535,14 +590,16 @@ namespace AGS.Editor
             if (!hasSelectedCommand) CommandClick(SELECT_AREA_COMMAND);
             else Factory.ToolBarManager.RefreshCurrentPane();
 
+            _drawMode = _baseDrawMode;
+            _mouseDown = false;
             if (_selectedArea >= ItemCount)
             {
                 DeselectArea();
             }
             SelectedAreaChanged(_selectedArea);
             Factory.GUIController.OnPropertyObjectChanged += _propertyObjectChangedDelegate;
-            
-			FilterActivated();
+
+            FilterActivated();
             _isOn = true;
         }
 
@@ -553,6 +610,7 @@ namespace AGS.Editor
                 _tooltip.Hide(_panel);
             }
 
+            _drawMode = _baseDrawMode;
             _mouseDown = false;
             Factory.GUIController.OnPropertyObjectChanged -= _propertyObjectChangedDelegate;
             _editor.ContentDocument.ToolbarCommands = null;

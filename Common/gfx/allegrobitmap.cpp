@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -27,36 +27,49 @@ namespace AGS
 namespace Common
 {
 
-Bitmap::Bitmap()
-    : _alBitmap(nullptr)
-    , _isDataOwner(false)
-{
-}
-
 Bitmap::Bitmap(int width, int height, int color_depth)
-    : _alBitmap(nullptr)
-    , _isDataOwner(false)
 {
     Create(width, height, color_depth);
 }
 
+Bitmap::Bitmap(PixelBuffer &&pxbuf)
+{
+    Create(std::move(pxbuf));
+}
+
 Bitmap::Bitmap(Bitmap *src, const Rect &rc)
-    : _alBitmap(nullptr)
-    , _isDataOwner(false)
 {
     CreateSubBitmap(src, rc);
 }
 
 Bitmap::Bitmap(BITMAP *al_bmp, bool shared_data)
-    : _alBitmap(nullptr)
-    , _isDataOwner(false)
 {
     WrapAllegroBitmap(al_bmp, shared_data);
+}
+
+Bitmap::Bitmap(const Bitmap &bmp)
+{
+    CreateCopy(&bmp);
+}
+
+Bitmap::Bitmap(Bitmap &&bmp)
+{
+    _pixelData = std::move(bmp._pixelData);
+    _alBitmap = bmp._alBitmap;
+    _isDataOwner = bmp._isDataOwner;
+    bmp._alBitmap = nullptr;
+    bmp._isDataOwner = false;
 }
 
 Bitmap::~Bitmap()
 {
     Destroy();
+}
+
+Bitmap &Bitmap::operator =(const Bitmap &bmp)
+{
+    CreateCopy(&bmp);
+    return *this;
 }
 
 //=============================================================================
@@ -66,16 +79,21 @@ Bitmap::~Bitmap()
 bool Bitmap::Create(int width, int height, int color_depth)
 {
     Destroy();
-    if (color_depth)
-    {
-        _alBitmap = create_bitmap_ex(color_depth, width, height);
-    }
-    else
-    {
-        _alBitmap = create_bitmap(width, height);
-    }
+
+    if (color_depth == 0)
+        color_depth = get_color_depth();
+
+    size_t need_size;
+    create_bitmap_userdata(color_depth, width, height, nullptr, 0u, 0u, &need_size);
+    std::unique_ptr<uint8_t[]> data(new uint8_t[need_size]);
+    BITMAP *bitmap = create_bitmap_userdata(color_depth, width, height, data.get(), need_size, 0u, nullptr);
+    if (!bitmap)
+        return false;
+
+    _pixelData = std::move(data);
+    _alBitmap = bitmap;
     _isDataOwner = true;
-    return _alBitmap != nullptr;
+    return true;
 }
 
 bool Bitmap::CreateTransparent(int width, int height, int color_depth)
@@ -88,8 +106,41 @@ bool Bitmap::CreateTransparent(int width, int height, int color_depth)
     return false;
 }
 
+bool Bitmap::Create(PixelBuffer &&pxbuf)
+{
+    Destroy();
+
+    const int color_depth = PixelFormatToPixelBits(pxbuf.GetFormat());
+    const int width = pxbuf.GetWidth(), height = pxbuf.GetHeight();
+    size_t data_sz = pxbuf.GetDataSize();
+    std::unique_ptr<uint8_t[]> data = pxbuf.ReleaseData();
+    // Do safety check, if provided data buffer is not long enough for Allegro BITMAP,
+    // then create a correct one and copy contents over.
+    size_t need_size;
+    create_bitmap_userdata(color_depth, width, height, nullptr, 0u, 0u, &need_size);
+    if (need_size > data_sz)
+    {
+        std::unique_ptr<uint8_t[]> copy_buf(new uint8_t[need_size]);
+        std::copy(data.get(), data.get() + data_sz, copy_buf.get());
+        data = std::move(copy_buf);
+        data_sz = need_size;
+    }
+    
+    BITMAP *bitmap = create_bitmap_userdata(color_depth, width, height, data.get(), data_sz, 0u, nullptr);
+    if (!bitmap)
+        return false;
+
+    _pixelData = std::move(data);
+    _alBitmap = bitmap;
+    _isDataOwner = true;
+    return true;
+}
+
 bool Bitmap::CreateSubBitmap(Bitmap *src, const Rect &rc)
 {
+    if (src == this || src->_alBitmap == _alBitmap)
+        return false; // cannot create a sub bitmap of yourself
+
     Destroy();
     _alBitmap = create_sub_bitmap(src->_alBitmap, rc.Left, rc.Top, rc.GetWidth(), rc.GetHeight());
     _isDataOwner = true;
@@ -107,8 +158,18 @@ bool Bitmap::ResizeSubBitmap(int width, int height)
     return true;
 }
 
-bool Bitmap::CreateCopy(Bitmap *src, int color_depth)
+bool Bitmap::CreateCopy(const Bitmap *src, int color_depth)
 {
+    if (src == this || src->_alBitmap == _alBitmap)
+        return false; // cannot create a copy of yourself
+
+    // Handle uninitialized bitmap case
+    if (!src->_alBitmap)
+    {
+        Destroy();
+        return true;
+    }
+
     if (Create(src->_alBitmap->w, src->_alBitmap->h, color_depth ? color_depth : bitmap_color_depth(src->_alBitmap)))
     {
         blit(src->_alBitmap, _alBitmap, 0, 0, 0, 0, _alBitmap->w, _alBitmap->h);
@@ -119,6 +180,9 @@ bool Bitmap::CreateCopy(Bitmap *src, int color_depth)
 
 bool Bitmap::WrapAllegroBitmap(BITMAP *al_bmp, bool shared_data)
 {
+    if (al_bmp == _alBitmap)
+        return false; // cannot wrap your own internal BITMAP
+
     Destroy();
     _alBitmap = al_bmp;
     _isDataOwner = !shared_data;
@@ -129,6 +193,7 @@ void Bitmap::ForgetAllegroBitmap()
 {
     _alBitmap = nullptr;
     _isDataOwner = false;
+    _pixelData = {};
 }
 
 void Bitmap::Destroy()
@@ -139,11 +204,12 @@ void Bitmap::Destroy()
     }
     _alBitmap = nullptr;
     _isDataOwner = false;
+    _pixelData = {};
 }
 
-bool Bitmap::SaveToFile(const char *filename, const void *palette)
+bool Bitmap::SaveToFile(const char *filename, const RGB *palette)
 {
-	return BitmapHelper::SaveToFile(this, filename, (const RGB*) palette);
+	return BitmapHelper::SaveToFile(this, filename, palette);
 }
 
 color_t Bitmap::GetCompatibleColor(color_t color)
@@ -313,12 +379,16 @@ void Bitmap::FlipBlt(Bitmap *src, int dst_x, int dst_y, GraphicFlip flip)
 
 void Bitmap::RotateBlt(Bitmap *src, int dst_x, int dst_y, fixed_t angle)
 {
+    // convert to allegro angle
+    fixed_t al_angle = itofix((angle * 256) / 360);
 	BITMAP *al_src_bmp = src->_alBitmap;
 	rotate_sprite(_alBitmap, al_src_bmp, dst_x, dst_y, angle);
 }
 
 void Bitmap::RotateBlt(Bitmap *src, int dst_x, int dst_y, int pivot_x, int pivot_y, fixed_t angle)
-{	
+{
+    // convert to allegro angle
+    fixed_t al_angle = itofix((angle * 256) / 360);
 	BITMAP *al_src_bmp = src->_alBitmap;
 	pivot_sprite(_alBitmap, al_src_bmp, dst_x, dst_y, pivot_x, pivot_y, angle);
 }

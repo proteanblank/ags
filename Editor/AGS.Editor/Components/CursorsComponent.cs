@@ -44,7 +44,7 @@ namespace AGS.Editor.Components
                 newItem.Name = "Cursor" + newItem.ID;
                 items.Add(newItem);
                 _guiController.ProjectTree.StartFromNode(this, TOP_LEVEL_COMMAND_ID);
-                _guiController.ProjectTree.AddTreeLeaf(this, GetNodeID(newItem), newItem.ID.ToString() + ": " + newItem.Name, "CursorIcon");
+                _guiController.ProjectTree.AddTreeLeaf(this, GetNodeID(newItem), GetNodeLabel(newItem), "CursorIcon");
                 _guiController.ProjectTree.SelectNode(this, GetNodeID(newItem));
 				ShowOrAddPane(newItem);
             }
@@ -92,6 +92,26 @@ namespace AGS.Editor.Components
             document.TreeNodeID = GetNodeID(chosenCursor);
             _guiController.AddOrShowPane(document);
 		}
+
+        public override IList<string> GetManagedScriptElements()
+        {
+            return new string[] { "CursorMode" };
+        }
+
+        public override bool ShowItemPaneByName(string name)
+        {
+            foreach (MouseCursor mc in _agsEditor.CurrentGame.Cursors)
+            {
+                if (mc.ScriptID == name)
+                {
+                    MouseCursor chosenCursor = mc;
+                    _guiController.ProjectTree.SelectNode(this, GetNodeID(chosenCursor));
+                    ShowOrAddPane(chosenCursor);
+                    return true;
+                }
+            }
+            return false;
+        }
 
         public override void PropertyChanged(string propertyName, object oldValue)
         {
@@ -147,9 +167,14 @@ namespace AGS.Editor.Components
             RePopulateTreeView();
         }
 
-        private string GetNodeID(MouseCursor cursor)
+        private string GetNodeID(MouseCursor item)
         {
-            return "Cur" + cursor.ID;
+            return "Cur" + item.ID;
+        }
+
+        private string GetNodeLabel(MouseCursor item)
+        {
+            return item.ID.ToString() + ": " + item.Name;
         }
 
         private void RePopulateTreeView()
@@ -158,7 +183,7 @@ namespace AGS.Editor.Components
             _guiController.ProjectTree.StartFromNode(this, TOP_LEVEL_COMMAND_ID);
             foreach (MouseCursor item in _agsEditor.CurrentGame.Cursors)
             {
-                _guiController.ProjectTree.AddTreeLeaf(this, GetNodeID(item), item.ID.ToString() + ": " + item.Name, "CursorIcon");
+                _guiController.ProjectTree.AddTreeLeaf(this, GetNodeID(item), GetNodeLabel(item), "CursorIcon");
             }
 
             if (_documents.ContainsValue(_guiController.ActivePane))
@@ -175,7 +200,7 @@ namespace AGS.Editor.Components
         private Dictionary<string, object> ConstructPropertyObjectList(MouseCursor cursor)
         {
             Dictionary<string, object> list = new Dictionary<string, object>();
-            list.Add(cursor.Name + " (Cursor " + cursor.ID + ")", cursor);
+            list.Add(cursor.PropertyGridTitle, cursor);
             return list;
         }
     }

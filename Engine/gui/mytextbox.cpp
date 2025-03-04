@@ -2,29 +2,29 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
+#include "gui/mytextbox.h"
 #include <stdio.h>
 #include <string.h>
 #include "ac/keycode.h"
 #include "font/fonts.h"
-#include "gui/mytextbox.h"
-#include "gui/guidialoginternaldefs.h"
 #include "gfx/bitmap.h"
+#include "gui/guidialogdefines.h"
 
-using AGS::Common::Bitmap;
+using namespace AGS::Common;
 
 extern int windowbackgroundcolor;
 extern int cbuttfont;
 
-MyTextBox::MyTextBox(int xx, int yy, int wii, const char *tee)
+MyTextBox::MyTextBox(int xx, int yy, int wii, const char *tee, int textheight_)
 {
     x = xx;
     y = yy;
@@ -34,11 +34,13 @@ MyTextBox::MyTextBox(int xx, int yy, int wii, const char *tee)
     else
         text[0] = 0;
 
-    hit = TEXT_HT + 1;
+    textheight = textheight_;
+    hit = textheight + 1;
 }
 
 void MyTextBox::draw(Bitmap *ds)
 {
+    ds->SetClip(RectWH(x, y, wid + 1, hit + 1));
     color_t draw_color = ds->GetCompatibleColor(windowbackgroundcolor);
     ds->FillRect(Rect(x, y, x + wid, y + hit), draw_color);
     draw_color = ds->GetCompatibleColor(0);
@@ -48,6 +50,7 @@ void MyTextBox::draw(Bitmap *ds)
 
     char tbu[2] = "_";
     wouttextxy(ds, x + 2 + get_text_width(text, cbuttfont), y + 1, cbuttfont, text_color, tbu);
+    ds->ResetClip();
 }
 
 int MyTextBox::pressedon(int /*mx*/, int /*my*/)

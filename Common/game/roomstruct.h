@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -40,7 +40,9 @@
 #include <allegro.h> // RGB
 #include "ac/common_defines.h"
 #include "game/interactions.h"
+#include "util/error.h"
 #include "util/geometry.h"
+#include "util/string_types.h"
 
 struct ccScript;
 struct SpriteInfo;
@@ -95,10 +97,7 @@ enum RoomFlags
 #define MAX_ROOM_OBJECTS_v300 40 // for some legacy logic support
 #define MAX_ROOM_OBJECTS   256 // v3.6.0: 40 -> 256 (now limited by room format)
 #define MAX_ROOM_REGIONS   16
-// TODO: this is remains of the older code, MAX_WALK_AREAS = real number - 1, where
-// -1 is for the solid wall. When fixing this you need to be careful, because some
-// walk-area indexes are 0-based and some 1-based (and some arrays have MAX_WALK_AREAS + 1 size)
-#define MAX_WALK_AREAS     15
+#define MAX_WALK_AREAS     16
 #define MAX_WALK_BEHINDS   16
 
 #define MAX_MESSAGES       100
@@ -117,9 +116,11 @@ typedef std::shared_ptr<Bitmap> PBitmap;
 // Various room options
 struct RoomOptions
 {
-    // Index of the startup music in the room
+    // Index of the startup music in the room;
+    // this is a deprecated option, used before 3.2.* with old audio API.
     int  StartupMusic;
-    // If saving and loading game is disabled in the room
+    // If saving and loading game is disabled in the room;
+    // this is a deprecated option that affects only built-in save/load dialogs
     bool SaveLoadDisabled;
     // If player character is turned off in the room
     bool PlayerCharOff;
@@ -127,7 +128,7 @@ struct RoomOptions
     int  PlayerView;
     // Room's music volume modifier
     RoomVolumeMod MusicVolume;
-    // A collection of boolean options
+    // A collection of RoomFlags
     int  Flags;
 
     RoomOptions();
@@ -165,9 +166,9 @@ struct RoomHotspot
     // Custom properties
     StringIMap  Properties;
     // Old-style interactions
-    PInteraction Interaction;
+    UInteraction Interaction;
     // Event script links
-    PInteractionScripts EventHandlers;
+    UInteractionEvents EventHandlers;
 
     // Player will automatically walk here when interacting with hotspot
     Point       WalkTo;
@@ -189,9 +190,9 @@ struct RoomObjectInfo
     // Custom properties
     StringIMap      Properties;
     // Old-style interactions
-    PInteraction    Interaction;
+    UInteraction    Interaction;
     // Event script links
-    PInteractionScripts EventHandlers;
+    UInteractionEvents EventHandlers;
 
     RoomObjectInfo();
 };
@@ -206,9 +207,9 @@ struct RoomRegion
     // Custom properties
     StringIMap      Properties;
     // Old-style interactions
-    PInteraction    Interaction;
+    UInteraction    Interaction;
     // Event script links
-    PInteractionScripts EventHandlers;
+    UInteractionEvents EventHandlers;
 
     RoomRegion();
 };
@@ -254,15 +255,22 @@ struct MessageInfo
     MessageInfo();
 };
 
-
 // Room's legacy resolution type
+// The meaning of this value is bit complicated. In a usual case, it seems,
+// it should be either 1 or 2, meaning low-res or high-res, in the same
+// sense as the legacy game resolution may be low-res or high-res type.
+// If game's resolution type is different, the room's background will have
+// to be adjusted for it by scaling up or down correspondingly.
+// But rare games could have it higher than 2, which would mean "above
+// high res", in which case the room bg would need to be downscaled
+// even though the game is already high-res.
 enum RoomResolutionType
 {
-    kRoomRealRes = 0, // room should always be treated as-is
-    kRoomLoRes = 1, // created for low-resolution game
-    kRoomHiRes = 2 // created for high-resolution game
+    kRoomResolution_Real        = 0, // room should always be treated as-is
+    kRoomResolution_Low         = 1, // created for low-resolution game
+    kRoomResolution_High        = 2, // created for high-resolution game
+    kRoomResolution_OverHigh    = 3, // created for high-res game, but bigger (must downscale)
 };
-
 
 //
 // Description of a single room.
@@ -272,15 +280,16 @@ enum RoomResolutionType
 class RoomStruct
 {
 public:
+    // Mask resolution auto-assigned for high-res rooms in very old versions
+    static const int LegacyMaskHiresFactor = 2;
+
     RoomStruct();
     ~RoomStruct();
 
-    // Gets if room should adjust its base size depending on game's resolution
-    inline bool IsRelativeRes() const { return _resolution != kRoomRealRes; }
-    // Gets if room belongs to high resolution
-    inline bool IsLegacyHiRes() const { return _resolution == kRoomHiRes; }
-    // Gets legacy resolution type
-    inline RoomResolutionType GetResolutionType() const { return _resolution; }
+    // Gets if room should adjust its size to match the game's resolution
+    inline bool IsRelativeRes() const { return _legacyResolution > kRoomResolution_Real; }
+    // Gets the legacy room resolution type
+    inline RoomResolutionType GetLegacyResolution() const { return _legacyResolution; }
 
     // Releases room resources
     void            Free();
@@ -291,7 +300,7 @@ public:
     // Init default room state
     void            InitDefaults();
     // Set legacy resolution type
-    void            SetResolution(RoomResolutionType type);
+    void            SetLegacyResolution(RoomResolutionType resolution);
 
     // Gets bitmap of particular mask layer
     Bitmap *GetMask(RoomAreaMask mask) const;
@@ -351,7 +360,7 @@ public:
     size_t                  RegionCount;
     RoomRegion              Regions[MAX_ROOM_REGIONS];
     size_t                  WalkAreaCount;
-    WalkArea                WalkAreas[MAX_WALK_AREAS + 1];
+    WalkArea                WalkAreas[MAX_WALK_AREAS];
     size_t                  WalkBehindCount;
     WalkBehind              WalkBehinds[MAX_WALK_BEHINDS];
 
@@ -363,10 +372,10 @@ public:
     // Custom properties
     StringIMap              Properties;
     // Old-style interactions
-    InterVarVector          LocalVariables;
-    PInteraction            Interaction;
+    std::vector<InteractionVariable> LocalVariables;
+    UInteraction            Interaction;
     // Event script links
-    PInteractionScripts     EventHandlers;
+    UInteractionEvents      EventHandlers;
     // Compiled room script
     PScript                 CompiledScript;
 
@@ -374,13 +383,11 @@ public:
     StringMap               StrOptions;
 
 private:
-    // Room's legacy resolution type, defines relation room and game's resolution
-    RoomResolutionType      _resolution;
+    // Room's legacy resolution type, defines relation between room and game's resolution
+    RoomResolutionType      _legacyResolution = kRoomResolution_Real;
 };
 
 
-// Loads new room data into the given RoomStruct object
-void load_room(const String &filename, RoomStruct *room, bool game_is_hires, const std::vector<SpriteInfo> &sprinfos);
 // Checks if it's necessary and upscales low-res room backgrounds and masks for the high resolution game
 // NOTE: it does not upscale object coordinates, because that is usually done when the room is loaded
 void UpscaleRoomBackground(RoomStruct *room, bool game_is_hires);

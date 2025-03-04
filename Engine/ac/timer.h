@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -28,6 +28,12 @@ using AGS_Clock = std::conditional<
         std::chrono::high_resolution_clock, std::chrono::steady_clock
       >::type;
 using AGS_FastClock = std::chrono::system_clock;
+
+template <typename TDur>
+inline int64_t ToMilliseconds(TDur dur)
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(dur).count();
+}
 
 // Sleeps for time remaining until the next game frame, updates next frame timestamp
 extern void WaitForNextFrame();

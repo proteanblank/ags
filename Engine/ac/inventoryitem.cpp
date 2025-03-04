@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -72,7 +72,7 @@ void InventoryItem_GetName(ScriptInvItem *iitem, char *buff) {
 }
 
 const char* InventoryItem_GetName_New(ScriptInvItem *invitem) {
-  return CreateNewScriptString(get_translation(game.invinfo[invitem->id].name));
+  return CreateNewScriptString(get_translation(game.invinfo[invitem->id].name.GetCStr()));
 }
 
 int InventoryItem_GetGraphic(ScriptInvItem *iitem) {
@@ -132,8 +132,6 @@ void set_inv_item_cursorpic(int invItemId, int piccy)
 #include "script/script_api.h"
 #include "script/script_runtime.h"
 #include "ac/dynobj/scriptstring.h"
-
-extern ScriptString myScriptStringImpl;
 
 
 ScriptInvItem *InventoryItem_GetByName(const char *name)

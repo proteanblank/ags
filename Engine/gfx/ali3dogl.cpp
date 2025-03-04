@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "gfx/ogl_headers.h"
@@ -36,23 +36,16 @@
 
 #if AGS_OPENGL_ES2
 
-#define GL_CLAMP GL_CLAMP_TO_EDGE
-
 const char* fbo_extension_string = "GL_OES_framebuffer_object";
 
 #define glGenFramebuffersEXT glGenFramebuffers
 #define glDeleteFramebuffersEXT glDeleteFramebuffers
 #define glBindFramebufferEXT glBindFramebuffer
 #define glCheckFramebufferStatusEXT glCheckFramebufferStatus
-#define glGetFramebufferAttachmentParameterivEXT glGetFramebufferAttachmentParameteriv
-#define glGenerateMipmapEXT glGenerateMipmap
 #define glFramebufferTexture2DEXT glFramebufferTexture2D
-#define glFramebufferRenderbufferEXT glFramebufferRenderbuffer
-// TODO: probably should use EGL and function eglSwapInterval on mobile to support setting swap interval
-// For now this is a dummy function pointer which is only used to test that function is not supported
-const void (*glSwapIntervalEXT)(int) = NULL;
 
 #define GL_FRAMEBUFFER_EXT GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER_COMPLETE_EXT GL_FRAMEBUFFER_COMPLETE
 #define GL_COLOR_ATTACHMENT0_EXT GL_COLOR_ATTACHMENT0
 
 #endif //AGS_OPENGL_ES2
@@ -69,6 +62,14 @@ namespace OGL
 {
 
 using namespace AGS::Common;
+
+
+// Converts rectangle in top->down coordinates into OpenGL's native bottom->up coordinates
+Rect TopDownRect(const Rect &rect, int surface_height)
+{
+    return RectWH(rect.Left, surface_height - 1 - rect.Bottom, rect.GetWidth(), rect.GetHeight());
+}
+
 
 OGLTexture::~OGLTexture()
 {
@@ -89,7 +90,7 @@ size_t OGLTexture::GetMemSize() const
     // FIXME: a proper size in video memory, check OpenGL docs
     size_t sz = 0u;
     for (size_t i = 0; i < _numTiles; ++i)
-        sz += _tiles[i].width * _tiles[i].height * 4;
+        sz += _tiles[i].allocWidth * _tiles[i].allocHeight * 4;
     return sz;
 }
 
@@ -104,18 +105,12 @@ OGLGraphicsDriver::OGLGraphicsDriver()
 {
   device_screen_physical_width  = 0;
   device_screen_physical_height = 0;
-#if AGS_PLATFORM_OS_IOS
-  device_screen_physical_width  = ios_screen_physical_width;
-  device_screen_physical_height = ios_screen_physical_height;
-#endif
 
   _firstTimeInit = false;
-  _backbuffer = 0;
-  _fbo = 0;
+  _nativeSurface = nullptr;
   _legacyPixelShader = false;
-  _can_render_to_texture = false;
-  _do_render_to_texture = false;
-  _super_sampling = 1;
+  _canRenderToTexture = false;
+  _doRenderToTexture = false;
   SetupDefaultVertices();
 
   // Shifts comply to GL_RGBA
@@ -125,12 +120,8 @@ OGLGraphicsDriver::OGLGraphicsDriver()
   _vmem_a_shift_32 = 24;
 }
 
-
 void OGLGraphicsDriver::SetupDefaultVertices()
 {
-  std::fill(_backbuffer_vertices, _backbuffer_vertices + sizeof(_backbuffer_vertices) / sizeof(GLfloat), 0.0f);
-  std::fill(_backbuffer_texture_coordinates, _backbuffer_texture_coordinates + sizeof(_backbuffer_texture_coordinates) / sizeof(GLfloat), 0.0f);
-
   defaultVertices[0].position.x = 0.0f;
   defaultVertices[0].position.y = 0.0f;
   defaultVertices[0].tu=0.0;
@@ -160,16 +151,14 @@ void OGLGraphicsDriver::UpdateDeviceScreen(const Size &/*screen_size*/)
     _mode.Height = device_screen_physical_height;
 }
 
-void OGLGraphicsDriver::RenderSpritesAtScreenResolution(bool enabled, int supersampling)
+void OGLGraphicsDriver::RenderSpritesAtScreenResolution(bool enabled)
 {
-  if (_can_render_to_texture)
+  if (_canRenderToTexture)
   {
-    _do_render_to_texture = !enabled;
-    _super_sampling = supersampling;
-    TestSupersampling();
+    _doRenderToTexture = !enabled;
   }
 
-  if (_do_render_to_texture)
+  if (_doRenderToTexture)
     glDisable(GL_SCISSOR_TEST);
 }
 
@@ -230,22 +219,20 @@ void OGLGraphicsDriver::SetBlendOpRGBAlpha(GLenum rgb_op, GLenum srgb_factor, GL
 
 bool OGLGraphicsDriver::FirstTimeInit()
 {
-  String ogl_v_str;
-#ifdef GLAPI
-  ogl_v_str.Format("%d.%d", GLVersion.major, GLVersion.minor);
-#else
-  ogl_v_str = (const char*)glGetString(GL_VERSION);
-#endif
-  Debug::Printf(kDbgMsg_Info, "Running OpenGL: %s", ogl_v_str.GetCStr());
+    // Test capabilities
+    TestRenderToTexture();
 
-  TestRenderToTexture();
+    // https://registry.khronos.org/OpenGL/extensions/ARB/ARB_texture_non_power_of_two.txt
+    const char *exts = (const char*)glGetString(GL_EXTENSIONS);
+    _glCapsNonPowerOfTwo = strstr(exts, "GL_ARB_texture_non_power_of_two") != nullptr;
 
-  if(!CreateShaders()) { // requires glad Load successful
-    SDL_SetError("Failed to create Shaders.");
-    return false;
-  }
-  _firstTimeInit = true;
-  return true;
+    if(!CreateShaders()) { // requires glad Load successful
+        SDL_SetError("Failed to create Shaders.");
+        return false;
+    }
+
+    _firstTimeInit = true;
+    return true;
 }
 
 bool OGLGraphicsDriver::InitGlScreen(const DisplayMode &mode)
@@ -258,7 +245,11 @@ bool OGLGraphicsDriver::InitGlScreen(const DisplayMode &mode)
   }
   else
   {
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    sys_window_fit_in_display(mode.DisplayIndex);
+#endif
     sys_window_set_style(mode.Mode, Size(mode.Width, mode.Height));
+    sys_window_bring_to_front();
   }
 
   SDL_GL_GetDrawableSize(_sdlWindow, &device_screen_physical_width, &device_screen_physical_height);
@@ -282,18 +273,6 @@ void OGLGraphicsDriver::InitGlParams(const DisplayMode &mode)
   if (mode.Vsync && !_capsVsync)
     Debug::Printf(kDbgMsg_Warn, "OGL: SetVsync (%d) failed: %s", mode.Vsync, SDL_GetError());
 
-#if AGS_PLATFORM_OS_IOS
-  // Setup library mouse to have 1:1 coordinate transformation.
-  // NOTE: cannot move this call to general mouse handling mode. Unfortunately, much of the setup and rendering
-  // is duplicated in the Android/iOS ports' Allegro library patches, and is run when the Software renderer
-  // is selected in AGS. This ugly situation causes trouble...
-  float device_scale = 1.0f;
-
-  device_scale = get_device_scale();
-
-  device_mouse_setup(0, device_screen_physical_width - 1, 0, device_screen_physical_height - 1, device_scale, device_scale);
-#endif
-
   // View matrix is always identity in OpenGL renderer, use the workaround to fill it with GL format
   _stageMatrixes.View = glm::mat4(1.0);
 }
@@ -315,10 +294,19 @@ bool OGLGraphicsDriver::CreateWindowAndGlContext(const DisplayMode &mode)
   if (SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1) != 0)
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Error occured setting attribute SDL_GL_CONTEXT_MINOR_VERSION: %s", SDL_GetError());
 #endif
+  // minimum number of bits for the depth buffer
+  if (SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 0) != 0)
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Error occured setting attribute SDL_GL_DEPTH_SIZE: %s", SDL_GetError());
+  if (SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8) != 0 ||
+      SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8) != 0 ||
+      SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8) != 0)
+  {
+    SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Error occured setting one of the attributes SDL_GL_(RED|GREEN| BLUE)_SIZE: %s", SDL_GetError());
+  }
   if (SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1) != 0)
     SDL_LogWarn(SDL_LOG_CATEGORY_APPLICATION, "Error occured setting attribute SDL_GL_DOUBLEBUFFER: %s", SDL_GetError());
 
-  SDL_Window *sdl_window = sys_window_create("", mode.Width, mode.Height, mode.Mode, SDL_WINDOW_OPENGL);
+  SDL_Window *sdl_window = sys_window_create("", mode.DisplayIndex, mode.Width, mode.Height, mode.Mode, SDL_WINDOW_OPENGL);
   if (!sdl_window)
   {
     Debug::Printf(kDbgMsg_Error, "Error opening window for OpenGL: %s", SDL_GetError());
@@ -350,6 +338,20 @@ bool OGLGraphicsDriver::CreateWindowAndGlContext(const DisplayMode &mode)
 #endif
   _sdlWindow = sdl_window;
   _sdlGlContext = sdlgl_ctx;
+#if AGS_PLATFORM_OS_IOS
+  // The SDL implementation of the iOS OpenGL view (SDL_uikitopenglview.m) generates its own framebuffer to target the renderbuffer
+  // Instead of using framebuffer 0, we ask OpenGL to get the current framebuffer.
+  glGetIntegerv(GL_FRAMEBUFFER_BINDING, &_screenFramebuffer);
+#endif
+
+  const char *gl_version = (const char*)glGetString(GL_VERSION);
+  const char *gl_vendor = (const char*)glGetString(GL_VENDOR);
+  const char *gl_renderer = (const char*)glGetString(GL_RENDERER);
+  String adapter_info = String::FromFormat(
+      "\tOpenGL: %s\n\tVendor: %s\n\tRenderer: %s",
+      gl_version, gl_vendor, gl_renderer
+    );
+  Debug::Printf(kDbgMsg_Info, "OpenGL adapter info:\n%s", adapter_info.GetCStr());
   return true;
 }
 
@@ -387,31 +389,15 @@ inline bool CanDoFrameBuffer()
 void OGLGraphicsDriver::TestRenderToTexture()
 {
   if (CanDoFrameBuffer()) {
-    _can_render_to_texture = true;
-    TestSupersampling();
+    _canRenderToTexture = true;
   } else {
-    _can_render_to_texture = false;
+    _canRenderToTexture = false;
     Debug::Printf(kDbgMsg_Warn, "WARNING: OpenGL extension 'GL_EXT_framebuffer_object' not supported, rendering to texture mode will be disabled.");
   }
 
-  if (!_can_render_to_texture)
-    _do_render_to_texture = false;
+  if (!_canRenderToTexture)
+    _doRenderToTexture = false;
 }
-
-void OGLGraphicsDriver::TestSupersampling()
-{
-    if (!_can_render_to_texture)
-        return;
-    // Disable super-sampling if it would cause a too large texture size
-    if (_super_sampling > 1)
-    {
-      int max = 1024;
-      glGetIntegerv(GL_MAX_TEXTURE_SIZE, &max);
-      if ((max < _srcRect.GetWidth() * _super_sampling) || (max < _srcRect.GetHeight() * _super_sampling))
-        _super_sampling = 1;
-    }
-}
-
 
 
 bool CreateTransparencyShader(ShaderProgram &prg);
@@ -709,57 +695,27 @@ void OutputShaderError(GLuint obj_id, const String &obj_name, bool is_shader)
   }
 }
 
-void OGLGraphicsDriver::SetupBackbufferTexture()
+void OGLGraphicsDriver::SetupNativeTarget()
 {
+  if (_nativeSurface)
+  {
+    DestroyDDB(_nativeSurface);
+    _nativeSurface = nullptr;
+    _nativeBackbuffer = BackbufferState();
+  }
+
   // NOTE: ability to render to texture depends on OGL context, which is
   // created in SetDisplayMode, therefore creation of textures require
   // both native size set and context capabilities test passed.
-  if (!IsNativeSizeValid() || !_can_render_to_texture)
+  if (!IsNativeSizeValid() || !_canRenderToTexture)
     return;
 
-  DeleteBackbufferTexture();
-
-  // _backbuffer_texture_coordinates defines translation from wanted texture size to actual supported texture size
-  _backRenderSize = _srcRect.GetSize() * _super_sampling;
-  _backTextureSize = _backRenderSize;
-  AdjustSizeToNearestSupportedByCard(&_backTextureSize.Width, &_backTextureSize.Height);
-  const float back_ratio_w = (float)_backRenderSize.Width / (float)_backTextureSize.Width;
-  const float back_ratio_h = (float)_backRenderSize.Height / (float)_backTextureSize.Height;
-  std::fill(_backbuffer_texture_coordinates, _backbuffer_texture_coordinates + sizeof(_backbuffer_texture_coordinates) / sizeof(GLfloat), 0.0f);
-  _backbuffer_texture_coordinates[2] = _backbuffer_texture_coordinates[6] = back_ratio_w;
-  _backbuffer_texture_coordinates[5] = _backbuffer_texture_coordinates[7] = back_ratio_h;
-
-  glGenTextures(1, &_backbuffer);
-  glBindTexture(GL_TEXTURE_2D, _backbuffer);
-
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, _backTextureSize.Width, _backTextureSize.Height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-  glBindTexture(GL_TEXTURE_2D, 0);
-
-  glGenFramebuffersEXT(1, &_fbo);
-  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _fbo);
-  glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, _backbuffer, 0);
-
-  glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-
-  // Assign vertices of the backbuffer texture position in the scene
-  _backbuffer_vertices[0] = _backbuffer_vertices[4] = 0;
-  _backbuffer_vertices[2] = _backbuffer_vertices[6] = _srcRect.GetWidth();
-  _backbuffer_vertices[5] = _backbuffer_vertices[7] = _srcRect.GetHeight();
-  _backbuffer_vertices[1] = _backbuffer_vertices[3] = 0;
-}
-
-void OGLGraphicsDriver::DeleteBackbufferTexture()
-{
-  if (_backbuffer)
-    glDeleteTextures(1, &_backbuffer);
-  if (_fbo)
-    glDeleteFramebuffersEXT(1, &_fbo);
-  _backbuffer = 0;
-  _fbo = 0;
+  const Size surf_size = _srcRect.GetSize();
+  _nativeSurface = (OGLBitmap*)CreateRenderTargetDDB(
+      surf_size.Width, surf_size.Height, _mode.ColorDepth, true);
+  auto projection = glm::ortho(0.0f, (float)surf_size.Width, 0.0f, (float)surf_size.Height, 0.0f, 1.0f);
+  _nativeBackbuffer = BackbufferState(_nativeSurface->_fbo, surf_size, _srcRect.GetSize(),
+      RectWH(0, 0, surf_size.Width, surf_size.Height), projection, PlaneScaling(), GL_NEAREST, GL_CLAMP);
 }
 
 void OGLGraphicsDriver::SetupViewport()
@@ -767,14 +723,13 @@ void OGLGraphicsDriver::SetupViewport()
   if (!IsModeSet() || !IsRenderFrameValid())
     return;
 
-  // Setup viewport rect and scissor
-  _viewportRect = ConvertTopDownRect(_dstRect, device_screen_physical_height);
-  glScissor(_viewportRect.Left, _viewportRect.Top, _viewportRect.GetWidth(), _viewportRect.GetHeight());
-}
-
-Rect OGLGraphicsDriver::ConvertTopDownRect(const Rect &rect, int surface_height)
-{
-    return RectWH(rect.Left, surface_height - 1 - rect.Bottom, rect.GetWidth(), rect.GetHeight());
+  Rect viewport = TopDownRect(_dstRect, device_screen_physical_height);
+  auto projection = glm::ortho(0.0f, (float)_srcRect.GetWidth(), 0.0f, (float)_srcRect.GetHeight(), 0.0f, 1.0f);
+  int txfilter = GL_NEAREST, txclamp = GL_CLAMP;
+  if (_filter)
+    _filter->GetFilteringForStandardSprite(txfilter, txclamp);
+  _screenBackbuffer = BackbufferState(_screenFramebuffer, Size(_mode.Width, _mode.Height), _srcRect.GetSize(),
+      viewport, projection, _scaling, txfilter, txclamp);
 }
 
 bool OGLGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
@@ -794,8 +749,8 @@ bool OGLGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
   {
     if (!InitGlScreen(mode))
       return false;
-    if (!_firstTimeInit)
-      if(!FirstTimeInit()) return false;
+    if (!_firstTimeInit && !FirstTimeInit())
+      return false;
     InitGlParams(mode);
   }
   catch (Ali3DException exception)
@@ -809,13 +764,14 @@ bool OGLGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
   // On certain platforms OpenGL renderer ignores requested screen sizes
   // and uses values imposed by the operating system (device).
   DisplayMode final_mode = mode;
+  final_mode.DisplayIndex = sys_get_window_display_index();
   final_mode.Width = device_screen_physical_width;
   final_mode.Height = device_screen_physical_height;
   OnModeSet(final_mode);
 
   // If we already have a native size set, then update virtual screen and setup backbuffer texture immediately
   CreateVirtualScreen();
-  SetupBackbufferTexture();
+  SetupNativeTarget();
   // If we already have a render frame configured, then setup viewport and backbuffer mappings immediately
   SetupViewport();
   return true;
@@ -832,10 +788,9 @@ void OGLGraphicsDriver::CreateVirtualScreen()
 bool OGLGraphicsDriver::SetNativeResolution(const GraphicResolution &native_res)
 {
   OnSetNativeRes(native_res);
-  SetupBackbufferTexture();
+  SetupNativeTarget();
   // If we already have a gfx mode set, then update virtual screen immediately
   CreateVirtualScreen();
-  TestSupersampling();
   return !_srcRect.IsEmpty();
 }
 
@@ -855,14 +810,14 @@ int OGLGraphicsDriver::GetDisplayDepthForNativeDepth(int /*native_color_depth*/)
     return 32;
 }
 
-IGfxModeList *OGLGraphicsDriver::GetSupportedModeList(int color_depth)
+IGfxModeList *OGLGraphicsDriver::GetSupportedModeList(int display_index, int color_depth)
 {
     std::vector<DisplayMode> modes {};
-    sys_get_desktop_modes(modes, color_depth);
+    sys_get_desktop_modes(display_index, modes, color_depth);
     if ((modes.size() == 0) && color_depth == 32)
     {
         // Pretend that 24-bit are 32-bit
-        sys_get_desktop_modes(modes, 24);
+        sys_get_desktop_modes(display_index, modes, 24);
         for (auto &m : modes) { m.ColorDepth = 32; }
     }
     return new OGLDisplayModeList(modes);
@@ -878,10 +833,11 @@ void OGLGraphicsDriver::ReleaseDisplayMode()
   if (!IsModeSet())
     return;
 
+  _screenBackbuffer = BackbufferState();
+
   OnModeReleased();
   ClearDrawLists();
   ClearDrawBackups();
-  DeleteBackbufferTexture();
   DestroyFxPool();
   DestroyAllStageScreens();
 
@@ -892,6 +848,13 @@ void OGLGraphicsDriver::UnInit()
 {
   OnUnInit();
   ReleaseDisplayMode();
+
+  if (_nativeSurface)
+  {
+    DestroyDDB(_nativeSurface);
+    _nativeSurface = nullptr;
+    _nativeBackbuffer = BackbufferState();
+  }
 
   DeleteShaderProgram(_transparencyShader);
   DeleteShaderProgram(_tintShader);
@@ -911,92 +874,134 @@ void OGLGraphicsDriver::ClearRectangle(int /*x1*/, int /*y1*/, int /*x2*/, int /
   // NOTE: this function is practically useless at the moment, because OGL redraws whole game frame each time
 }
 
-bool OGLGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_native_res, GraphicResolution *want_fmt)
+void OGLGraphicsDriver::GetCopyOfScreenIntoDDB(IDriverDependantBitmap *target, uint32_t batch_skip_filter)
 {
-  (void)at_native_res; // TODO: support this at some point
+    // If we normally render in screen res, restore last frame's lists and
+    // render in native res on the given target
+    // Also force re-render last frame if we require batch filtering
+    if (!_doRenderToTexture || (batch_skip_filter != 0))
+    {
+        bool old_render_res = _doRenderToTexture;
+        _doRenderToTexture = true;
+        RedrawLastFrame(batch_skip_filter);
+        Render(target);
+        _doRenderToTexture = old_render_res;
+    }
+    else
+    {
+        // If we normally render in native res, then simply render backbuffer contents
+        OGLBitmap *bitmap = (OGLBitmap*)target;
+        Size surf_sz(bitmap->_width, bitmap->_height);
+        BackbufferState backbuffer = BackbufferState(bitmap->_fbo, surf_sz, surf_sz,
+            RectWH(0, 0, surf_sz.Width, surf_sz.Height), 
+            glm::ortho(0.0f, (float)surf_sz.Width, 0.0f, (float)surf_sz.Height, 0.0f, 1.0f),
+            PlaneScaling(), GL_NEAREST, GL_CLAMP);
+        SetBackbufferState(&backbuffer, true);
+        RenderTexture(_nativeSurface, 0, 0, backbuffer.Projection, glmex::identity(), SpriteColorTransform(), surf_sz);
+    }
+}
 
-  // TODO: following implementation currently only reads GL pixels in 32-bit RGBA.
-  // this **should** work regardless of actual display mode because OpenGL is
-  // responsible to convert and fill pixel buffer correctly.
-  // If you like to support writing directly into 16-bit bitmap, please take
-  // care of ammending the pixel reading code below.
-  const int read_in_colordepth = 32;
-  Size need_size = _do_render_to_texture ? _backRenderSize : _dstRect.GetSize();
-  if (destination->GetColorDepth() != read_in_colordepth || destination->GetSize() != need_size)
+bool OGLGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination,
+    const Rect *src_rect, bool at_native_res,
+    GraphicResolution *want_fmt, uint32_t batch_skip_filter)
+{
+  // Currently don't support copying in screen resolution when we are rendering in native
+  if (_doRenderToTexture)
+      at_native_res = true;
+
+  Rect copy_from = src_rect ? *src_rect : _srcRect;
+  if (!at_native_res)
+    copy_from = _scaling.ScaleRange(copy_from);
+  if (destination->GetColorDepth() != _mode.ColorDepth || destination->GetSize() != copy_from.GetSize())
   {
     if (want_fmt)
-      *want_fmt = GraphicResolution(need_size.Width, need_size.Height, read_in_colordepth);
+      *want_fmt = GraphicResolution(copy_from.GetWidth(), copy_from.GetHeight(), _mode.ColorDepth);
     return false;
   }
 
-  Rect retr_rect;
-  if (_do_render_to_texture)
+  // If we are rendering sprites at the screen resolution, and requested native res,
+  // re-render last frame to the native surface
+  // Also force re-render last frame if we require batch filtering
+  if ((at_native_res && !_doRenderToTexture) || (batch_skip_filter != 0))
   {
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _fbo);
-    retr_rect = RectWH(0, 0, _backRenderSize.Width, _backRenderSize.Height);
+    bool old_render_res = _doRenderToTexture;
+    _doRenderToTexture = at_native_res;
+    RedrawLastFrame(batch_skip_filter);
+    RenderImpl(true);
+    _doRenderToTexture = old_render_res;
+  }
+
+  if (at_native_res)
+  {
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _nativeSurface->_fbo);
   }
   else
   {
+    // CHECKME: is this condition still relevant?
 #if !AGS_OPENGL_ES2
     glReadBuffer(GL_FRONT);
 #endif
-
-    retr_rect = _dstRect;
   }
 
-  int bpp = read_in_colordepth / 8;
-  int bufferSize = retr_rect.GetWidth() * retr_rect.GetHeight() * bpp;
+  // Retrieve the backbuffer pixels
+  // NOTE: this is currently hardcoded to read from a 32-bit display mode
+  const int bpp = 32 / 8;
+  const int buf_sz = copy_from.GetWidth() * copy_from.GetHeight() * bpp;
+  std::vector<uint8_t> buffer(buf_sz);
+  glReadPixels(copy_from.Left, copy_from.Top, copy_from.GetWidth(), copy_from.GetHeight(), GL_RGBA, GL_UNSIGNED_BYTE, buffer.data());
 
-  unsigned char* buffer = new unsigned char[bufferSize];
-  if (buffer)
+  // Now convert from OGL RGBA to Allegro RGBA pixel format
+  uint8_t* sourcePtr = buffer.data();
+  for (int y = destination->GetHeight() - 1; y >= 0; y--)
   {
-    glReadPixels(retr_rect.Left, retr_rect.Top, retr_rect.GetWidth(), retr_rect.GetHeight(), GL_RGBA, GL_UNSIGNED_BYTE, buffer);
-
-    unsigned char* sourcePtr = buffer;
-    for (int y = destination->GetHeight() - 1; y >= 0; y--)
+    unsigned int * destPtr = reinterpret_cast<unsigned int*>(&destination->GetScanLineForWriting(y)[0]);
+    for (int dx = 0, sx = 0; dx < destination->GetWidth(); ++dx, sx = dx * bpp)
     {
-      unsigned int * destPtr = reinterpret_cast<unsigned int*>(&destination->GetScanLineForWriting(y)[0]);
-      for (int dx = 0, sx = 0; dx < destination->GetWidth(); ++dx, sx = dx * bpp)
-      {
-        destPtr[dx] = makeacol32(sourcePtr[sx + 0], sourcePtr[sx + 1], sourcePtr[sx + 2], sourcePtr[sx + 3]);
-      }
-      sourcePtr += retr_rect.GetWidth() * bpp;
+      destPtr[dx] = makeacol32(sourcePtr[sx + 0], sourcePtr[sx + 1], sourcePtr[sx + 2], sourcePtr[sx + 3]);
     }
-
-    if (_pollingCallback)
-      _pollingCallback();
-
-    delete [] buffer;
+    sourcePtr += copy_from.GetWidth() * bpp;
   }
-  return true;
-}
 
-void OGLGraphicsDriver::RenderToBackBuffer()
-{
-  throw Ali3DException("OGL driver does not have a back buffer");
+  return true;
 }
 
 void OGLGraphicsDriver::Render()
 {
-  Render(0, 0, kFlip_None);
+    Render(0, 0, kFlip_None);
 }
 
 void OGLGraphicsDriver::Render(int /*xoff*/, int /*yoff*/, GraphicFlip /*flip*/)
 {
-  _render(true);
+    RenderAndPresent(true);
 }
 
-void OGLGraphicsDriver::_reDrawLastFrame()
+void OGLGraphicsDriver::RenderToBackBuffer()
 {
-    RestoreDrawLists();
+    RenderImpl(true);
 }
 
-void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
+void OGLGraphicsDriver::Render(IDriverDependantBitmap *target)
+{
+    OGLBitmap *bitmap = (OGLBitmap*)target;
+    Size surf_sz(bitmap->_width, bitmap->_height);
+    BackbufferState backbuffer = BackbufferState(bitmap->_fbo, surf_sz, surf_sz,
+        RectWH(0, 0, surf_sz.Width, surf_sz.Height),
+        glm::ortho(0.0f, (float)surf_sz.Width, 0.0f, (float)surf_sz.Height, 0.0f, 1.0f),
+        PlaneScaling(), GL_NEAREST, GL_CLAMP);
+    RenderToSurface(&backbuffer, true);
+}
+
+void OGLGraphicsDriver::RenderSprite(const OGLDrawListEntry *drawListEntry,
     const glm::mat4 &projection, const glm::mat4 &matGlobal,
-    const SpriteColorTransform &color, const Size &surface_size)
+    const SpriteColorTransform &color, const Size &rend_sz)
 {
-  OGLBitmap *bmpToDraw = drawListEntry->ddb;
+    RenderTexture(drawListEntry->ddb, drawListEntry->x, drawListEntry->y, projection, matGlobal, color, rend_sz);
+}
 
+void OGLGraphicsDriver::RenderTexture(OGLBitmap *bmpToDraw, int draw_x, int draw_y,
+    const glm::mat4 &projection, const glm::mat4 &matGlobal,
+    const SpriteColorTransform &color, const Size &rend_sz)
+{
   const int alpha = (color.Alpha * bmpToDraw->_alpha) / 255;
 
   ShaderProgram program;
@@ -1073,8 +1078,6 @@ void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
   float height = bmpToDraw->GetHeightToRender();
   float xProportion = width / (float)bmpToDraw->_width;
   float yProportion = height / (float)bmpToDraw->_height;
-  int drawAtX = drawListEntry->x;
-  int drawAtY = drawListEntry->y;
 
   const auto *txdata = bmpToDraw->_data.get();
   for (size_t ti = 0; ti < txdata->_numTiles; ++ti)
@@ -1087,10 +1090,10 @@ void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
       xOffs = (bmpToDraw->_width - (txdata->_tiles[ti].x + txdata->_tiles[ti].width)) * xProportion;
     else
       xOffs = txdata->_tiles[ti].x * xProportion;
-    float thisX = drawAtX + xOffs;
-    float thisY = drawAtY + yOffs;
-    thisX = (-(surface_size.Width / 2.0f)) + thisX;
-    thisY = (surface_size.Height / 2.0f) - thisY;
+    float thisX = draw_x + xOffs;
+    float thisY = draw_y + yOffs;
+    thisX = (-(rend_sz.Width / 2.0f)) + thisX;
+    thisY = (rend_sz.Height / 2.0f) - thisY;
 
     //Setup translation and scaling matrices
     float widthToScale = width;
@@ -1109,7 +1112,7 @@ void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
     //
     glm::mat4 transform = projection;
     // Origin is at the middle of the surface
-    transform = glmex::translate(transform, surface_size.Width / 2.0f, surface_size.Height / 2.0f);
+    transform = glmex::translate(transform, rend_sz.Width / 2.0f, rend_sz.Height / 2.0f);
 
     // Global batch transform
     transform = transform * matGlobal;
@@ -1127,18 +1130,16 @@ void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
     {
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
       glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    }
-    else if (_do_render_to_texture)
-    {
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
     else
     {
-      _filter->SetFilteringForStandardSprite();
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, _currentBackbuffer->Filter);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, _currentBackbuffer->Filter);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, _currentBackbuffer->TxClamp);
+      glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, _currentBackbuffer->TxClamp);
     }
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
 
     if (txdata->_vertex != nullptr)
     {
@@ -1179,107 +1180,63 @@ void OGLGraphicsDriver::_renderSprite(const OGLDrawListEntry *drawListEntry,
   glUseProgram(0);
 }
 
-void OGLGraphicsDriver::_render(bool clearDrawListAfterwards)
+void OGLGraphicsDriver::RenderAndPresent(bool clearDrawListAfterwards)
 {
-#if 0
-  // TODO:
-  // For some reason, mobile ports initialize actual display size after a short delay.
-  // This is why we update display mode and related parameters (projection, viewport)
-  // at the first render pass.
-  // Ofcourse this is not a good thing, ideally the display size should be made
-  // known before graphic mode is initialized. This would require analysis and rewrite
-  // of the platform-specific part of the code (Java app for Android / XCode for iOS).
-  if (!device_screen_initialized)
-  {
-    UpdateDeviceScreen();
-    device_screen_initialized = 1;
-  }
-#endif
-  glm::mat4 projection;
+    RenderImpl(clearDrawListAfterwards);
+    SDL_GL_SwapWindow(_sdlWindow);
+}
 
-  if (_do_render_to_texture)
-  {
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _fbo);
+void OGLGraphicsDriver::RenderImpl(bool clearDrawListAfterwards)
+{
+    if (_doRenderToTexture)
+    {
+        RenderToSurface(&_nativeBackbuffer, clearDrawListAfterwards);
+    }
+    else
+    {
+        RenderToSurface(&_screenBackbuffer, clearDrawListAfterwards);
+    }
 
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
+    if (_doRenderToTexture)
+    {
+        // Draw native texture on a real backbuffer
+        SetBackbufferState(&_screenBackbuffer, true);
+        RenderTexture(_nativeSurface, 0, 0, _screenBackbuffer.Projection, glmex::identity(), SpriteColorTransform(), _srcRect.GetSize());
+        glFinish();
+    }
+}
 
-    glViewport(0, 0, _backRenderSize.Width, _backRenderSize.Height);
+void OGLGraphicsDriver::RenderToSurface(BackbufferState *state, bool clearDrawListAfterwards)
+{
+    SetBackbufferState(state, true);
+    // Save Projection
+    _stageMatrixes.Projection = _currentBackbuffer->Projection;
+    RenderSpriteBatches();
+    glFinish();
 
-    projection = glm::ortho(0.0f, (float)_backRenderSize.Width, 0.0f, (float)_backRenderSize.Height, 0.0f, 1.0f);
-  }
-  else
-  {
-    glDisable(GL_SCISSOR_TEST);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glEnable(GL_SCISSOR_TEST);
+    if (clearDrawListAfterwards)
+    {
+        BackupDrawLists();
+        ClearDrawLists();
+    }
+    ResetFxPool();
+}
 
-    glViewport(_viewportRect.Left, _viewportRect.Top, _viewportRect.GetWidth(), _viewportRect.GetHeight());
+void OGLGraphicsDriver::SetBackbufferState(BackbufferState *state, bool clear)
+{
+    _currentBackbuffer = state;
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, state->Fbo);
+    const Rect &viewport = _currentBackbuffer->Viewport;
+    glViewport(viewport.Left, viewport.Top, viewport.GetWidth(), viewport.GetHeight());
+    glScissor(viewport.Left, viewport.Top, viewport.GetWidth(), viewport.GetHeight());
 
-    projection = glm::ortho(0.0f, (float)_srcRect.GetWidth(), 0.0f, (float)_srcRect.GetHeight(), 0.0f, 1.0f);
-  }
-  // Save Projection
-  _stageMatrixes.Projection = projection;
-
-  RenderSpriteBatches(projection);
-
-  if (_do_render_to_texture)
-  {
-    glDisable(GL_BLEND);
-
-    // Use default processing
-    ShaderProgram program = _transparencyShader;
-    glUseProgram(_transparencyShader.Program);
-
-    glUniform1i(program.TextureId, 0);
-    glUniform1f(program.Alpha, 1.0f);
-
-    // Texture is ready, now create rectangle in the world space and draw texture upon it
-#if AGS_PLATFORM_OS_IOS
-    ios_select_buffer();
-#else
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-#endif
-
-    glViewport(_viewportRect.Left, _viewportRect.Top, _viewportRect.GetWidth(), _viewportRect.GetHeight());
-
-    projection = glm::ortho(0.0f, (float)_srcRect.GetWidth(), 0.0f, (float)_srcRect.GetHeight(), 0.0f, 1.0f);
-
-    glUniformMatrix4fv(program.MVPMatrix, 1, GL_FALSE, glm::value_ptr(projection));
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, _backbuffer);
-
-    // use correct sampling method when stretching buffer to the final rect
-    _filter->SetFilteringForStandardSprite();
-
-    glEnableVertexAttribArray(0);
-    GLint a_Position = glGetAttribLocation(program.Program, "a_Position");
-    glVertexAttribPointer(a_Position, 2, GL_FLOAT, GL_FALSE, 0, _backbuffer_vertices);
-
-    glEnableVertexAttribArray(1);
-    GLint a_TexCoord = glGetAttribLocation(program.Program, "a_TexCoord");
-    glVertexAttribPointer(a_TexCoord, 2, GL_FLOAT, GL_FALSE, 0, _backbuffer_texture_coordinates);
-
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
-
-    glEnable(GL_BLEND);
-    glUseProgram(0);
-  }
-
-  glFinish();
-
-  SDL_GL_SwapWindow(_sdlWindow);
-
-  if (clearDrawListAfterwards)
-  {
-    BackupDrawLists();
-    ClearDrawLists();
-  }
-  ResetFxPool();
+    if (clear)
+    {
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);
+    }
 }
 
 void OGLGraphicsDriver::SetScissor(const Rect &clip, bool render_on_texture, const Size &surface_size)
@@ -1288,28 +1245,26 @@ void OGLGraphicsDriver::SetScissor(const Rect &clip, bool render_on_texture, con
     Rect scissor;
     if (!clip.IsEmpty())
     {
-        scissor = render_on_texture ? clip : _scaling.ScaleRange(clip);
-        int surface_h = render_on_texture ? surface_size.Height : device_screen_physical_height;
-        scissor = ConvertTopDownRect(scissor, surface_h);
+        scissor = render_on_texture ? clip : _currentBackbuffer->Scaling.ScaleRange(clip);
+        int surface_h = render_on_texture ? surface_size.Height : _currentBackbuffer->SurfSize.Height;
+        scissor = TopDownRect(scissor, surface_h);
     }
     else
     {
-        scissor = render_on_texture ? RectWH(surface_size) : _viewportRect;
+        scissor = render_on_texture ? RectWH(surface_size) : _currentBackbuffer->Viewport;
     }
     glScissor(scissor.Left, scissor.Top, scissor.GetWidth(), scissor.GetHeight());
 }
 
-void OGLGraphicsDriver::SetRenderTarget(const OGLSpriteBatch *batch, Size &surface_sz, glm::mat4 &projection)
+void OGLGraphicsDriver::SetRenderTarget(const OGLSpriteBatch *batch, Size &surface_sz,
+    Size &rend_sz, glm::mat4 &projection, bool clear)
 {
     if (batch && batch->RenderTarget)
     {
         // Assign an arbitrary render target, and setup render params
         glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, batch->Fbo);
-        glDisable(GL_SCISSOR_TEST);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glEnable(GL_SCISSOR_TEST);
         surface_sz = Size(batch->RenderTarget->GetWidth(), batch->RenderTarget->GetHeight());
+        rend_sz = surface_sz;
         projection = glm::ortho(0.0f, (float)surface_sz.Width, 0.0f, (float)surface_sz.Height, 0.0f, 1.0f);
         glViewport(0, 0, surface_sz.Width, surface_sz.Height);
         // Configure rules for merging sprite alpha values onto a
@@ -1319,27 +1274,29 @@ void OGLGraphicsDriver::SetRenderTarget(const OGLSpriteBatch *batch, Size &surfa
     }
     else
     {
-        // Assign the default backbuffer
-        if (_do_render_to_texture)
-        {
-            surface_sz = _backRenderSize;
-            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _fbo);
-            glViewport(0, 0, _backRenderSize.Width, _backRenderSize.Height);
-        }
-        else
-        {
-            surface_sz = _srcRect.GetSize();
-            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0u);
-            glViewport(_viewportRect.Left, _viewportRect.Top, _viewportRect.GetWidth(), _viewportRect.GetHeight());
-        }
-        projection = glm::ortho(0.0f, (float)surface_sz.Width, 0.0f, (float)surface_sz.Height, 0.0f, 1.0f);
+        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _currentBackbuffer->Fbo);
+        surface_sz = _currentBackbuffer->SurfSize;
+        rend_sz = _currentBackbuffer->RendSize;
+        projection = _currentBackbuffer->Projection;
+        const Rect &viewport = _currentBackbuffer->Viewport;
+        glViewport(viewport.Left, viewport.Top, viewport.GetWidth(), viewport.GetHeight());
+        glScissor(viewport.Left, viewport.Top, viewport.GetWidth(), viewport.GetHeight());
         // Disable alpha merging rules, return back to default settings
         SetBlendOpUniform(GL_FUNC_ADD, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
+
+    if (clear)
+    {
+        glDisable(GL_SCISSOR_TEST);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);
+    }
 }
 
-void OGLGraphicsDriver::RenderSpriteBatches(const glm::mat4 &projection)
+void OGLGraphicsDriver::RenderSpriteBatches()
 {
+    assert(_currentBackbuffer);
     // Close unended batches, and issue a warning
     assert(_actSpriteBatch == UINT32_MAX);
     while (_actSpriteBatch != UINT32_MAX)
@@ -1350,27 +1307,29 @@ void OGLGraphicsDriver::RenderSpriteBatches(const glm::mat4 &projection)
         return; // no batches - no render
     }
 
-    // TODO: see if it's possible to refactor and not enable/disable scissor test
-    // also try to sync scissor code logic with D3D renderer
-    if (_do_render_to_texture)
-        glEnable(GL_SCISSOR_TEST);
+    // TODO: following algorithm is repeated for both Direct3D and OpenGL renderer
+    // classes. The problem is that some data has different types and contents
+    // specific to the renderer. But there has to be a good way to make a shared
+    // algorithm in a base class.
 
     // Render all the sprite batches with necessary transformations;
     // some of them may be rendered to a separate texture instead.
     // For these we save their IDs in a stack (rt_parents).
     // The top of the stack lets us know which batch's RT we are using.
     std::stack<unsigned> rt_parents;
-    unsigned int back_buffer = _do_render_to_texture ? _fbo : 0u;
+    unsigned int back_buffer = _currentBackbuffer->Fbo;
     unsigned cur_rt = back_buffer; // current render target
-    Size surface_sz = _srcRect.GetSize(); // current rt surface size
-    glm::mat4 use_projection = projection;
+    Size surface_sz = _currentBackbuffer->SurfSize;
+    Size rend_sz = _currentBackbuffer->RendSize;
+    glm::mat4 use_projection = _currentBackbuffer->Projection;
 
     const size_t last_batch_to_rend = _spriteBatchDesc.size() - 1;
     for (size_t cur_bat = 0u, last_bat = 0u, cur_spr = 0u; last_bat <= last_batch_to_rend;)
     {
-        // Test if we are entering this batch (and not continuing after coming back from nested)
         const auto &batch = _spriteBatches[cur_bat];
-        if (cur_spr <= _spriteBatchRange[cur_bat].first)
+        // Test if we are entering this batch (and not continuing after coming back from nested)
+        const bool new_batch = cur_bat == last_bat;
+        if (new_batch)
         {
             // If batch introduces a new render target, or the first using backbuffer, then remember it
             if (rt_parents.empty() || batch.RenderTarget)
@@ -1379,23 +1338,31 @@ void OGLGraphicsDriver::RenderSpriteBatches(const glm::mat4 &projection)
                 rt_parents.push(rt_parents.top()); // copy same current parent
         }
 
-        // Render immediate batch sprites, if any, update cur_spr iterator
-        if ((cur_spr < _spriteList.size()) && (cur_bat == _spriteList[cur_spr].node))
+        // If this batch has ANY sprites in it at all (own, or nested),
+        // then we would need to update render target; otherwise there's no need
+        if (_spriteBatchRange[cur_bat].first < _spriteBatchRange[cur_bat].second)
         {
             // If render target is different in this batch, then set it up
             const auto &rt_parent = _spriteBatches[rt_parents.top()];
-            if ((rt_parent.Fbo > 0u) && (cur_rt != rt_parent.Fbo) ||
-                (rt_parent.Fbo == 0u) && (cur_rt != back_buffer))
+            if (((rt_parent.Fbo > 0u) && (cur_rt != rt_parent.Fbo)) ||
+                ((rt_parent.Fbo == 0u) && (cur_rt != back_buffer)))
             {
-                cur_rt = (batch.Fbo > 0u) ? batch.Fbo : back_buffer;
-                SetRenderTarget(&batch, surface_sz, use_projection);
+                cur_rt = (rt_parent.Fbo > 0u) ? rt_parent.Fbo : back_buffer;
+                SetRenderTarget(&rt_parent, surface_sz, rend_sz, use_projection, new_batch);
             }
+        }
+
+        // Render immediate batch sprites, if any, update cur_spr iterator;
+        // we know that the batch has sprites, if next sprite in list belongs to it ("node" ref)
+        if ((cur_spr < _spriteList.size()) && (cur_bat == _spriteList[cur_spr].node))
+        {
             // Now set clip (scissor), and render sprites
-            const bool render_to_texture = (_do_render_to_texture) || (cur_rt != back_buffer);
-            SetScissor(batch.Viewport, render_to_texture, surface_sz);
+            SetScissor(batch.Viewport, (cur_rt != back_buffer), surface_sz);
             _stageMatrixes.World = batch.Matrix;
             _rendSpriteBatch = batch.ID;
-            cur_spr = RenderSpriteBatch(batch, cur_spr, use_projection, surface_sz);
+            cur_spr = RenderSpriteBatch(batch, cur_spr, use_projection, rend_sz);
+            // at this point cur_spr iterator is updated past the last sprite in a sequence;
+            // this may be the end of batch, but also may be the a begginning of a sub-batch
         }
 
         // Test if we're exiting current batch (and not going into nested ones):
@@ -1418,12 +1385,10 @@ void OGLGraphicsDriver::RenderSpriteBatches(const glm::mat4 &projection)
         }
     }
 
-    SetRenderTarget(nullptr, surface_sz, use_projection);
+    SetRenderTarget(nullptr, surface_sz, rend_sz, use_projection, false);
     _rendSpriteBatch = UINT32_MAX;
     _stageMatrixes.World = _spriteBatches[0].Matrix;
-    SetScissor(Rect(), _do_render_to_texture, _srcRect.GetSize()); // TODO: simply disable scissor test?
-    if (_do_render_to_texture)
-        glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_SCISSOR_TEST);
 }
 
 size_t OGLGraphicsDriver::RenderSpriteBatch(const OGLSpriteBatch &batch, size_t from,
@@ -1435,7 +1400,7 @@ size_t OGLGraphicsDriver::RenderSpriteBatch(const OGLSpriteBatch &batch, size_t 
         if (e.skip)
             continue;
 
-        switch (reinterpret_cast<intptr_t>(e.ddb))
+        switch (reinterpret_cast<uintptr_t>(e.ddb))
         {
         case DRAWENTRY_STAGECALLBACK:
             // raw-draw plugin support
@@ -1443,11 +1408,11 @@ size_t OGLGraphicsDriver::RenderSpriteBatch(const OGLSpriteBatch &batch, size_t 
             if (auto *ddb = DoSpriteEvtCallback(e.x, 0, sx, sy))
             {
                 auto stageEntry = OGLDrawListEntry((OGLBitmap*)ddb, batch.ID, sx, sy);
-                _renderSprite(&stageEntry, projection, batch.Matrix, batch.Color, surface_size);
+                RenderSprite(&stageEntry, projection, batch.Matrix, batch.Color, surface_size);
             }
             break;
         default:
-            _renderSprite(&e, projection, batch.Matrix, batch.Color, surface_size);
+            RenderSprite(&e, projection, batch.Matrix, batch.Color, surface_size);
             break;
         }
     }
@@ -1563,6 +1528,27 @@ void OGLGraphicsDriver::RestoreDrawLists()
     _actSpriteBatch = UINT32_MAX;
 }
 
+void OGLGraphicsDriver::FilterSpriteBatches(uint32_t skip_filter)
+{
+    if (skip_filter == 0)
+        return;
+    for (size_t i = 0; i < _spriteBatchDesc.size(); ++i)
+    {
+        if (_spriteBatchDesc[i].FilterFlags & skip_filter)
+        {
+            const auto range = _spriteBatchRange[i];
+            for (size_t spr = range.first; spr < range.second; ++spr)
+                _spriteList[spr].skip = true;
+        }
+    }
+}
+
+void OGLGraphicsDriver::RedrawLastFrame(uint32_t skip_filter)
+{
+    RestoreDrawLists();
+    FilterSpriteBatches(skip_filter);
+}
+
 void OGLGraphicsDriver::DrawSprite(int x, int y, IDriverDependantBitmap* ddb)
 {
     assert(_actSpriteBatch != UINT32_MAX);
@@ -1595,14 +1581,10 @@ void OGLGraphicsDriver::DestroyDDB(IDriverDependantBitmap* ddb)
 }
 
 
-void OGLGraphicsDriver::UpdateTextureRegion(OGLTextureTile *tile, Bitmap *bitmap, bool has_alpha, bool opaque)
+void OGLGraphicsDriver::UpdateTextureRegion(OGLTextureTile *tile, const Bitmap *bitmap, bool has_alpha, bool opaque)
 {
-  int textureHeight = tile->height;
-  int textureWidth = tile->width;
-
-  // TODO: this seem to be tad overcomplicated, these conversions were made
-  // when texture is just created. Check later if this operation here may be removed.
-  AdjustSizeToNearestSupportedByCard(&textureWidth, &textureHeight);
+  const int textureWidth = tile->allocWidth;
+  const int textureHeight = tile->allocHeight;
 
   int tilex = 0, tiley = 0, tileWidth = tile->width, tileHeight = tile->height;
   if (textureWidth > tile->width)
@@ -1628,13 +1610,19 @@ void OGLGraphicsDriver::UpdateTextureRegion(OGLTextureTile *tile, Bitmap *bitmap
   fixedTile.y = tile->y;
   fixedTile.width = std::min(tile->width, tileWidth);
   fixedTile.height = std::min(tile->height, tileHeight);
+
+  assert(!opaque || !has_alpha); // has_alpha is meaningless with opaque
   if (opaque)
-    BitmapToVideoMemOpaque(bitmap, has_alpha, &fixedTile, memPtr, pitch);
+    BitmapToVideoMemOpaque(bitmap, &fixedTile, memPtr, pitch);
   else
     BitmapToVideoMem(bitmap, has_alpha, &fixedTile, memPtr, pitch, usingLinearFiltering);
 
-  // Mimic the behaviour of GL_CLAMP_EDGE for the tile edges
-  // NOTE: on some platforms GL_CLAMP_EDGE does not work with the version of OpenGL we're using.
+  // Mimic the behaviour of GL_CLAMP_TO_EDGE for the tile edges
+  // NOTE: on some platforms GL_CLAMP_TO_EDGE does not work with the version of OpenGL we're using.
+  // TODO: test the GL version to see if this is even necessary?!
+  // Info on CLAMP types:
+  // https://docs.gl/gl2/glTexParameter
+  // https://stackoverflow.com/questions/56823126/how-is-gl-clamp-in-opengl-different-from-gl-clamp-to-edge
   if (tile->width < tileWidth)
   {
     if (tilex > 0)
@@ -1678,7 +1666,7 @@ void OGLGraphicsDriver::UpdateTextureRegion(OGLTextureTile *tile, Bitmap *bitmap
   delete []origPtr;
 }
 
-void OGLGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, Bitmap *bitmap, bool has_alpha)
+void OGLGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, const Bitmap *bitmap, bool has_alpha)
 {
   // FIXME: what to do if texture is shared??
   OGLBitmap *target = (OGLBitmap*)ddb;
@@ -1686,7 +1674,7 @@ void OGLGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap* ddb, Bitmap 
   target->_hasAlpha = has_alpha;
 }
 
-void OGLGraphicsDriver::UpdateTexture(Texture *txdata, Bitmap *bitmap, bool has_alpha, bool opaque)
+void OGLGraphicsDriver::UpdateTexture(Texture *txdata, const Bitmap *bitmap, bool has_alpha, bool opaque)
 {
   const int color_depth = bitmap->GetColorDepth();
   if (bitmap->GetColorDepth() != txdata->Res.ColorDepth)
@@ -1716,37 +1704,50 @@ int OGLGraphicsDriver::GetCompatibleBitmapFormat(int color_depth)
   return 32;
 }
 
-size_t OGLGraphicsDriver::GetAvailableTextureMemory()
+/*
+    ATI extensions, found at:
+    https://registry.khronos.org/OpenGL/extensions/ATI/ATI_meminfo.txt
+    NVIDIA extensions, found at:
+    https://registry.khronos.org/OpenGL/extensions/NVX/NVX_gpu_memory_info.txt
+*/
+
+#define VBO_FREE_MEMORY_ATI                             0x87FB
+#define TEXTURE_FREE_MEMORY_ATI                         0x87FC
+#define RENDERBUFFER_FREE_MEMORY_ATI                    0x87FD
+
+#define GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX            0x9047
+#define GPU_MEMORY_INFO_TOTAL_AVAILABLE_MEMORY_NVX      0x9048
+#define GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX    0x9049
+#define GPU_MEMORY_INFO_EVICTION_COUNT_NVX              0x904A
+#define GPU_MEMORY_INFO_EVICTED_MEMORY_NVX              0x904B
+
+uint64_t OGLGraphicsDriver::GetAvailableTextureMemory()
 {
-  // TODO: investigate later if there is any way, but probably not a priority
-  return 0;
+    GLint mem[4]{}; // ATI requires array of 4 ints
+    const char *exts = (const char*)glGetString(GL_EXTENSIONS);
+    if (strstr(exts, "GL_NVX_gpu_memory_info") != nullptr)
+        glGetIntegerv(GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &mem[0]);
+    else if (strstr(exts, "GL_ATI_meminfo") != nullptr)
+        glGetIntegerv(TEXTURE_FREE_MEMORY_ATI, &mem[0]);
+    return static_cast<uint64_t>(mem[0]) * 1024u; // retrieved mem is in KB
 }
 
 void OGLGraphicsDriver::AdjustSizeToNearestSupportedByCard(int *width, int *height)
 {
-  int allocatedWidth = *width, allocatedHeight = *height;
+    int allocatedWidth = *width, allocatedHeight = *height;
 
-    bool foundWidth = false, foundHeight = false;
-    int tryThis = 2;
-    while ((!foundWidth) || (!foundHeight))
+    // NOTE: we might consider texture atlases in the future, for greater optimization
+    if (!_glCapsNonPowerOfTwo)
     {
-      if ((tryThis >= allocatedWidth) && (!foundWidth))
-      {
-        allocatedWidth = tryThis;
-        foundWidth = true;
-      }
-
-      if ((tryThis >= allocatedHeight) && (!foundHeight))
-      {
-        allocatedHeight = tryThis;
-        foundHeight = true;
-      }
-
-      tryThis = tryThis << 1;
+        int pow2;
+        for (pow2 = 2; pow2 < allocatedWidth; pow2 <<= 1);
+        allocatedWidth = pow2;
+        for (pow2 = 2; pow2 < allocatedHeight; pow2 <<= 1);
+        allocatedHeight = pow2;
     }
 
-  *width = allocatedWidth;
-  *height = allocatedHeight;
+    *width = allocatedWidth;
+    *height = allocatedHeight;
 }
 
 IDriverDependantBitmap* OGLGraphicsDriver::CreateDDB(int width, int height, int color_depth, bool opaque)
@@ -1777,7 +1778,13 @@ IDriverDependantBitmap* OGLGraphicsDriver::CreateRenderTargetDDB(int width, int 
     // FIXME: this ugly accessing internal texture members
     unsigned int tex = ddb->_data->_tiles[0].texture;
     glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, tex, 0);
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
+    GLenum status = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
+    if (status != GL_FRAMEBUFFER_COMPLETE_EXT)
+    {
+        delete ddb;
+        throw Ali3DException(String::FromFormat("CreateRenderTargetDDB: failed to create a framebuffer: %x", status));
+    }
+    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, _screenFramebuffer);
     ddb->_renderHint = kTxHint_PremulAlpha;
     return ddb;
 }
@@ -1870,6 +1877,8 @@ Texture *OGLGraphicsDriver::CreateTexture(int width, int height, int color_depth
         thisAllocatedHeight = thisTile->height;
         AdjustSizeToNearestSupportedByCard(&thisAllocatedWidth, &thisAllocatedHeight);
       }
+      thisTile->allocWidth = thisAllocatedWidth;
+      thisTile->allocHeight = thisAllocatedHeight;
 
       // Render targets has to be inverted compared to the default vertices,
       // in order to make their contents appear correct on screen (double invertion).
@@ -1929,128 +1938,6 @@ Texture *OGLGraphicsDriver::CreateTexture(int width, int height, int color_depth
   txdata->_numTiles = numTiles;
   txdata->_tiles = tiles;
   return txdata;
-}
-
-void OGLGraphicsDriver::do_fade(bool fadingOut, int speed, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-  // Construct scene in order: game screen, fade fx, post game overlay
-  // NOTE: please keep in mind: redrawing last saved frame here instead of constructing new one
-  // is done because of backwards-compatibility issue: originally AGS faded out using frame
-  // drawn before the script that triggers blocking fade (e.g. instigated by ChangeRoom).
-  // Unfortunately some existing games were changing looks of the screen during same function,
-  // but these were not supposed to get on screen until before fade-in.
-  if (fadingOut)
-     this->_reDrawLastFrame();
-  else if (_drawScreenCallback != nullptr)
-    _drawScreenCallback();
-  Bitmap *blackSquare = BitmapHelper::CreateBitmap(16, 16, 32);
-  blackSquare->Clear(makecol32(targetColourRed, targetColourGreen, targetColourBlue));
-  IDriverDependantBitmap *d3db = this->CreateDDBFromBitmap(blackSquare, false, true);
-  delete blackSquare;
-  BeginSpriteBatch(_srcRect, SpriteTransform());
-  d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-  this->DrawSprite(0, 0, d3db);
-  EndSpriteBatch();
-  if (_drawPostScreenCallback != NULL)
-      _drawPostScreenCallback();
-
-  if (speed <= 0) speed = 16;
-  speed *= 2;  // harmonise speeds with software driver which is faster
-  for (int a = 1; a < 255; a += speed)
-  {
-    d3db->SetAlpha(fadingOut ? a : (255 - a));
-    this->_render(false);
-
-    sys_evt_process_pending();
-    if (_pollingCallback)
-      _pollingCallback();
-    WaitForNextFrame();
-  }
-
-  if (fadingOut)
-  {
-    d3db->SetAlpha(255);
-    this->_render(false);
-  }
-
-  this->DestroyDDB(d3db);
-  this->ClearDrawLists();
-  ResetFxPool();
-}
-
-void OGLGraphicsDriver::FadeOut(int speed, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-  do_fade(true, speed, targetColourRed, targetColourGreen, targetColourBlue);
-}
-
-void OGLGraphicsDriver::FadeIn(int speed, PALETTE /*p*/, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-  do_fade(false, speed, targetColourRed, targetColourGreen, targetColourBlue);
-}
-
-void OGLGraphicsDriver::BoxOutEffect(bool blackingOut, int speed, int delay)
-{
-  // Construct scene in order: game screen, fade fx, post game overlay
-  if (blackingOut)
-    this->_reDrawLastFrame();
-  else if (_drawScreenCallback != nullptr)
-    _drawScreenCallback();
-  Bitmap *blackSquare = BitmapHelper::CreateBitmap(16, 16, 32);
-  blackSquare->Clear();
-  IDriverDependantBitmap *d3db = this->CreateDDBFromBitmap(blackSquare, false, true);
-  delete blackSquare;
-  BeginSpriteBatch(_srcRect, SpriteTransform());
-  d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-  this->DrawSprite(0, 0, d3db);
-  if (!blackingOut)
-  {
-    // when fading in, draw four black boxes, one
-    // across each side of the screen
-    this->DrawSprite(0, 0, d3db);
-    this->DrawSprite(0, 0, d3db);
-    this->DrawSprite(0, 0, d3db);
-  }
-  EndSpriteBatch();
-  std::vector<OGLDrawListEntry> &drawList = _spriteList;
-  const size_t last = drawList.size() - 1;
-
-  if (_drawPostScreenCallback != NULL)
-    _drawPostScreenCallback();
-
-  int yspeed = _srcRect.GetHeight() / (_srcRect.GetWidth() / speed);
-  int boxWidth = speed;
-  int boxHeight = yspeed;
-
-  while (boxWidth < _srcRect.GetWidth())
-  {
-    boxWidth += speed;
-    boxHeight += yspeed;
-    if (blackingOut)
-    {
-      drawList[last].x = _srcRect.GetWidth() / 2- boxWidth / 2;
-      drawList[last].y = _srcRect.GetHeight() / 2 - boxHeight / 2;
-      d3db->SetStretch(boxWidth, boxHeight, false);
-    }
-    else
-    {
-      drawList[last - 3].x = _srcRect.GetWidth() / 2 - boxWidth / 2 - _srcRect.GetWidth();
-      drawList[last - 2].y = _srcRect.GetHeight() / 2 - boxHeight / 2 - _srcRect.GetHeight();
-      drawList[last - 1].x = _srcRect.GetWidth() / 2 + boxWidth / 2;
-      drawList[last    ].y = _srcRect.GetHeight() / 2 + boxHeight / 2;
-      d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-    }
-
-    this->_render(false);
-
-    sys_evt_process_pending();
-    if (_pollingCallback)
-      _pollingCallback();
-    platform->Delay(delay);
-  }
-
-  this->DestroyDDB(d3db);
-  this->ClearDrawLists();
-  ResetFxPool();
 }
 
 void OGLGraphicsDriver::SetScreenFade(int red, int green, int blue)

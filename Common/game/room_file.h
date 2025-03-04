@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -23,6 +23,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include "core/assetmanager.h"
 #include "game/room_version.h"
 #include "util/error.h"
 #include "util/stream.h"
@@ -103,15 +104,17 @@ struct RoomDataSource
 // Opens room data for reading from an arbitrary file
 HRoomFileError OpenRoomFile(const String &filename, RoomDataSource &src);
 // Opens room data for reading from asset of a given name
-HRoomFileError OpenRoomFileFromAsset(const String &filename, RoomDataSource &src);
+HRoomFileError OpenRoomFileFromAsset(const String &filename, RoomDataSource &src, AssetManager *mgr);
 // Reads room data
-HRoomFileError ReadRoomData(RoomStruct *room, Stream *in, RoomFileVersion data_ver);
+HRoomFileError ReadRoomData(RoomStruct *room, std::unique_ptr<Stream> &&in, RoomFileVersion data_ver);
 // Applies necessary updates, conversions and fixups to the loaded data
 // making it compatible with current engine
 HRoomFileError UpdateRoomData(RoomStruct *room, RoomFileVersion data_ver, bool game_is_hires, const std::vector<SpriteInfo> &sprinfos);
+// Loads new room data into the given RoomStruct object and upgrade it to the latest version
+HError LoadRoom(const String &filename, RoomStruct *room, AssetManager *mgr, bool game_is_hires, const std::vector<SpriteInfo> &sprinfos);
 // Extracts text script from the room file, if it's available.
 // Historically, text sources were kept inside packed room files before AGS 3.*.
-HRoomFileError ExtractScriptText(String &script, Stream *in, RoomFileVersion data_ver);
+HRoomFileError ExtractScriptText(String &script, std::unique_ptr<Stream> &&in, RoomFileVersion data_ver);
 // Writes all room data to the stream
 HRoomFileError WriteRoomData(const RoomStruct *room, Stream *out, RoomFileVersion data_ver);
 

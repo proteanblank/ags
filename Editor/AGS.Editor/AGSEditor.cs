@@ -17,6 +17,8 @@ using System.Net;
 
 namespace AGS.Editor
 {
+    using ScriptCompilerOptions = AGS.Native.ScriptCompilerOptions;
+
     public class AGSEditor
     {
         public event GetScriptHeaderListHandler GetScriptHeaderList;
@@ -31,16 +33,17 @@ namespace AGS.Editor
 		public event PreDeleteSpriteHandler PreDeleteSprite;
 		public delegate void ProcessAllGameTextsHandler(IGameTextProcessor processor, CompileMessages errors);
         public event ProcessAllGameTextsHandler ProcessAllGameTexts;
-        public delegate void ExtraCompilationStepHandler(CompileMessages errors);
+        public delegate void ExtraCompilationStepHandler(CompilationStepArgs args);
         public event ExtraCompilationStepHandler ExtraCompilationStep;
-        public delegate void ExtraOutputCreationStepHandler(bool miniExeForDebug);
+        public delegate void ExtraOutputCreationStepHandler(OutputCreationStepArgs args);
         public event ExtraOutputCreationStepHandler ExtraOutputCreationStep;
+        public delegate void CheckGameScriptsHandler(GenericMessagesArgs args);
+        public event CheckGameScriptsHandler CheckGameScripts;
 
 		public const string BUILT_IN_HEADER_FILE_NAME = "_BuiltInScriptHeader.ash";
         public const string OUTPUT_DIRECTORY = "Compiled";
         public const string DATA_OUTPUT_DIRECTORY = "Data"; // subfolder in OUTPUT_DIRECTORY for data file outputs
         public const string DEBUG_OUTPUT_DIRECTORY = "_Debug";
-        //public const string DEBUG_EXE_FILE_NAME = "_debug.exe";
         public const string GAME_FILE_NAME = "Game.agf";
 		public const string BACKUP_EXTENSION = "bak";
         public const string OLD_GAME_FILE_NAME = "ac2game.dta";
@@ -101,8 +104,16 @@ namespace AGS.Editor
          * 3.6.0.20       - Settings.GameTextEncoding, Settings.UseOldKeyboardHandling;
          * 3.6.1.2        - GUIListBox.Translated property moved to GUIControl parent
          * 3.6.1.3        - RuntimeSetup.TextureCache, SoundCache
+         * 3.6.1.9        - Settings.ScaleCharacterSpriteOffsets
+         * 3.6.1.10       - SetRestartPoint() is no longer auto called in the engine,
+         *                  add one into the global script when importing older games.
+         * 3.6.2          - Character.TurnWhenFacing, Settings.UseOldVoiceClipNaming,
+         *                  ScriptModules for interaction/event lists,
+         *                  GlobalVariable may be of array type.
+         * 3.6.2.2        - Button.WrapText, TextPadding.
+         * 3.6.2.6        - Settings.GameFPS.
         */
-        public const int    LATEST_XML_VERSION_INDEX = 3060103;
+        public const int    LATEST_XML_VERSION_INDEX = 3060206;
         /*
          * LATEST_USER_DATA_VERSION is the last version of the user data file that used a
          * 4-point-4-number string to identify the version of AGS that saved the file.
@@ -136,7 +147,8 @@ namespace AGS.Editor
 
         public readonly string[] RestrictedGameDirectories = new string[]
         {
-            OUTPUT_DIRECTORY, DEBUG_OUTPUT_DIRECTORY, AudioClip.AUDIO_CACHE_DIRECTORY,
+            OUTPUT_DIRECTORY, DEBUG_OUTPUT_DIRECTORY,
+            Components.AudioComponent.AUDIO_CACHE_DIRECTORY,
             Components.SpeechComponent.SPEECH_DIRECTORY
         };
 
@@ -148,6 +160,7 @@ namespace AGS.Editor
         private Tasks _tasks = new Tasks();
         private IEngineCommunication _engineComms = new NamedPipesEngineCommunication();
         private DebugController _debugger;
+        private ColorMapper _colorMapper;
 		private bool _applicationStarted = false;
         private FileSystemWatcher _fileWatcher = null;
         private FileStream _lockFile = null;
@@ -271,6 +284,11 @@ namespace AGS.Editor
             get { return _debugger; }
         }
 
+        public ColorMapper ColorMapper
+        {
+            get { return _colorMapper; }
+        }
+
 		public bool ApplicationStarted
 		{
             get { return _applicationStarted; }
@@ -291,6 +309,9 @@ namespace AGS.Editor
                 // this is an optional folder that might have user data in
                 // the parent folder, so don't try too hard to force this
             }
+
+            _colorMapper = new ColorMapper(this);
+            AGSColor.ColorMapper = _colorMapper;
 
             _game = new Game();
             _debugger = new DebugController(_engineComms);
@@ -327,22 +348,27 @@ namespace AGS.Editor
         {
             // Test for a valid config file, in case of corrupt config
             // delete the file and notify the user that the prefs will be reset.
+            AppSettings appSettings;
+            string configFileName = null;
             try
             {
-                ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.PerUserRoamingAndLocal);
+                var cfg = ConfigurationManager.OpenExeConfiguration(ConfigurationUserLevel.PerUserRoamingAndLocal);
+                configFileName = cfg.FilePath;
+                appSettings = new AppSettings();
             }
             catch (ConfigurationErrorsException ex)
             {
-                string filename = ex.Filename;
+                string filename = !string.IsNullOrEmpty(ex.Filename) ? ex.Filename : configFileName;
                 Factory.GUIController.ShowMessage("Editor's configuration is corrupt and cannot be loaded. " +
                         "This could happen because of an improper program exit, a disk malfunction, or an invalid file edit. " +
                         "The configuration file will be deleted and user preferences reset to allow Editor start." +
-                        "\n\n\nConfiguration file's location: " + filename,
+                        "\n\n\nConfiguration file's location: " + (!string.IsNullOrEmpty(filename) ? configFileName : "(undefined)"),
                         MessageBoxIcon.Error);
                 Utilities.TryDeleteFile(filename);
+                appSettings = new AppSettings();
             }
 
-            _applicationSettings = new AppSettings();
+            _applicationSettings = appSettings;
         }
 
         private void _debugger_BreakAtLocation(DebugCallStack callStack)
@@ -814,6 +840,10 @@ namespace AGS.Editor
             {
                 preprocessor.DefineMacro("NEW_KEYINPUT_API", "1");
             }
+            if (_game.UnicodeMode)
+            {
+                preprocessor.DefineMacro("UNICODE", "1");
+            }
             // Define Script API level macros
             foreach (ScriptAPIVersion v in Enum.GetValues(typeof(ScriptAPIVersion)))
             {
@@ -833,15 +863,53 @@ namespace AGS.Editor
             }
         }
 
-		/// <summary>
-		/// Preprocesses and then compiles the script using the supplied headers.
-		/// </summary>
-		public void CompileScript(Script script, List<Script> headers, CompileMessages errors)
-		{
-			IPreprocessor preprocessor = CompilerFactory.CreatePreprocessor(AGS.Types.Version.AGS_EDITOR_VERSION);
-			DefineMacrosAccordingToGameSettings(preprocessor);
+        private void DefineMacrosFromCompiler(IPreprocessor preprocessor, AGS.Native.IScriptCompiler compiler)
+        {
+            var exts = compiler.GetExtensions();
+            foreach (var ext in exts)
+            {
+                preprocessor.DefineMacro("SCRIPT_EXT_" + ext, "1");
+            }
+        }
 
-			List<string> preProcessedCode = new List<string>();
+        private ScriptCompilerOptions GetScriptCompileOptions(Game game)
+        {
+            // Set up compiler options
+            ScriptCompilerOptions options =
+                ScriptCompilerOptions.AutoExportFunctions |
+                ScriptCompilerOptions.LineNumbers;
+
+            if (game.Settings.LeftToRightPrecedence)
+                options = options | ScriptCompilerOptions.LeftToRightPrecendence;
+            if ((!game.Settings.EnforceNewStrings))
+                options = options | ScriptCompilerOptions.OldStrings;
+            if (game.UnicodeMode)
+                options = options | ScriptCompilerOptions.UTF8;
+
+            return options;
+        }
+
+        /// <summary>
+        /// Preprocesses and then compiles the script prepended with the supplied headers.
+        /// Warnings and errors are collected in 'messages'.
+        /// Will _not_ throw whenever compiling results in an error.
+        /// </summary>
+        public void CompileScript(AGS.Native.IScriptCompiler compiler, Script script, List<Script> headers, CompileMessages messages)
+		{
+            // Clear up previous data, if present
+            if (script.CompiledData != null)
+            {
+                script.CompiledData.Dispose();
+                script.CompiledData = null;
+            }
+
+            messages = messages ?? new CompileMessages();
+
+            IPreprocessor preprocessor = CompilerFactory.CreatePreprocessor(AGS.Types.Version.AGS_EDITOR_VERSION);
+			DefineMacrosAccordingToGameSettings(preprocessor);
+            DefineMacrosFromCompiler(preprocessor, compiler);
+
+            List<string> preProcessedCode = new List<string>();
 			foreach (Script header in headers)
 			{
 				preProcessedCode.Add(preprocessor.Preprocess(header.Text, header.FileName));
@@ -849,47 +917,56 @@ namespace AGS.Editor
 
 			preProcessedCode.Add(preprocessor.Preprocess(script.Text, script.FileName));
 
-#if DEBUG
-			// TODO: REMOVE BEFORE DISTRIBUTION
-/*			if (true)
-			{
-                string wholeScript = string.Join("\n", preProcessedCode.ToArray());
-				IScriptCompiler compiler = CompilerFactory.CreateScriptCompiler();
-				CompileResults output = compiler.CompileScript(wholeScript);
-				preprocessor.Results.AddRange(output);
-			}*/
-#endif
-
 			if (preprocessor.Results.Count > 0)
 			{
 				foreach (AGS.CScript.Compiler.Error error in preprocessor.Results)
 				{
-					CompileError newError = new CompileError(error.Message, error.ScriptName, error.LineNumber);
-					if (errors == null)
-					{
-						throw newError;
-					}
-					errors.Add(newError);
+                    messages.Add(new CompileError(error.Message, error.ScriptName, error.LineNumber));
 				}
-			}
-			else
-			{
-				Factory.NativeProxy.CompileScript(script, preProcessedCode.ToArray(), _game);
-			}
-		}
+
+                // If the preprocessor has found any errors then don't attempt compiling proper
+                if (messages.HasErrors)
+                    return;
+            }
+
+            script.CompiledData =
+                compiler.CompileScript(script.FileName, preProcessedCode.ToArray(), GetScriptCompileOptions(_game), messages);
+        }
+
+        /// <summary>
+        /// Preprocesses and then compiles the script prepended the supplied headers.
+        /// Retrieves script compiler from AGS.Native. If compiler is not found,
+        /// reports error and bails out early.
+        /// Warnings and errors are collected in 'messages'.
+        /// Will _not_ throw whenever compiling results in an error.
+        /// </summary>
+        public void CompileScript(Script script, List<Script> headers, CompileMessages messages)
+        {
+            var compiler = Factory.NativeProxy.GetEmbeddedScriptCompilers().FirstOrDefault();
+            if (compiler == null)
+            {
+                messages.Add(new CompileError($"Script compiler is not available. Incomplete AGS Editor installation?"));
+                return;
+            }
+
+            CompileScript(compiler, script, headers, messages);
+        }
 
         private Script CompileDialogs(CompileMessages errors, bool rebuildAll)
         {
             DialogScriptConverter dialogConverter = new DialogScriptConverter();
             string dialogScriptsText = dialogConverter.ConvertGameDialogScripts(_game, errors, rebuildAll);
             Script dialogScripts = new Script(Script.DIALOG_SCRIPTS_FILE_NAME, dialogScriptsText, false);
-            Script globalScript = _game.RootScriptFolder.GetScriptByFileName(Script.GLOBAL_SCRIPT_FILE_NAME, true);
-            if (!System.Text.RegularExpressions.Regex.IsMatch(globalScript.Text, @"function\s+dialog_request\s*\("))
+
+            // A dialog_request must exist in the global script, otherwise
+            // the dialogs script fails to load at run-time
+            // TODO: check if it's still true, and is necessary!
+            Script script = CurrentGame.RootScriptFolder.GetScriptByFileName(Script.GLOBAL_SCRIPT_FILE_NAME, true);
+            if (script != null)
             {
-                // A dialog_request must exist in the global script, otherwise
-                // the dialogs script fails to load at run-time
-                globalScript.Text += Environment.NewLine + "function dialog_request(int param) {" + Environment.NewLine + "}";
+                script.Text = ScriptGeneration.InsertFunction(script.Text, "dialog_request", "int param");
             }
+
             return dialogScripts;
         }
 
@@ -917,7 +994,7 @@ namespace AGS.Editor
                 {
                     headers.Add(scripts.Header);
                     CompileScript(scripts.Script, headers, errors);
-                    _game.ScriptsToCompile.Add(scripts);					
+                    _game.ScriptsToCompile.Add(scripts);
                 }
 
                 CompileScript(dialogScripts, headers, errors);
@@ -928,21 +1005,28 @@ namespace AGS.Editor
                 errorToReturn = ex;
             }
 
-            if (ExtraCompilationStep != null)
-            {
-                ExtraCompilationStep(errors);
-            }
+            ExtraCompilationStep?.Invoke(new CompilationStepArgs(_game.ScriptsToCompile, errors));
+
+            RunGameScriptChecks(errors);
 
             return errorToReturn;
         }
 
-        private void DeleteAnyExistingSplitResourceFiles()
+        /// <summary>
+        /// Runs few optional script checks.
+        /// </summary>
+        private void RunGameScriptChecks(CompileMessages errors)
         {
-            string dir = Path.Combine(OUTPUT_DIRECTORY, DATA_OUTPUT_DIRECTORY);
-            foreach (string fileName in Utilities.GetDirectoryFileList(dir, this.BaseGameFileName + ".0*"))
+            // Update autocomplete for all the script modules, if necessary
+            // TODO: this is not a ideal solution, as it's likely duplicating script parsing by the script compiler
+            // if done right after the compilation. Search for a better way later?
+            foreach (ScriptAndHeader scripts in _game.RootScriptFolder.AllItemsFlat)
             {
-                Utilities.TryDeleteFile(fileName);
+                if (!scripts.Script.AutoCompleteData.Populated)
+                    AutoComplete.ConstructCache(scripts.Script, null);
             }
+
+            CheckGameScripts.Invoke(new GenericMessagesArgs(errors));
         }
 
         private void CreateAudioVOXFile(bool forceRebuild)
@@ -988,6 +1072,10 @@ namespace AGS.Editor
             var buildNames = Factory.AGSEditor.CurrentGame.WorkspaceState.GetLastBuildGameFiles();
             foreach (IBuildTarget target in BuildTargetsInfo.GetSelectedBuildTargets())
             {
+                // Primary cleanup
+                target.DeleteMainGameData(Factory.AGSEditor.BaseGameFileName);
+
+                // Old files cleanup (if necessary)
                 string oldName;
                 if (!buildNames.TryGetValue(target.Name, out oldName)) continue;
                 if (!string.IsNullOrWhiteSpace(oldName) && oldName != Factory.AGSEditor.BaseGameFileName)
@@ -998,7 +1086,7 @@ namespace AGS.Editor
             targetDataFile.Build(errors, forceRebuild); // ensure that data file is built first
             if (ExtraOutputCreationStep != null)
             {
-                ExtraOutputCreationStep(false);
+                ExtraOutputCreationStep(new OutputCreationStepArgs(false, errors));
             }
 
             // TODO: As of now the build targets other than DataFile and Debug do DEPLOYMENT rather than BUILDING
@@ -1038,19 +1126,13 @@ namespace AGS.Editor
 
         private void RunPreCompilationChecks(CompileMessages errors)
         {
-            if ((_game.LipSync.Type == LipSyncType.PamelaVoiceFiles) &&
-                (_game.Settings.SpeechStyle == SpeechStyle.Lucasarts))
-            {
-                errors.Add(new CompileError("Voice lip-sync cannot be used with Lucasarts-style speech"));
-            }
-
             if (_game.PlayerCharacter == null)
             {
                 errors.Add(new CompileError("No character has been set as the player character"));
             }
             else if (_game.FindRoomByID(_game.PlayerCharacter.StartingRoom) == null)
             {
-                errors.Add(new CompileError("The game is set to start in room " + _game.PlayerCharacter.StartingRoom + " which does not exist"));
+                errors.Add(new CompileError($"The player character {_game.PlayerCharacter.ScriptName} has StartingRoom set to room {_game.PlayerCharacter.StartingRoom} which does not exist"));
             }
 
             if ((_game.Settings.ColorDepth == GameColorDepth.Palette) &&
@@ -1244,6 +1326,9 @@ namespace AGS.Editor
             string oldName;
             if (buildNames.TryGetValue(target.Name, out oldName))
             {
+                // Primary cleanup
+                target.DeleteMainGameData(Factory.AGSEditor.BaseGameFileName);
+                // Old files cleanup (if necessary)
                 if (!string.IsNullOrWhiteSpace(oldName) && oldName != Factory.AGSEditor.BaseGameFileName)
                     target.DeleteMainGameData(oldName);
             }
@@ -1251,7 +1336,7 @@ namespace AGS.Editor
             target.Build(errors, false);
             if (ExtraOutputCreationStep != null)
             {
-                ExtraOutputCreationStep(true);
+                ExtraOutputCreationStep(new OutputCreationStepArgs(true, errors));
             }
 
             buildNames[target.Name] = Factory.AGSEditor.BaseGameFileName;
@@ -1268,47 +1353,6 @@ namespace AGS.Editor
             {
                 errors.Add(new CompileError("Unexpected error: " + ex.Message));
             }
-        }
-
-        private string[] ConstructFileListForEXE()
-        {
-            List<string> files = new List<string>();
-            Utilities.AddAllMatchingFiles(files, "preload.pcx");
-            Utilities.AddAllMatchingFiles(files, SPRITE_INDEX_FILE_NAME);
-            foreach (AudioClip clip in _game.RootAudioClipFolder.GetAllAudioClipsFromAllSubFolders())
-            {
-                if (clip.BundlingType == AudioFileBundlingType.InGameEXE)
-                {
-                    files.Add(clip.CacheFileName);
-                }
-            }
-            Utilities.AddAllMatchingFiles(files, "flic*.fl?");
-            Utilities.AddAllMatchingFiles(files, COMPILED_DTA_FILE_NAME);
-            Utilities.AddAllMatchingFiles(files, "agsfnt*.ttf");
-            Utilities.AddAllMatchingFiles(files, "agsfnt*.wfn");
-            Utilities.AddAllMatchingFiles(files, SPRITE_FILE_NAME);
-            foreach (UnloadedRoom room in _game.RootRoomFolder.AllItemsFlat)
-            {
-                if (File.Exists(room.FileName))
-                {
-                    files.Add(room.FileName);
-                }
-            }
-            Utilities.AddAllMatchingFiles(files, "*.ogv");
-            return files.ToArray();
-        }
-
-        public void SetMODMusicFlag()
-        {
-            foreach (AudioClip clip in _game.RootAudioClipFolder.GetAllAudioClipsFromAllSubFolders())
-            {
-                if (clip.FileType == AudioClipFileType.MOD)
-                {
-                    _game.Settings.HasMODMusic = true;
-                    return;
-                }
-            }
-            _game.Settings.HasMODMusic = false;
         }
 
 		public bool AboutToDeleteSprite(int spriteNumber)
@@ -1344,7 +1388,12 @@ namespace AGS.Editor
             }
         }
 
-        public bool SaveGameFiles()
+        /// <summary>
+        /// Tests if the Editor can save the game right now.
+        /// Is allowed to show error messages in the process.
+        /// Returns the result.
+        /// </summary>
+        public bool TestIfCanSaveNow()
         {
             if (AttemptToSaveGame != null)
             {
@@ -1354,6 +1403,15 @@ namespace AGS.Editor
                 {
                     return false;
                 }
+            }
+            return true;
+        }
+
+        public bool SaveGameFiles()
+        {
+            if (!TestIfCanSaveNow())
+            {
+                return false;
             }
 
 			PreSaveGameEventArgs evArgs = new PreSaveGameEventArgs();
@@ -1415,7 +1473,7 @@ namespace AGS.Editor
             return result;
         }
 
-        private void WriteCustomPathToConfig(string section, string key, string cfg_path, bool use_custom_path, string custom_path)
+        private string CustomPathForConfig(bool use_custom_path, string custom_path)
         {
             string path_value = ""; // no value
             if (use_custom_path)
@@ -1425,7 +1483,7 @@ namespace AGS.Editor
                 else
                     path_value = custom_path;
             }
-            NativeProxy.WritePrivateProfileString(section, key, path_value, cfg_path);
+            return path_value;
         }
 
         private static string GetGfxDriverConfigID(GraphicsDriver driver)
@@ -1455,81 +1513,74 @@ namespace AGS.Editor
         /// <summary>
         /// Writes the config file using particular game Settings and DefaultSetup options.
         /// </summary>
-		public void WriteConfigFile(string configFilePath, bool resetFile = true)
+		public void WriteConfigFile(string configFilePath, RuntimeSetup setup, bool resetFile = true)
 		{
             if (resetFile)
                 Utilities.TryDeleteFile(configFilePath);
 
-            if (_game.Settings.LetterboxMode)
-            {
-                NativeProxy.WritePrivateProfileString("misc", "defaultres", ((int)_game.Settings.LegacyLetterboxResolution).ToString(), configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "letterbox", "1", configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "game_width", null, configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "game_height", null, configFilePath);
-            }
+            var sections = new Dictionary<string, Dictionary<string, string>>();
+            sections.Add("graphics", new Dictionary<string, string>());
+            sections.Add("language", new Dictionary<string, string>());
+            sections.Add("misc", new Dictionary<string, string>());
+            sections.Add("mouse", new Dictionary<string, string>());
+            sections.Add("sound", new Dictionary<string, string>());
+            sections.Add("touch", new Dictionary<string, string>());
+
+            sections["graphics"]["driver"] = GetGfxDriverConfigID(setup.GraphicsDriver);
+            sections["graphics"]["windowed"] = setup.Windowed ? "1" : "0";
+            sections["graphics"]["fullscreen"] = setup.FullscreenDesktop ? "full_window" : "desktop";
+            if (setup.GameScaling == GameScaling.Integer)
+                sections["graphics"]["window"] =
+                    String.Format("x{0}", setup.GameScalingMultiplier);
             else
-            {
-                NativeProxy.WritePrivateProfileString("misc", "defaultres", null, configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "letterbox", null, configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "game_width", _game.Settings.CustomResolution.Width.ToString(), configFilePath);
-                NativeProxy.WritePrivateProfileString("misc", "game_height", _game.Settings.CustomResolution.Height.ToString(), configFilePath);
-            }
-			NativeProxy.WritePrivateProfileString("misc", "gamecolordepth", (((int)_game.Settings.ColorDepth) * 8).ToString(), configFilePath);
+                sections["graphics"]["window"] = "desktop";
 
-            NativeProxy.WritePrivateProfileString("graphics", "driver", GetGfxDriverConfigID(_game.DefaultSetup.GraphicsDriver), configFilePath);
-            NativeProxy.WritePrivateProfileString("graphics", "windowed", _game.DefaultSetup.Windowed ? "1" : "0", configFilePath);
-            NativeProxy.WritePrivateProfileString("graphics", "fullscreen",
-                _game.DefaultSetup.FullscreenDesktop ? "full_window" : "desktop", configFilePath);
-            if (_game.DefaultSetup.GameScaling == GameScaling.Integer)
-                NativeProxy.WritePrivateProfileString("graphics", "window",
-                    String.Format("x{0}", _game.DefaultSetup.GameScalingMultiplier), configFilePath);
-            else
-                NativeProxy.WritePrivateProfileString("graphics", "window", "desktop", configFilePath);
+            sections["graphics"]["game_scale_fs"] = MakeGameScalingConfig(setup.FullscreenGameScaling);
+            sections["graphics"]["game_scale_win"] = MakeGameScalingConfig(setup.GameScaling);
 
-            NativeProxy.WritePrivateProfileString("graphics", "game_scale_fs", MakeGameScalingConfig(_game.DefaultSetup.FullscreenGameScaling), configFilePath);
-            NativeProxy.WritePrivateProfileString("graphics", "game_scale_win", MakeGameScalingConfig(_game.DefaultSetup.GameScaling), configFilePath);
-
-            NativeProxy.WritePrivateProfileString("graphics", "filter", _game.DefaultSetup.GraphicsFilter, configFilePath);
-            NativeProxy.WritePrivateProfileString("graphics", "vsync", _game.DefaultSetup.VSync ? "1" : "0", configFilePath);
-            NativeProxy.WritePrivateProfileString("misc", "antialias", _game.DefaultSetup.AAScaledSprites ? "1" : "0", configFilePath);
+            sections["graphics"]["filter"] = setup.GraphicsFilter;
+            sections["graphics"]["vsync"] = setup.VSync ? "1" : "0";
+            sections["graphics"]["antialias"] = setup.AAScaledSprites ? "1" : "0";
             bool render_at_screenres = _game.Settings.RenderAtScreenResolution == RenderAtScreenResolution.UserDefined ?
-                _game.DefaultSetup.RenderAtScreenResolution : _game.Settings.RenderAtScreenResolution == RenderAtScreenResolution.True;
-            NativeProxy.WritePrivateProfileString("graphics", "render_at_screenres", render_at_screenres ? "1" : "0", configFilePath);
+                setup.RenderAtScreenResolution : _game.Settings.RenderAtScreenResolution == RenderAtScreenResolution.True;
+            sections["graphics"]["render_at_screenres"] = render_at_screenres ? "1" : "0";
             string[] rotation_str = new string[] { "unlocked", "portrait", "landscape" };
-            NativeProxy.WritePrivateProfileString("graphics", "rotation", rotation_str[(int)_game.DefaultSetup.Rotation], configFilePath);
+            sections["graphics"]["rotation"] = rotation_str[(int)setup.Rotation];
 
-            bool audio_enabled = _game.DefaultSetup.DigitalSound != RuntimeAudioDriver.Disabled;
-            NativeProxy.WritePrivateProfileString("sound", "enabled", audio_enabled ? "1" : "0", configFilePath);
-            NativeProxy.WritePrivateProfileString("sound", "driver", "", configFilePath); // always default
-            NativeProxy.WritePrivateProfileString("sound", "usespeech", _game.DefaultSetup.UseVoicePack ? "1" : "0", configFilePath);
+            bool audio_enabled = setup.DigitalSound != RuntimeAudioDriver.Disabled;
+            sections["sound"]["enabled"] = audio_enabled ? "1" : "0";
+            sections["sound"]["driver"] = ""; // always default
+            sections["sound"]["usespeech"] = setup.UseVoicePack ? "1" : "0";
 
-            NativeProxy.WritePrivateProfileString("language", "translation", _game.DefaultSetup.Translation, configFilePath);
-            NativeProxy.WritePrivateProfileString("mouse", "auto_lock", _game.DefaultSetup.AutoLockMouse ? "1" : "0", configFilePath);
-            NativeProxy.WritePrivateProfileString("mouse", "speed", _game.DefaultSetup.MouseSpeed.ToString(CultureInfo.InvariantCulture), configFilePath);
+            sections["language"]["translation"] = setup.Translation;
+            sections["mouse"]["auto_lock"] = setup.AutoLockMouse ? "1" : "0";
+            sections["mouse"]["speed"] = setup.MouseSpeed.ToString(CultureInfo.InvariantCulture);
 
             // Touch input
             string[] emulate_mouse_str = new string[] { "off", "one_finger", "two_fingers" };
-            NativeProxy.WritePrivateProfileString("touch", "emul_mouse_mode",
-                emulate_mouse_str[(int)_game.DefaultSetup.TouchToMouseEmulation], configFilePath);
-            NativeProxy.WritePrivateProfileString("touch", "emul_mouse_relative",
-                ((int)_game.DefaultSetup.TouchToMouseMotionMode).ToString(), configFilePath);
+            sections["touch"]["emul_mouse_mode"] =
+                emulate_mouse_str[(int)setup.TouchToMouseEmulation];
+            sections["touch"]["emul_mouse_relative"] =
+                ((int)setup.TouchToMouseMotionMode).ToString();
 
             // Note: the cache sizes are written in KB (while we have it in MB on the editor pane)
-            NativeProxy.WritePrivateProfileString("graphics", "sprite_cache_size", (_game.DefaultSetup.SpriteCacheSize * 1024).ToString(), configFilePath);
-            NativeProxy.WritePrivateProfileString("graphics", "texture_cache_size", (_game.DefaultSetup.TextureCacheSize * 1024).ToString(), configFilePath);
-            NativeProxy.WritePrivateProfileString("sound", "cache_size", (_game.DefaultSetup.SoundCacheSize * 1024).ToString(), configFilePath);
+            sections["graphics"]["sprite_cache_size"] = (setup.SpriteCacheSize * 1024).ToString();
+            sections["graphics"]["texture_cache_size"] = (setup.TextureCacheSize * 1024).ToString();
+            sections["sound"]["cache_size"] = (setup.SoundCacheSize * 1024).ToString();
 
-            WriteCustomPathToConfig("misc", "user_data_dir", configFilePath, _game.DefaultSetup.UseCustomSavePath, _game.DefaultSetup.CustomSavePath);
-            WriteCustomPathToConfig("misc", "shared_data_dir", configFilePath, _game.DefaultSetup.UseCustomAppDataPath, _game.DefaultSetup.CustomAppDataPath);
-            NativeProxy.WritePrivateProfileString("misc", "titletext", _game.DefaultSetup.TitleText, configFilePath);
+            sections["misc"]["user_data_dir"] = CustomPathForConfig(setup.UseCustomSavePath, setup.CustomSavePath);
+            sections["misc"]["shared_data_dir"] = CustomPathForConfig(setup.UseCustomAppDataPath, setup.CustomAppDataPath);
+            sections["misc"]["titletext"] = setup.TitleText;
 
             if(_game.Settings.DebugMode) // Do not write show_fps in a release build, this is only intended for the developer
             {
-                NativeProxy.WritePrivateProfileString("misc", "show_fps", _game.DefaultSetup.ShowFPS ? "1" : "0", configFilePath);
+                sections["misc"]["show_fps"] = setup.ShowFPS ? "1" : "0";
             }
+
+            NativeProxy.Instance.WriteIniFile(configFilePath, sections, true);
         }
 
-        private void SaveUserDataFile()
+        public void SaveUserDataFile()
         {
             StringWriter sw = new StringWriter();
             XmlTextWriter writer = new XmlTextWriter(sw);

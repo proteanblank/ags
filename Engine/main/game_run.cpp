@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -61,17 +61,17 @@
 #include "main/update.h"
 #include "media/audio/audio_system.h"
 #include "platform/base/agsplatformdriver.h"
-#include "plugin/agsplugin_evts.h"
 #include "plugin/plugin_engine.h"
 #include "script/script.h"
 #include "script/script_runtime.h"
 
 using namespace AGS::Common;
+using namespace AGS::Engine;
 
 extern int mouse_on_iface;   // mouse cursor is over this interface
 extern int ifacepopped;
 extern volatile bool want_exit, abort_engine;
-extern int proper_exit,our_eip;
+extern int proper_exit;
 extern int displayed_room, starting_room, in_new_room, new_room_was;
 extern ScriptSystem scsystem;
 extern GameSetupStruct game;
@@ -94,8 +94,11 @@ extern char check_dynamic_sprites_at_exit;
 // Checks if user interface should remain disabled for now
 static bool ShouldStayInWaitMode();
 
-static size_t numEventsAtStartOfFunction;
+float fps = std::numeric_limits<float>::quiet_NaN();
 static auto t1 = AGS_Clock::now();  // timer for FPS // ... 't1'... how very appropriate.. :)
+unsigned int loopcounter=0;
+static unsigned int lastcounter=0;
+static size_t numEventsAtStartOfFunction; // CHECKME: research and document this
 
 #define UNTIL_ANIMEND   1
 #define UNTIL_MOVEEND   2
@@ -107,21 +110,94 @@ static auto t1 = AGS_Clock::now();  // timer for FPS // ... 't1'... how very app
 #define UNTIL_INTISNEG  8
 #define UNTIL_ANIMBTNEND 9
 
-// Following struct instructs the engine to run game loops until
-// certain condition is not fullfilled.
-struct RestrictUntil
-{
-    int type = 0; // type of condition, UNTIL_* constant
-    int disabled_for = 0; // FOR_* constant
-    // pointer to the test variable
-    const void *data_ptr = nullptr;
-    // other values used for a test, depend on type
-    int data1 = 0;
-    int data2 = 0;
-} restrict_until;
+static void GameTick();
 
-unsigned int loopcounter=0;
-static unsigned int lastcounter=0;
+// Game state instructs the engine to run game loops until
+// certain condition is not fullfilled.
+class GameLoopUntilState : public GameState
+{
+public:
+    GameLoopUntilState(int untilwhat, const void* data_ptr = nullptr, int data1 = 0, int data2 = 0)
+        : _untilType(untilwhat)
+        , _disabledFor(FOR_EXITLOOP)
+        , _dataPtr(data_ptr)
+        , _data1(data1)
+        , _data2(data2)
+    {
+    }
+
+    int GetUntilType() const { return _untilType; }
+    int GetDisabledFor() const { return _disabledFor; }
+    const void *GetDataPtr() const { return _dataPtr; }
+    int GetData1() const { return _data1; }
+    int GetData2() const { return _data2; }
+
+    // Begin the state, initialize and prepare any resources
+    void Begin() override
+    {
+        assert(_disabledFor == FOR_EXITLOOP);
+        play.disabled_user_interface++;
+        // If GUI looks change when disabled, then mark all of them for redraw
+        GUIE::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
+
+        // Only change the mouse cursor if it hasn't been specifically changed first
+        // (or if it's speech, always change it)
+        if (((cur_cursor == cur_mode) || (_untilType == UNTIL_NOOVERLAY)) &&
+            (cur_mode != CURS_WAIT))
+        {
+            set_mouse_cursor(CURS_WAIT);
+        }
+    }
+    // End the state, release all resources
+    void End() override
+    {
+        set_our_eip(77);
+        set_default_cursor();
+        // If GUI looks change when disabled, then mark all of them for redraw
+        GUIE::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
+        play.disabled_user_interface--;
+
+        switch (_disabledFor)
+        {
+        case FOR_EXITLOOP:
+            break;
+        // These other types are obsolete since at least v2.5
+        // FOR_SCRIPT is for v2.1 and earlier.
+        // case FOR_ANIMATION:
+        //     run_animation((FullAnimation*)user_disabled_data2,user_disabled_data3);
+        //     break;
+        // case FOR_SCRIPT:
+        //     break;
+        default:
+            quit("Unknown reason to disable user input in the Wait state.");
+            break;
+        }
+    }
+    // Draw the state
+    void Draw() override
+    {
+    }
+    // Update the state during a game tick
+    bool Run() override
+    {
+        GameTick();
+        return ShouldStayInWaitMode();
+    }
+
+private:
+    int _untilType = 0; // type of condition, UNTIL_* constant
+    int _disabledFor = 0; // FOR_* constant
+    // pointer to the test variable
+    const void *_dataPtr = nullptr;
+    // other values used for a test, depend on type
+    int _data1 = 0;
+    int _data2 = 0;
+};
+
+// TODO: this is a global variable, because this state is checked during update;
+// find a way to refactor this and not have it here.
+std::unique_ptr<GameLoopUntilState> restrict_until;
+
 
 static void ProperExit()
 {
@@ -133,8 +209,7 @@ static void ProperExit()
 static void game_loop_check_problems_at_start()
 {
     if ((in_enters_screen != 0) & (displayed_room == starting_room))
-        quit("!A text script run in the Player Enters Screen event caused the\n"
-        "screen to be updated. If you need to use Wait(), do so in After Fadein");
+        quit("!A text script run in the Player Enters Screen event caused the screen to be updated. If you need to use Wait(), do so in After Fadein");
     if ((in_enters_screen != 0) && (done_es_error == 0)) {
         debug_script_warn("Wait() was used in Player Enters Screen - use Enters Screen After Fadein instead");
         done_es_error = 1;
@@ -149,8 +224,8 @@ static void game_loop_do_early_script_update()
     if (in_new_room == 0) {
         // Run the room and game script repeatedly_execute
         run_function_on_non_blocking_thread(&repExecAlways);
-        setevent(EV_TEXTSCRIPT, kTS_Repeat);
-        setevent(EV_RUNEVBLOCK, EVB_ROOM, 0, EVROM_REPEXEC);
+        setevent(AGSEvent_Script(kTS_Repeat));
+        setevent(AGSEvent_Interaction(kIntEventType_Room, 0, kRoomEvent_Repexec));
     }
 }
 
@@ -164,13 +239,13 @@ static void game_loop_do_late_script_update()
     }
 }
 
-static int game_loop_check_ground_level_interactions()
+static bool game_loop_check_ground_level_interactions()
 {
     if ((play.ground_level_areas_disabled & GLED_INTERACTION) == 0) {
         // check if he's standing on a hotspot
         int hotspotThere = get_hotspot_at(playerchar->x, playerchar->y);
         // run Stands on Hotspot event
-        setevent(EV_RUNEVBLOCK, EVB_HOTSPOT, hotspotThere, EVHOT_STANDSON);
+        setevent(AGSEvent_Interaction(kIntEventType_Hotspot, hotspotThere, kHotspotEvent_StandOn));
 
         // check current region
         int onRegion = GetRegionIDAtRoom(playerchar->x, playerchar->y);
@@ -200,25 +275,27 @@ static int game_loop_check_ground_level_interactions()
         // if in a Wait loop which is no longer valid (probably
         // because the Region interaction did a NewRoom), abort
         // the rest of the loop
-        if ((restrict_until.type > 0) && (!ShouldStayInWaitMode())) {
+        if ((restrict_until) && (!ShouldStayInWaitMode())) {
             // cancel the Rep Exec and Stands on Hotspot events that
             // we just added -- otherwise the event queue gets huge
             events.resize(numEventsAtStartOfFunction);
-            return 0;
+            return false; // interrupt update
         }
     } // end if checking ground level interactions
 
-    return RETURN_CONTINUE;
+    return true; // continue update
 }
 
 static void lock_mouse_on_click()
 {
-    if (usetup.mouse_auto_lock && scsystem.windowed)
+    // Only update when in windowed mode, as always locked in fullscreen
+    if (usetup.MouseAutoLock && scsystem.windowed != 0)
         Mouse::TryLockToWindow();
 }
 
 static void toggle_mouse_lock()
 {
+    // Only update when in windowed mode, as always locked in fullscreen
     if (scsystem.windowed)
     {
         if (Mouse::IsLockedToWindow())
@@ -228,9 +305,11 @@ static void toggle_mouse_lock()
     }
 }
 
-bool run_service_mb_controls(eAGSMouseButton &out_mbut)
+bool run_service_mb_controls(eAGSMouseButton &out_mbut, Point *out_mpos)
 {
     out_mbut = kMouseNone; // clear the output
+    if (out_mpos)
+        *out_mpos = {};
     if (ags_inputevent_ready() != kInputMouse)
         return false; // there was no mouse event
 
@@ -238,6 +317,8 @@ bool run_service_mb_controls(eAGSMouseButton &out_mbut)
     if (mb_evt.type == SDL_MOUSEBUTTONDOWN)
     {
         out_mbut = sdl_mbut_to_ags_but(mb_evt.button.button);
+        if (out_mpos)
+            *out_mpos = Mouse::SysToGamePos(mb_evt.button.x, mb_evt.button.y);
         lock_mouse_on_click();
     }
     return out_mbut != kMouseNone;
@@ -249,7 +330,7 @@ static int wasongui = 0;
 // Runs default handling of mouse movement, button state, and wheel
 static void check_mouse_state(int &was_mouse_on_iface)
 {
-    mouse_on_iface = gui_on_mouse_move();
+    mouse_on_iface = gui_on_mouse_move(mousex, mousey);
     was_mouse_on_iface = mouse_on_iface;
 
     if ((ifacepopped>=0) && (mousey>=guis[ifacepopped].Y+guis[ifacepopped].Height))
@@ -260,22 +341,24 @@ static void check_mouse_state(int &was_mouse_on_iface)
         gui_on_mouse_hold(wasongui, wasbutdown);
     }
     else if ((wasbutdown > kMouseNone) && (!ags_misbuttondown(wasbutdown))) {
-        gui_on_mouse_up(wasongui, wasbutdown);
-        wasbutdown = kMouseNone;
+        eAGSMouseButton mouse_btn_up = wasbutdown;
+        wasbutdown = kMouseNone; // reset before event, avoid recursive call of "mouse up"
+        gui_on_mouse_up(wasongui, mouse_btn_up, mousex, mousey);
     }
 
     int mwheelz = ags_check_mouse_wheel();
     if (mwheelz < 0)
-        setevent (EV_TEXTSCRIPT, kTS_MouseClick, 9);
+        setevent(AGSEvent_Script(kTS_MouseClick, 9, mousex, mousey));
     else if (mwheelz > 0)
-        setevent (EV_TEXTSCRIPT, kTS_MouseClick, 8);
+        setevent(AGSEvent_Script(kTS_MouseClick, 8, mousex, mousey));
 }
 
 // Runs default mouse button handling
 static void check_mouse_controls(const int was_mouse_on_iface)
 {
     eAGSMouseButton mbut;
-    if (run_service_mb_controls(mbut) && mbut > kMouseNone) {
+    Point mpos;
+    if (run_service_mb_controls(mbut, &mpos) && mbut > kMouseNone) {
         check_skip_cutscene_mclick(mbut);
 
         if (play.fast_forward || play.IsIgnoringInput()) { /* do nothing if skipping cutscene or input disabled */ }
@@ -283,25 +366,27 @@ static void check_mouse_controls(const int was_mouse_on_iface)
             play.SetWaitSkipResult(SKIP_MOUSECLICK, mbut);
         }
         else if (play.text_overlay_on > 0) {
-            if (play.cant_skip_speech & SKIP_MOUSECLICK)
+            if (play.speech_skip_style & SKIP_MOUSECLICK)
             {
                 remove_screen_overlay(play.text_overlay_on);
                 play.SetWaitSkipResult(SKIP_MOUSECLICK, mbut);
             }
         }
         else if (!IsInterfaceEnabled()) ;  // blocking cutscene, ignore mouse
-        else if (pl_run_plugin_hooks(AGSE_MOUSECLICK, mbut)) {
+        else if (pl_run_plugin_hooks(kPluginEvt_MouseClick, mbut)) {
             // plugin took the click
             debug_script_log("Plugin handled mouse button %d", mbut);
         }
         else if (was_mouse_on_iface >= 0) {
             if (wasbutdown == kMouseNone) {
-                gui_on_mouse_down(was_mouse_on_iface, mbut);
+                // FIXME: logically should pass recorded mpos.X, mpos.Y, but first must investigate
+                // how that will affect other GUI processing (mouse up and motion)
+                gui_on_mouse_down(was_mouse_on_iface, mbut, mousex, mousey);
             }
             wasongui = was_mouse_on_iface;
             wasbutdown = mbut;
         }
-        else setevent(EV_TEXTSCRIPT, kTS_MouseClick, mbut);
+        else setevent(AGSEvent_Script(kTS_MouseClick, mbut, mpos.X, mpos.Y));
     }
 }
 
@@ -402,30 +487,25 @@ bool run_service_key_controls(KeyInput &out_key)
         quit("!|");
     }
 
-    // debug console
-    if ((agskey == '`') && (play.debug_mode > 0)) {
-        display_console = !display_console;
-        return false;
-    }
-
     if ((agskey == eAGSKeyCodeCtrlE) && (display_fps == kFPS_Forced)) {
         // if --fps paramter is used, Ctrl+E will max out frame rate
         setTimerFps(isTimerFpsMaxed() ? frames_per_second : 1000);
         return false;
     }
 
+    // FIXME: review this command! - practically inconvenient
     if ((agskey == eAGSKeyCodeCtrlD) && (play.debug_mode > 0)) {
         // ctrl+D - show info
-        char infobuf[900];
-        sprintf(infobuf, "In room %d %s[Player at %d, %d (view %d, loop %d, frame %d)%s%s%s",
+        String buffer = String::FromFormat(
+            "In room %d %s[Player at %d, %d (view %d, loop %d, frame %d)%s%s%s",
             displayed_room, (noWalkBehindsAtAll ? "(has no walk-behinds)" : ""), playerchar->x, playerchar->y,
             playerchar->view + 1, playerchar->loop, playerchar->frame,
             (IsGamePaused() == 0) ? "" : "[Game paused.",
             (play.ground_level_areas_disabled == 0) ? "" : "[Ground areas disabled.",
             (IsInterfaceEnabled() == 0) ? "[Game in Wait state" : "");
         for (uint32_t ff = 0; ff<croom->numobj; ff++) {
-            if (ff >= 8) break; // buffer not big enough for more than 7
-            sprintf(&infobuf[strlen(infobuf)],
+            if (ff >= 8) break; // FIXME: measure graphical size instead?
+            buffer.AppendFmt(
                 "[Object %d: (%d,%d) size (%d x %d) on:%d moving:%s animating:%d slot:%d trnsp:%d clkble:%d",
                 ff, objs[ff].x, objs[ff].y,
                 (spriteset.DoesSpriteExist(objs[ff].num) ? game.SpriteInfos[objs[ff].num].Width : 0),
@@ -435,31 +515,31 @@ bool run_service_key_controls(KeyInput &out_key)
                 objs[ff].num, objs[ff].transparent,
                 ((objs[ff].flags & OBJF_NOINTERACT) != 0) ? 0 : 1);
         }
-        DisplayMB(infobuf);
+        DisplayMB(buffer.GetCStr());
         int chd = game.playercharacter;
-        char bigbuffer[STD_BUFFER_SIZE] = "CHARACTERS IN THIS ROOM:[";
+        buffer = "CHARACTERS IN THIS ROOM:[";
         for (int ff = 0; ff < game.numcharacters; ff++) {
             if (game.chars[ff].room != displayed_room) continue;
-            if (strlen(bigbuffer) > 430) {
-                strcat(bigbuffer, "and more...");
-                DisplayMB(bigbuffer);
-                strcpy(bigbuffer, "CHARACTERS IN THIS ROOM (cont'd):[");
+            if (buffer.GetLength() > 430) { // FIXME: why 430? measure graphical size instead?
+                buffer.Append("and more...");
+                DisplayMB(buffer.GetCStr());
+                buffer = "CHARACTERS IN THIS ROOM (cont'd):[";
             }
             chd = ff;
-            sprintf(&bigbuffer[strlen(bigbuffer)],
+            buffer.AppendFmt(
                 "%s (view/loop/frm:%d,%d,%d  x/y/z:%d,%d,%d  idleview:%d,time:%d,left:%d walk:%d anim:%d follow:%d flags:%X wait:%d zoom:%d)[",
                 game.chars[chd].scrname, game.chars[chd].view + 1, game.chars[chd].loop, game.chars[chd].frame,
                 game.chars[chd].x, game.chars[chd].y, game.chars[chd].z,
                 game.chars[chd].idleview, game.chars[chd].idletime, game.chars[chd].idleleft,
-                game.chars[chd].walking, game.chars[chd].animating, game.chars[chd].following,
+                game.chars[chd].walking, game.chars[chd].animating, charextra[chd].following,
                 game.chars[chd].flags, game.chars[chd].wait, charextra[chd].zoom);
         }
-        DisplayMB(bigbuffer);
+        DisplayMB(buffer.GetCStr());
         return false;
     }
 
     if (((agskey == eAGSKeyCodeCtrlV) && (ki.Mod & eAGSModAlt) != 0)
-        && (play.wait_counter < 1) && (play.text_overlay_on == 0) && (restrict_until.type == 0)) {
+        && (play.wait_counter < 1) && (play.text_overlay_on == 0) && (!restrict_until)) {
         // make sure we can't interrupt a Wait()
         // and desync the music to cutscene
         play.debug_mode++;
@@ -494,14 +574,14 @@ static void check_keyboard_controls()
         return;
     }
     // Now check for in-game controls
-    if (pl_run_plugin_hooks(AGSE_KEYPRESS, agskey)) {
+    if (pl_run_plugin_hooks(kPluginEvt_KeyPress, agskey)) {
         // plugin took the keypress
         debug_script_log("Keypress code %d taken by plugin", agskey);
         return;
     }
 
     // skip speech if desired by Speech.SkipStyle
-    if ((play.text_overlay_on > 0) && (play.cant_skip_speech & SKIP_KEYPRESS) &&
+    if ((play.text_overlay_on > 0) && (play.speech_skip_style & SKIP_KEYPRESS) &&
             !IsAGSServiceKey(ki.Key)) {
         // only allow a key to remove the overlay if the icon bar isn't up
         if (IsGamePaused() == 0) {
@@ -534,9 +614,9 @@ static void check_keyboard_controls()
     // it should be either a printable character or one of the textbox control keys
     // TODO: instead of making a preliminary check, just let each gui control
     // test the key and OnKeyPress return if it was handled?
-    if ((all_buttons_disabled < 0) &&
-        ((ki.UChar > 0) || (agskey >= 32) && (agskey <= 255)) ||
-         (agskey == eAGSKeyCodeReturn) || (agskey == eAGSKeyCodeBackspace)) {
+    if ((GUI::Context.DisabledState == kGuiDis_Undefined) &&
+        ((ki.UChar > 0) || ((agskey >= 32) && (agskey <= 255)) ||
+         (agskey == eAGSKeyCodeReturn) || (agskey == eAGSKeyCodeBackspace))) {
         for (int guiIndex = 0; guiIndex < game.numgui; guiIndex++) {
             auto &gui = guis[guiIndex];
 
@@ -553,13 +633,15 @@ static void check_keyboard_controls()
                 if (!guitex->IsEnabled()) { continue; }
                 if (!guitex->IsVisible()) { continue; }
 
-                keywasprocessed = true;
-
                 guitex->OnKeyPress(ki);
+                // Note that the TextBox always steals the key event here, regardless
+                // of whether it had any meaning for control
+                keywasprocessed = true;
 
                 if (guitex->IsActivated) {
                     guitex->IsActivated = false;
-                    setevent(EV_IFACECLICK, guiIndex, controlIndex, 1);
+                    // FIXME: review this, are we abusing "mouse button" arg here in order to pass a different data?
+                    setevent(AGSEvent_GUI(guiIndex, controlIndex, static_cast<eAGSMouseButton>(1)));
                 }
             }
         }
@@ -569,11 +651,11 @@ static void check_keyboard_controls()
         return;
 
     // Built-in key-presses
-    if ((usetup.key_save_game > 0) && (agskey == usetup.key_save_game)) {
-        do_save_game_dialog();
+    if ((usetup.Override.KeySaveGame > 0) && (agskey == usetup.Override.KeySaveGame)) {
+        do_save_game_dialog(0, TOP_SAVESLOT - 1);
         return;
-    } else if ((usetup.key_restore_game > 0) && (agskey == usetup.key_restore_game)) {
-        do_restore_game_dialog();
+    } else if ((usetup.Override.KeyRestoreGame > 0) && (agskey == usetup.Override.KeyRestoreGame)) {
+        do_restore_game_dialog(0, TOP_SAVESLOT - 1);
         return;
     }
 
@@ -583,18 +665,18 @@ static void check_keyboard_controls()
     if (old_keyhandle || (ki.UChar == 0))
     {
         debug_script_log("Running on_key_press keycode %d, mod %d", sckey, sckeymod);
-        setevent(EV_TEXTSCRIPT, kTS_KeyPress, sckey, sckeymod);
+        setevent(AGSEvent_Script(kTS_KeyPress, sckey, sckeymod));
     }
     if (!old_keyhandle && (ki.UChar > 0))
     {
         debug_script_log("Running on_text_input char %s (%d)", ki.Text, ki.UChar);
-        setevent(EV_TEXTSCRIPT, kTS_TextInput, ki.UChar);
+        setevent(AGSEvent_Script(kTS_TextInput, ki.UChar));
     }
 }
 
 // check_controls: checks mouse & keyboard interface
 static void check_controls() {
-    our_eip = 1007;
+    set_our_eip(1007);
 
     sys_evt_process_pending();
 
@@ -606,7 +688,7 @@ static void check_controls() {
     // during which some global vars like mouse_on_iface may change...
     // need to rewrite all this interface interaction ugliness!
     int was_mouse_on_iface;
-    check_mouse_state(was_mouse_on_iface);
+    check_mouse_state(was_mouse_on_iface); // NOTE: this also polls mousewheel
 
     // Handle all the buffered input events
     for (InputType type = ags_inputevent_ready(); type != kInputNone; type = ags_inputevent_ready())
@@ -615,9 +697,9 @@ static void check_controls() {
             check_keyboard_controls();
         else if (type == kInputMouse)
             check_mouse_controls(was_mouse_on_iface);
+        else
+            ags_drop_next_inputevent();
     }
-
-    ags_clear_input_buffer();
 }
 
 static void check_room_edges(size_t numevents_was)
@@ -651,11 +733,11 @@ static void check_room_edges(size_t numevents_was)
 
                     for (int ii = 0; ii < 4; ii++) {
                         if (edgesActivated[ii])
-                            setevent(EV_RUNEVBLOCK, EVB_ROOM, 0, ii);
+                            setevent(AGSEvent_Interaction(kIntEventType_Room, 0, ii));
                     }
             }
     }
-    our_eip = 1008;
+    set_our_eip(1008);
 
 }
 
@@ -701,7 +783,7 @@ static void update_objects_scale()
         update_object_scale(objid);
     }
 
-    for (uint32_t charid = 0; charid < game.numcharacters; ++charid)
+    for (int charid = 0; charid < game.numcharacters; ++charid)
     {
         update_character_scale(charid);
     }
@@ -719,9 +801,10 @@ static void update_cursor_over_gui()
     for (auto &gui : guis)
     {
         if (!gui.IsDisplayed()) continue; // not on screen
+        if (!gui.IsClickable()) continue; // don't update non-clickable
         // Don't touch GUI if "GUIs Turn Off When Disabled"
         if ((game.options[OPT_DISABLEOFF] == kGuiDis_Off) &&
-            (all_buttons_disabled >= 0) &&
+            (GUI::Context.DisabledState >= 0) &&
             (gui.PopupStyle != kGUIPopupNoAutoRemove))
             continue;
         gui.Poll(mousex, mousey);
@@ -790,7 +873,7 @@ static void update_cursor_over_location(int mwasatx, int mwasaty)
         if (__GetLocationType(game_to_data_coord(mousex), game_to_data_coord(mousey), 1) == LOCTYPE_HOTSPOT) {
             int onhs = getloctype_index;
 
-            setevent(EV_RUNEVBLOCK, EVB_HOTSPOT, onhs, EVHOT_MOUSEOVER);
+            setevent(AGSEvent_Interaction(kIntEventType_Hotspot, onhs, kHotspotEvent_MouseOver));
         }
     }
 
@@ -802,7 +885,7 @@ static void game_loop_update_events()
 {
     new_room_was = in_new_room;
     if (in_new_room>0)
-        setevent(EV_FADEIN,0,0,0);
+        setevent({ kAGSEvent_FadeIn });
     in_new_room=0;
     processallevents();
     if ((new_room_was > 0) && (in_new_room == 0)) {
@@ -810,9 +893,9 @@ static void game_loop_update_events()
         // then queue the Enters Screen scripts
         // run these next time round, when it's faded in
         if (new_room_was==2)  // first time enters screen
-            setevent(EV_RUNEVBLOCK, EVB_ROOM, 0, EVROM_FIRSTENTER);
+            setevent(AGSEvent_Interaction(kIntEventType_Room, 0, kRoomEvent_FirstEnter));
         if (new_room_was!=3)   // enters screen after fadein
-            setevent(EV_RUNEVBLOCK, EVB_ROOM, 0, EVROM_AFTERFADEIN);
+            setevent(AGSEvent_Interaction(kIntEventType_Room, 0, kRoomEvent_AfterFadein));
     }
 }
 
@@ -853,13 +936,17 @@ static void game_loop_update_fps()
     }
 }
 
-float get_current_fps() {
+float get_game_fps() {
     // if we have maxed out framerate then return the frame rate we're seeing instead
     // fps must be greater that 0 or some timings will take forever.
     if (isTimerFpsMaxed() && fps > 0.0f) {
         return fps;
     }
     return frames_per_second;
+}
+
+float get_real_fps() {
+    return fps;
 }
 
 void set_loop_counter(unsigned int new_counter) {
@@ -870,9 +957,6 @@ void set_loop_counter(unsigned int new_counter) {
 }
 
 void UpdateGameOnce(bool checkControls, IDriverDependantBitmap *extraBitmap, int extraX, int extraY) {
-
-    int res;
-
     sys_evt_process_pending();
 
     numEventsAtStartOfFunction = events.size();
@@ -882,31 +966,29 @@ void UpdateGameOnce(bool checkControls, IDriverDependantBitmap *extraBitmap, int
     }
 
     ccNotifyScriptStillAlive ();
-    our_eip=1;
+    set_our_eip(1);
 
     game_loop_check_problems_at_start();
 
     // if we're not fading in, don't count the fadeouts
-    if ((play.no_hicolor_fadein) && (game.options[OPT_FADETYPE] == FADE_NORMAL))
+    if ((play.no_hicolor_fadein) && (game.options[OPT_FADETYPE] == kScrTran_Fade))
         play.screen_is_faded_out = 0;
 
-    our_eip = 1014;
+    set_our_eip(1014);
 
     update_gui_disabled_status();
 
-    our_eip = 1004;
+    set_our_eip(1004);
 
     game_loop_do_early_script_update();
     // run this immediately to make sure it gets done before fade-in
     // (player enters screen)
     check_new_room();
 
-    our_eip = 1005;
+    set_our_eip(1005);
 
-    res = game_loop_check_ground_level_interactions();
-    if (res != RETURN_CONTINUE) {
-        return;
-    }
+    if (!game_loop_check_ground_level_interactions())
+        return; // update interrupted
 
     mouse_on_iface=-1;
 
@@ -924,7 +1006,7 @@ void UpdateGameOnce(bool checkControls, IDriverDependantBitmap *extraBitmap, int
     // handle actual input (keys, mouse, and so forth)
     game_loop_check_controls(checkControls);
 
-    our_eip=2;
+    set_our_eip(2);
 
     // do the overall game state update
     game_loop_do_update();
@@ -945,11 +1027,11 @@ void UpdateGameOnce(bool checkControls, IDriverDependantBitmap *extraBitmap, int
     if (!play.fast_forward)
         render_graphics(extraBitmap, extraX, extraY);
 
-    our_eip=6;
+    set_our_eip(6);
 
     game_loop_update_events();
 
-    our_eip=7;
+    set_our_eip(7);
 
     update_polled_stuff();
 
@@ -961,7 +1043,7 @@ void UpdateGameOnce(bool checkControls, IDriverDependantBitmap *extraBitmap, int
     if (play.fast_forward)
         return;
 
-    our_eip=72;
+    set_our_eip(72);
 
     game_loop_update_fps();
 
@@ -982,8 +1064,7 @@ static void UpdateMouseOverLocation()
 {
     // Call GetLocationName - it will internally force a GUI refresh
     // if the result it returns has changed from last time
-    char tempo[STD_BUFFER_SIZE];
-    GetLocationName(game_to_data_coord(mousex), game_to_data_coord(mousey), tempo);
+    GetLocationName(game_to_data_coord(mousex), game_to_data_coord(mousey));
 
     if ((play.get_loc_name_save_cursor >= 0) &&
         (play.get_loc_name_save_cursor != play.get_loc_name_last_time) &&
@@ -1004,30 +1085,33 @@ static void UpdateMouseOverLocation()
 }
 
 // Checks if user interface should remain disabled for now
+// FIXME: should be a private method of GameLoopUntilState,
+// but is called elsewhere for some strange reason;
+// investigate and move to GameLoopUntilState.
 static bool ShouldStayInWaitMode() {
-    if (restrict_until.type == 0)
+    if (!restrict_until)
         quit("end_wait_loop called but game not in loop_until state");
 
-    switch (restrict_until.type)
+    switch (restrict_until->GetUntilType())
     {
     case UNTIL_MOVEEND:
     {
-        short*wkptr = (short*)restrict_until.data_ptr;
+        short*wkptr = (short*)restrict_until->GetDataPtr();
         return !(wkptr[0] < 1);
     }
     case UNTIL_CHARIS0:
     {
-        char*chptr = (char*)restrict_until.data_ptr;
+        char*chptr = (char*)restrict_until->GetDataPtr();
         return !(chptr[0] == 0);
     }
     case UNTIL_NEGATIVE:
     {
-        short*wkptr = (short*)restrict_until.data_ptr;
+        short*wkptr = (short*)restrict_until->GetDataPtr();
         return !(wkptr[0] < 0);
     }
     case UNTIL_INTISNEG:
     {
-        int*wkptr = (int*)restrict_until.data_ptr;
+        int*wkptr = (int*)restrict_until->GetDataPtr();
         return !(wkptr[0] < 0);
     }
     case UNTIL_NOOVERLAY:
@@ -1036,17 +1120,17 @@ static bool ShouldStayInWaitMode() {
     }
     case UNTIL_INTIS0:
     {
-        int*wkptr = (int*)restrict_until.data_ptr;
+        int*wkptr = (int*)restrict_until->GetDataPtr();
         return !(wkptr[0] == 0);
     }
     case UNTIL_SHORTIS0:
     {
-        short*wkptr = (short*)restrict_until.data_ptr;
+        short*wkptr = (short*)restrict_until->GetDataPtr();
         return !(wkptr[0] == 0);
     }
     case UNTIL_ANIMBTNEND:
     {  // still animating?
-        return FindButtonAnimation(restrict_until.data1, restrict_until.data2) >= 0;
+        return FindButtonAnimation(restrict_until->GetData1(), restrict_until->GetData2()) >= 0;
     }
     default:
         quit("loop_until: unknown until event");
@@ -1055,92 +1139,35 @@ static bool ShouldStayInWaitMode() {
     return true; // should stay in wait
 }
 
-static int UpdateWaitMode()
-{
-    if (restrict_until.type == 0) { return RETURN_CONTINUE; }
-
-    if (!ShouldStayInWaitMode())
-        restrict_until.type = 0;
-    our_eip = 77;
-
-    if (restrict_until.type > 0) { return RETURN_CONTINUE; }
-
-    auto was_disabled_for = restrict_until.disabled_for;
-
-    set_default_cursor();
-    // If GUI looks change when disabled, then mark all of them for redraw
-    GUI::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
-    play.disabled_user_interface--;
-    restrict_until.disabled_for = 0;
-
-    switch (was_disabled_for) {
-        // case FOR_ANIMATION:
-        //     run_animation((FullAnimation*)user_disabled_data2,user_disabled_data3);
-        //     break;
-        case FOR_EXITLOOP:
-            return -1;
-        case FOR_SCRIPT:
-            quit("err: for_script obsolete (v2.1 and earlier only)");
-            break;
-        default:
-            quit("Unknown user_disabled_for in end restrict_until");
-    }
-
-    // we shouldn't get here.
-    return RETURN_CONTINUE;
-}
-
 // Run single game iteration; calls UpdateGameOnce() internally
-static int GameTick()
+static void GameTick()
 {
     if (displayed_room < 0)
         quit("!A blocking function was called before the first room has been loaded");
 
     UpdateGameOnce(true);
     UpdateMouseOverLocation();
-
-    our_eip=76;
-
-    int res = UpdateWaitMode();
-    if (res == RETURN_CONTINUE) { return 0; } // continue looping 
-    return res;
-}
-
-static void SetupLoopParameters(int untilwhat, const void* data_ptr = nullptr, int data1 = 0, int data2 = 0) {
-    play.disabled_user_interface++;
-    // If GUI looks change when disabled, then mark all of them for redraw
-    GUI::MarkAllGUIForUpdate(GUI::Options.DisabledStyle != kGuiDis_Unchanged, true);
-
-    // Only change the mouse cursor if it hasn't been specifically changed first
-    // (or if it's speech, always change it)
-    if (((cur_cursor == cur_mode) || (untilwhat == UNTIL_NOOVERLAY)) &&
-        (cur_mode != CURS_WAIT))
-        set_mouse_cursor(CURS_WAIT);
-
-    restrict_until.type = untilwhat;
-    restrict_until.data_ptr = data_ptr;
-    restrict_until.data1 = data1;
-    restrict_until.data2 = data2;
-    restrict_until.disabled_for = FOR_EXITLOOP;
 }
 
 // This function is called from lot of various functions
 // in the game core, character, room object etc
 static void GameLoopUntilEvent(int untilwhat, const void* data_ptr = nullptr, int data1 = 0, int data2 = 0) {
-  // blocking cutscene - end skipping
-  EndSkippingUntilCharStops();
+    // blocking cutscene - end skipping
+    EndSkippingUntilCharStops();
 
-  // this function can get called in a nested context, so
-  // remember the state of these vars in case a higher level
-  // call needs them
-  auto cached_restrict_until = restrict_until;
+    // this function can get called in a nested context, so
+    // remember the state of these vars in case a higher level
+    // call needs them
+    std::unique_ptr<GameLoopUntilState> cached_restrict_until = std::move(restrict_until);
 
-  SetupLoopParameters(untilwhat, data_ptr, data1, data2);
-  while (GameTick()==0);
+    restrict_until.reset(new GameLoopUntilState(untilwhat, data_ptr, data1, data2));
+    restrict_until->Begin();
+    while (restrict_until->Run());
+    restrict_until->End();
 
-  our_eip = 78;
+    set_our_eip(78);
 
-  restrict_until = cached_restrict_until;
+    restrict_until = std::move(cached_restrict_until);
 }
 
 void GameLoopUntilValueIsZero(const char *value) 
@@ -1216,6 +1243,17 @@ void UpdateCursorAndDrawables()
     // fully blocking state (like Display() func), refactor to only call it
     // once the blocking state begins.
     update_objects_scale();
+}
+
+void SyncDrawablesState()
+{
+    // TODO: there's likely more things that could've be done here
+    update_objects_scale();
+}
+
+void ShutGameWaitState()
+{
+    restrict_until = {};
 }
 
 void update_polled_stuff()

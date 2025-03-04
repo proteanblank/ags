@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -21,11 +21,13 @@
 #ifndef __AGS_CN_GAME__MAINGAMEFILE_H
 #define __AGS_CN_GAME__MAINGAMEFILE_H
 
+#include <functional>
 #include <memory>
 #include <set>
 #include <vector>
 #include "ac/game_version.h"
 #include "game/plugininfo.h"
+#include "gui/guimain.h"
 #include "script/cc_script.h"
 #include "util/error.h"
 #include "util/stream.h"
@@ -102,7 +104,9 @@ struct MainGameSource
 // code refactoring.
 struct LoadedGameEntities
 {
-    GameSetupStruct        &Game;
+    GameSetupStruct        &Game; // FIXME: have an object, not ref, and std::move
+    std::vector<GUIMain>    Guis;
+    GUICollection           GuiControls;
     std::vector<DialogTopic> Dialogs;
     std::vector<ViewStruct> Views;
     PScript                 GlobalScript;
@@ -141,14 +145,17 @@ HGameFileError     OpenMainGameFile(const String &filename, MainGameSource &src)
 // Opens main game file for reading using the current Asset Manager (uses default asset name)
 HGameFileError     OpenMainGameFileFromDefaultAsset(MainGameSource &src, AssetManager *mgr);
 // Reads game data, applies necessary conversions to match current format version
-HGameFileError     ReadGameData(LoadedGameEntities &ents, Stream *in, GameDataVersion data_ver);
+HGameFileError     ReadGameData(LoadedGameEntities &ents, std::unique_ptr<Stream> &&in, GameDataVersion data_ver);
 // Pre-reads the heading game data, just enough to identify the game and its special file locations
-void               PreReadGameData(GameSetupStruct &game, Stream *in, GameDataVersion data_ver);
+void               PreReadGameData(GameSetupStruct &game, std::unique_ptr<Stream> &&in, GameDataVersion data_ver);
 // Applies necessary updates, conversions and fixups to the loaded data
 // making it compatible with current engine
 HGameFileError     UpdateGameData(LoadedGameEntities &ents, GameDataVersion data_ver);
 // Ensures that the game saves directory path is valid
 void               FixupSaveDirectory(GameSetupStruct &game);
+// Scans the Asset libraries for the old-style music and sound files and generate
+// new-style audio clip array for the game
+void               ScanOldStyleAudio(AssetManager *asset_mgr, GameSetupStruct &game, std::vector<ViewStruct> &views, GameDataVersion data_ver);
 // Maps legacy sound numbers to real audio clips
 void               RemapLegacySoundNums(GameSetupStruct &game, std::vector<ViewStruct> &views, GameDataVersion data_ver);
 

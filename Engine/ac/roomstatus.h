@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #ifndef __AGS_EE_AC__ROOMSTATUS_H
@@ -35,13 +35,17 @@ struct HotspotState
 };
 
 // Savegame data format for RoomStatus
-// TODO: fill in other versions (lookup the code history)
 enum RoomStatSvgVersion
 {
-    kRoomStatSvgVersion_Initial  = 0,
-    kRoomStatSvgVersion_36025    = 3,
-    kRoomStatSvgVersion_36041    = 4,
-    kRoomStatSvgVersion_Current  = kRoomStatSvgVersion_36041
+    kRoomStatSvgVersion_Initial  = 0, // [UNSUPPORTED] from 3.5.0 pre-alpha
+    // NOTE: in 3.5.0 "Room States" had lower index than "Loaded Room State" by mistake
+    kRoomStatSvgVersion_350_Mismatch = 0, // an incorrect "Room States" version from 3.5.0
+    kRoomStatSvgVersion_350      = 1, // new movelist format (along with pathfinder)
+    kRoomStatSvgVersion_36016    = 2, // hotspot and object names
+    kRoomStatSvgVersion_36025    = 3, // object animation volume
+    kRoomStatSvgVersion_36041    = 4, // room state's contentFormat
+    kRoomStatSvgVersion_36109    = 5, // removed movelists, save externally
+    kRoomStatSvgVersion_Current  = kRoomStatSvgVersion_36109
 };
 
 // RoomStatus contains everything about a room that could change at runtime.
@@ -51,7 +55,7 @@ struct RoomStatus
     uint32_t numobj;
     std::vector<RoomObject> obj;
     uint32_t tsdatasize;
-    std::vector<char> tsdata;
+    std::vector<uint8_t> tsdata;
     Interaction intrHotspot[MAX_ROOM_HOTSPOTS];
     std::vector<Interaction> intrObject;
     Interaction intrRegion [MAX_ROOM_REGIONS];
@@ -63,7 +67,7 @@ struct RoomStatus
     HotspotState hotspot[MAX_ROOM_HOTSPOTS];
     char  region_enabled[MAX_ROOM_REGIONS];
     short walkbehind_base[MAX_WALK_BEHINDS];
-    int   interactionVariableValues[MAX_GLOBAL_VARIABLES];
+    int   interactionVariableValues[MAX_INTERACTION_VARIABLES];
 
     // Likely pre-2.5 data
 #if defined (OBSOLETE)
@@ -86,8 +90,6 @@ struct RoomStatus
     void FreeScriptData();
     void FreeProperties();
 
-    void ReadFromFile_v321(Common::Stream *in, GameDataVersion data_ver);
-    void ReadRoomObjects_Aligned(Common::Stream *in);
     void ReadFromSavegame(Common::Stream *in, GameDataVersion data_ver, RoomStatSvgVersion save_ver);
     void WriteToSavegame(Common::Stream *out, GameDataVersion data_ver) const;
 };

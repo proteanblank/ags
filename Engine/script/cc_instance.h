@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -18,13 +18,15 @@
 #ifndef __CC_INSTANCE_H
 #define __CC_INSTANCE_H
 
+#include <map>
 #include <memory>
 #include <unordered_map>
 
 #include "ac/timer.h"
 #include "script/cc_script.h"  // ccScript
 #include "script/cc_internal.h"  // bytecode constants
-#include "script/nonblockingscriptfunction.h"
+#include "script/runtimescriptvalue.h"
+#include "script/systemimports.h"
 #include "util/string.h"
 
 using namespace AGS;
@@ -41,12 +43,13 @@ using namespace AGS;
 #define MAX_CALL_STACK      128
 #define MAX_FUNCTION_PARAMS 20
 
-// 256 because we use 8 bits to hold instance number
-#define MAX_LOADED_INSTANCES 256
-
-#define INSTANCE_ID_SHIFT 24LL
-#define INSTANCE_ID_MASK  0x00000000000000ffLL
-#define INSTANCE_ID_REMOVEMASK 0x0000000000ffffffLL
+// We use 10 bits to hold instance IDs ORed with op-code
+#define INSTANCE_ID_SHIFT       22LL
+#define INSTANCE_ID_MASK        0x00000000000003FFLL
+#define INSTANCE_ID_REMOVEMASK  0x00000000003FFFFFLL
+// This gives us 1024 unique instance IDs
+// NOTE: these are given to the primary instances only, not forks
+#define MAX_PRIMARY_INSTANCES   1024
 
 // Script executor debugging flag:
 // enables mistake checks, but slows things down!
@@ -112,64 +115,50 @@ struct ScriptPosition
     int32_t         Line;
 };
 
+enum ccInstError
+{
+    kInstErr_None = 0, // ok
+    kInstErr_Aborted = 100, // aborted by request
+    kInstErr_Generic = -1, // any generic exec error; use cc_get_error()
+    kInstErr_FuncNotFound = -2, // requested function is not found in script
+    kInstErr_InvalidArgNum = -3, // invalid number of args (not in supported range)
+    kInstErr_Busy = -4, // instance is busy executing script
+};
 
 // Running instance of the script
-struct ccInstance
+class ccInstance
 {
 public:
-    typedef std::unordered_map<int32_t, ScriptVariable> ScVarMap;
-    typedef std::shared_ptr<ScVarMap>                   PScVarMap;
-public:
-    int32_t flags;
-    PScVarMap globalvars;
-    char *globaldata;
-    int32_t globaldatasize;
-    // Executed byte-code. Unlike ccScript's code array which is int32_t, the one
-    // in ccInstance must be intptr_t to accomodate real pointers placed after
-    // performing fixups.
-    intptr_t *code;
-    ccInstance *runningInst;  // might point to another instance if in far call
-    int32_t codesize;
-    char *strings;
-    int32_t stringssize;
-    RuntimeScriptValue *exports;
-    RuntimeScriptValue *stack;
-    int  num_stackentries;
-    // An array for keeping stack data; stack entries reference unknown data from here
-    // TODO: probably change to dynamic array later
-    char *stackdata;    // for storing stack data of unknown type
-    char *stackdata_ptr;// works similar to original stack pointer, points to the next unused byte in stack data array
-    int32_t stackdatasize; // conventional size of stack data in bytes
-    //
-    RuntimeScriptValue registers[CC_NUM_REGISTERS];
-    int32_t pc;                     // program counter
-    int32_t line_number;            // source code line number
-    PScript instanceof;
-    int  loadedInstanceId;
-    int  returnValue;
-
-    int  callStackSize;
-    int32_t callStackLineNumber[MAX_CALL_STACK];
-    int32_t callStackAddr[MAX_CALL_STACK];
-    ccInstance *callStackCodeInst[MAX_CALL_STACK];
-
-    // array of real import indexes used in script
-    uint32_t *resolved_imports;
-    int  numimports;
-
-    char *code_fixups;
-
     // returns the currently executing instance, or NULL if none
     static ccInstance *GetCurrentInstance(void);
+    // clears recorded stack of current instances
+    // FIXME: reimplement this in a safer way, this must be done automatically
+    // when destroying all script instances, e.g. on game quit.
+    static void FreeInstanceStack();
     // create a runnable instance of the supplied script
-    static ccInstance *CreateFromScript(PScript script);
-    static ccInstance *CreateEx(PScript scri, ccInstance * joined);
+    static std::unique_ptr<ccInstance> CreateFromScript(PScript script);
+    static std::unique_ptr<ccInstance> CreateEx(PScript scri, const ccInstance * joined);
     static void SetExecTimeout(unsigned sys_poll_ms, unsigned abort_ms, unsigned abort_loops);
 
-    ccInstance();
+    ccInstance() = default;
     ~ccInstance();
+
+    // Get the script that this Instance represents
+    PScript GetScript() const { return _instanceof; }
+    // Get the currently executed instance, which may be this instance,
+    // or another one in case of a nested "far call"
+    ccInstance *GetRunningInst() const { return _runningInst; }
+    // Get a readonly access to the global script data
+    const std::vector<uint8_t> &GetGlobalData() const { return _scriptData->globaldata; }
+    // Get current program pointer (position in bytecode)
+    int     GetPC() const { return _pc; }
+    // Get latest return value
+    int     GetReturnValue() const { return _returnValue; }
+    // TODO: this is a hack, required for dialog script; redo this later!
+    void    SetReturnValue(int val) { _returnValue = val; }
+
     // Create a runnable instance of the same script, sharing global memory
-    ccInstance *Fork();
+    std::unique_ptr<ccInstance> Fork();
     // Specifies that when the current function returns to the script, it
     // will stop and return from CallInstance
     void    Abort();
@@ -177,14 +166,14 @@ public:
     void    AbortAndDestroy();
     
     // Call an exported function in the script
-    int     CallScriptFunction(const char *funcname, int32_t num_params, const RuntimeScriptValue *params);
+    ccInstError CallScriptFunction(const Common::String &funcname, int32_t num_params, const RuntimeScriptValue *params);
     
     // Get the script's execution position and callstack as human-readable text
     Common::String GetCallStack(int max_lines = INT_MAX) const;
     // Get the script's execution position
     void    GetScriptPosition(ScriptPosition &script_pos) const;
     // Get the address of an exported symbol (function or variable) in the script
-    RuntimeScriptValue GetSymbolAddress(const char *symname) const;
+    RuntimeScriptValue GetSymbolAddress(const Common::String &symname) const;
     void    DumpInstruction(const ScriptOperation &op) const;
     // Tells whether this instance is in the process of executing the byte-code
     bool    IsBeingRun() const;
@@ -193,13 +182,17 @@ public:
 
     // For each import, find the instance that corresponds to it and save it
     // in resolved_imports[]. Return whether the function is successful
-    bool    ResolveScriptImports(const ccScript *scri);
+    bool    ResolveScriptImports();
     // Using resolved_imports[], resolve the IMPORT fixups
     // Also change CALLEXT op-codes to CALLAS when they pertain to a script instance 
-    bool    ResolveImportFixups(const ccScript *scri);
+    bool    ResolveImportFixups();
+
+    // Copies global data values over to this instance;
+    // copies not more than the allocated size of global data
+    void    CopyGlobalData(const std::vector<uint8_t> &data);
 
 private:
-    bool    _Create(PScript scri, ccInstance * joined);
+    bool    _Create(PScript scri, const ccInstance * joined);
     // free the memory associated with the instance
     void    Free();
 
@@ -207,9 +200,20 @@ private:
     bool    AddGlobalVar(const ScriptVariable &glvar);
     ScriptVariable *FindGlobalVar(int32_t var_addr);
     bool    CreateRuntimeCodeFixups(const ccScript *scri);
+    bool    ResolveExports(const ccScript *scri);
+    // Registers this script's resolved exports as imports in the symbol import table
+    bool    ImportScriptExports(const ccScript *scri);
+
+    // Searches for the function among this script's exports,
+    // on success returns its starting position in bytecode, and number of arguments;
+    // returns number of args as -1 if no args data found in the compiled script.
+    bool    FindExportedFunction(const Common::String &fn_name, int32_t &start_at, int32_t &num_args) const;
 
     // Begin executing script starting from the given bytecode index
-    int     Run(int32_t curpc);
+    ccInstError Run(int32_t curpc);
+
+    // For calling exported plugin functions old-style
+    RuntimeScriptValue CallPluginFunction(void *fn_addr, const RuntimeScriptValue *object, const RuntimeScriptValue *params, int param_count);
 
     // Stack processing
     // Push writes new value and increments stack ptr;
@@ -229,6 +233,62 @@ private:
     // Function call stack processing
     void    PushToFuncCallStack(FunctionCallStack &func_callstack, const RuntimeScriptValue &rval);
     void    PopFromFuncCallStack(FunctionCallStack &func_callstack, int32_t num_entries);
+
+
+    // Represented script object
+    PScript _instanceof;
+    int32_t _loadedInstanceId = -1;
+    int     _flags = 0; // INSTF_* flags
+
+    // Runtime variant of script data, fixups and imports,
+    // resolved after loading all the game scripts,
+    // and possibly shared among multiple script instance forks.
+    struct ResolvedScriptData
+    {
+        // Script's global data (for global variables)
+        std::vector<uint8_t>    globaldata;
+        // Executed byte-code. Unlike ccScript's code array which is int32_t, the one
+        // in ccInstance must be intptr_t to accomodate real pointers placed after
+        // performing fixups.
+        std::vector<intptr_t>   code;
+        std::vector<uint8_t>    code_fixups;
+        // Resolved global variables
+        std::unordered_map<int32_t, ScriptVariable> globalvars;
+        // This script's exports
+        std::vector<RuntimeScriptValue> exports;
+        ScriptSymbolsMap        export_lookup;
+        // Array of real import indexes used in script
+        std::vector<uint32_t>   resolved_imports;
+
+        ResolvedScriptData();
+    };
+    std::shared_ptr<ResolvedScriptData> _scriptData;
+
+    // Code pointers for faster access
+    intptr_t   *_code = nullptr;
+    uint32_t    _codesize = 0; // size of code is limited under 32-bit due to bytecode format
+    const uint8_t *_code_fixups = nullptr;
+    const char *_strings = nullptr; // pointer to ccScript's string data
+    size_t      _stringsize = 0u;
+
+    // Virtual machine state
+    RuntimeScriptValue _registers[CC_NUM_REGISTERS]; // registers
+    std::vector<RuntimeScriptValue> _stack;
+    // An array for keeping stack data; stack entries reference data of variable size from here
+    std::vector<uint8_t> _stackdata;
+    RuntimeScriptValue *_stackBegin = nullptr; // fast-access ptr to beginning of _stack
+    uint8_t    *_stackdataBegin = nullptr; // fast-access ptr to beginning of _stackdata
+    uint8_t    *_stackdataPtr = nullptr; // points to the next unused byte in stack data array
+    // Callstack: for storing nested program positions
+    int         _callStackLineNumber[MAX_CALL_STACK]{};
+    int         _callStackAddr[MAX_CALL_STACK]{};
+    ccInstance *_callStackCodeInst[MAX_CALL_STACK]{};
+    uint32_t    _callStackSize = 0u;
+
+    ccInstance *_runningInst = nullptr;  // might point to another instance if in far call
+    int         _pc = 0; // program counter
+    int         _lineNumber = 0; // source code line number
+    int         _returnValue = 0; // last executed function's return value
 
     // Minimal timeout: how much time may pass without any engine update
     // before we want to check on the situation and do system poll

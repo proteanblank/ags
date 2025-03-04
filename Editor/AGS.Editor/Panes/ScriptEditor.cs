@@ -22,6 +22,7 @@ namespace AGS.Editor
         // Custom Edit menu commands
         private const string TOGGLE_BREAKPOINT_COMMAND = "ToggleBreakpoint";
         private const string SHOW_MATCHING_SCRIPT_OR_HEADER_COMMAND = "ScriptShowMatchingScript";
+        private const string TOGGLE_LINE_COMMENT_COMMAND = "ToggleLineComment";
         // Custom context menu commands
         private const string CONTEXT_MENU_TOGGLE_BREAKPOINT = "CtxToggleBreakpoint";
 
@@ -49,11 +50,24 @@ namespace AGS.Editor
             _agsEditor = agsEditor;
             _showMatchingScript = showMatchingScript;
             _room = null;
-            _roomNumber = 0;
+            _roomNumber = -1;
             Init(scriptToEdit);
 
             this.Load += new EventHandler(ScriptEditor_Load);
             this.Resize += new EventHandler(ScriptEditor_Resize);
+        }
+
+        public string GetScriptTabName()
+        {
+            if (_roomNumber >= 0)
+            {
+                UnloadedRoom room = Factory.AGSEditor.CurrentGame.FindRoomByID(_roomNumber);
+                if(room != null && room.Number == _roomNumber && !string.IsNullOrEmpty(room.Description))
+                {
+                    return Script.FileName + (IsModified ? " *" : "") + ": " + room.Description;
+                }
+            }
+            return Script.FileName + (IsModified ? " *" : "");
         }
 
         private void Init(Script scriptToEdit)
@@ -123,15 +137,18 @@ namespace AGS.Editor
 
         protected override void AddEditMenuCommands(MenuCommands commands)
         {
-            commands.Commands.Add(new MenuCommand(TOGGLE_BREAKPOINT_COMMAND, "Toggle Breakpoint", System.Windows.Forms.Keys.F9, "ToggleBreakpointMenuIcon"));
-            commands.Commands.Add(new MenuCommand(SHOW_MATCHING_SCRIPT_OR_HEADER_COMMAND, "Switch to Matching Script or Header", System.Windows.Forms.Keys.Control | System.Windows.Forms.Keys.M));
+            commands.Commands.Add(MenuCommand.Separator);
+            commands.Commands.Add(new MenuCommand(TOGGLE_BREAKPOINT_COMMAND, "Toggle Breakpoint", Keys.F9, "ToggleBreakpointMenuIcon"));
+            commands.Commands.Add(new MenuCommand(TOGGLE_LINE_COMMENT_COMMAND, "Toggle Line Comment", Keys.Control | Keys.Shift | Keys.Q));
+            commands.Commands.Add(new MenuCommand(SHOW_MATCHING_SCRIPT_OR_HEADER_COMMAND, "Switch to Matching Script or Header", Keys.Control | Keys.M));
         }
 
         protected override void AddCtxCommands(ContextMenuStrip menuStrip)
         {
             EventHandler onClick = new EventHandler(ContextMenuChooseOption2);
             menuStrip.Items.Add(new ToolStripSeparator());
-            menuStrip.Items.Add(new ToolStripMenuItem("Toggle Breakpoint", Factory.GUIController.ImageList.Images["ToggleBreakpointMenuIcon"], onClick, CONTEXT_MENU_TOGGLE_BREAKPOINT));
+            menuStrip.Items.Add(ToolStripExtensions.CreateMenuItem("Toggle Breakpoint", Factory.GUIController.ImageList.Images["ToggleBreakpointMenuIcon"], onClick, CONTEXT_MENU_TOGGLE_BREAKPOINT, Keys.F9));
+            menuStrip.Items.Add(ToolStripExtensions.CreateMenuItem("Toggle Line Comment", null, onClick, TOGGLE_LINE_COMMENT_COMMAND, Keys.Control | Keys.Shift | Keys.Q));
         }
 
         public void ActivateWindow()
@@ -445,13 +462,17 @@ namespace AGS.Editor
             GoToLineOfCharacterPosition(position, true);
         }
 
-        public void GoToLineOfCharacterPosition(int position, bool selectLine)
+        public bool GoToLineOfCharacterPosition(int position, bool selectLine)
         {
+            if (position < 0 || position >= scintilla.TextLength)
+                return false;
+
             scintilla.GoToPosition(position);
             if (selectLine)
             {
                 scintilla.SelectCurrentLine();
             }
+            return true;
         }
 
         public void SetExecutionPointMarker(int lineNumber)
@@ -464,9 +485,24 @@ namespace AGS.Editor
             scintilla.ShowErrorMessagePopup(errorMessage);
         }
 
-        public int GetLineNumberForText(string text)
+        /// <summary>
+        /// Tries to find exact text in script, and returns a corresponding line number,
+        /// or -1 if no such text was found.
+        /// plainCodeOnly tells if comments and string literals should be ignored.
+        /// </summary>
+        public int GetLineNumberForText(string text, bool plainCodeOnly)
         {
-            return scintilla.FindLineNumberForText(text);
+            return scintilla.FindLineNumberForText(text, plainCodeOnly);
+        }
+
+        /// <summary>
+        /// Searches the script for the regex pattern, and returns a corresponding line number,
+        /// or -1 if pattern search failed.
+        /// plainCodeOnly tells if comments and string literals should be ignored.
+        /// </summary>
+        public int GetLineNumberForPattern(string pattern, bool plainCodeOnly)
+        {
+            return scintilla.FindLineNumberForPattern(pattern, plainCodeOnly);
         }
 
         public void RemoveExecutionPointMarker()
@@ -500,7 +536,7 @@ namespace AGS.Editor
         protected override void OnKeyPressed(System.Windows.Forms.Keys keyData)
         {
             if (keyData.Equals(
-                System.Windows.Forms.Keys.Escape))
+                Keys.Escape))
             {
                 FindReplace.CloseDialogIfNeeded();
             }
@@ -519,11 +555,15 @@ namespace AGS.Editor
                     _showMatchingScript(this.Script);
                 }
             }
+            else if (command == TOGGLE_LINE_COMMENT_COMMAND)
+            {
+                scintilla.ToggleLineComment();
+            }
             else
             {
                 base.OnCommandClick(command);
             }
-            UpdateToolbarButtonsIfNecessary();
+            UpdateUICommands();
         }
 
         protected override void OnWindowActivated()
@@ -611,7 +651,6 @@ namespace AGS.Editor
 
         private void scintilla_UpdateUI(object sender, EventArgs e)
         {
-            UpdateToolbarButtonsIfNecessary();
             if (cmbFunctions.Items.Count > 0)
             {
                 SelectFunctionInListForCurrentPosition();
@@ -699,6 +738,10 @@ namespace AGS.Editor
             if (item.Name == CONTEXT_MENU_TOGGLE_BREAKPOINT)
             {
                 ToggleBreakpointOnCurrentLine();
+            }
+            else if (item.Name == TOGGLE_LINE_COMMENT_COMMAND)
+            {
+                scintilla.ToggleLineComment();
             }
         }
 

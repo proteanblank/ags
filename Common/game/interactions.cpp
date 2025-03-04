@@ -2,30 +2,98 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "game/interactions.h"
 #include <algorithm>
 #include <string.h>
 #include "ac/common.h" // quit
-#include "util/alignedstream.h"
-
-using namespace AGS::Common;
-
-InteractionVariable globalvars[MAX_GLOBAL_VARIABLES] = {InteractionVariable("Global 1", 0, 0)};
-int numGlobalVars = 1;
+#include "util/stream.h"
+#include "util/string_utils.h"
 
 namespace AGS
 {
 namespace Common
 {
+
+//-----------------------------------------------------------------------------
+//
+// InteractionEvents (modern interaction system).
+//
+//-----------------------------------------------------------------------------
+
+std::unique_ptr<InteractionEvents> InteractionEvents::CreateFromStream_v361(Stream *in)
+{
+    std::unique_ptr<InteractionEvents> inter(new InteractionEvents());
+    inter->Read_v361(in);
+    return inter;
+}
+
+std::unique_ptr<InteractionEvents> InteractionEvents::CreateFromStream_v362(Stream *in)
+{
+    std::unique_ptr<InteractionEvents> inter(new InteractionEvents());
+    inter->Read_v362(in);
+    return inter;
+}
+
+void InteractionEvents::Read_v361(Stream *in)
+{
+    Events.clear();
+    const size_t evt_count = in->ReadInt32();
+    for (size_t i = 0; i < evt_count; ++i)
+    {
+        Events.push_back( { String::FromStream(in) } );
+    }
+}
+
+HError InteractionEvents::Read_v362(Stream *in)
+{
+    Events.clear();
+    InteractionEventsVersion ver = (InteractionEventsVersion)in->ReadInt32();
+    if (ver != kInterEvents_v362)
+        return new Error(String::FromFormat("InteractionEvents version not supported: %d", ver));
+
+    ScriptModule = StrUtil::ReadString(in);
+    const size_t evt_count = in->ReadInt32();
+    for (size_t i = 0; i < evt_count; ++i)
+    {
+        Events.push_back( { StrUtil::ReadString(in) } );
+    }
+    return HError::None();
+}
+
+void InteractionEvents::Write_v361(Stream *out) const
+{
+    out->WriteInt32(Events.size());
+    for (const auto &evt : Events)
+    {
+        evt.FunctionName.Write(out);
+    }
+}
+
+void InteractionEvents::Write_v362(Stream *out) const
+{
+    out->WriteInt32(kInterEvents_v362);
+    StrUtil::WriteString(ScriptModule, out);
+    out->WriteInt32(Events.size());
+    for (const auto &evt : Events)
+    {
+        StrUtil::WriteString(evt.FunctionName, out);
+    }
+}
+
+//-----------------------------------------------------------------------------
+//
+// Interactions (legacy interaction system).
+//
+//-----------------------------------------------------------------------------
 
 InteractionValue::InteractionValue()
 {
@@ -37,6 +105,7 @@ InteractionValue::InteractionValue()
 void InteractionValue::Read(Stream *in)
 {
     Type  = (InterValType)in->ReadInt8();
+    in->Seek(3); // alignment padding to int32
     Value = in->ReadInt32();
     Extra = in->ReadInt32();
 }
@@ -44,6 +113,7 @@ void InteractionValue::Read(Stream *in)
 void InteractionValue::Write(Stream *out) const
 {
     out->WriteInt8(Type);
+    out->WriteByteCount(0, 3); // alignment padding to int32
     out->WriteInt32(Value);
     out->WriteInt32(Extra);
 }
@@ -77,46 +147,46 @@ void InteractionCommand::Reset()
     Parent = nullptr;
 }
 
-void InteractionCommand::ReadValues_Aligned(Stream *in)
+void InteractionCommand::ReadValues(Stream *in)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
     for (int i = 0; i < MAX_ACTION_ARGS; ++i)
     {
-        Data[i].Read(&align_s);
-        align_s.Reset();
+        Data[i].Read(in);
     }
 }
 
-void InteractionCommand::Read_v321(Stream *in, bool &has_children)
+void InteractionCommand::Read(Stream *in, bool &has_children)
 {
     in->ReadInt32(); // skip the 32-bit vtbl ptr (the old serialization peculiarity)
     Type = in->ReadInt32();
-    ReadValues_Aligned(in);
+    ReadValues(in);
     has_children = in->ReadInt32() != 0;
     in->ReadInt32(); // skip 32-bit Parent pointer
 }
 
-void InteractionCommand::WriteValues_Aligned(Stream *out) const
+void InteractionCommand::WriteValues(Stream *out) const
 {
-    AlignedStream align_s(out, Common::kAligned_Write);
     for (int i = 0; i < MAX_ACTION_ARGS; ++i)
     {
-        Data[i].Write(&align_s);
-        align_s.Reset();
+        Data[i].Write(out);
     }
 }
 
-void InteractionCommand::Write_v321(Stream *out) const
+void InteractionCommand::Write(Stream *out) const
 {
     out->WriteInt32(0); // write dummy 32-bit vtbl ptr
     out->WriteInt32(Type);
-    WriteValues_Aligned(out);
-    out->WriteInt32(Children.get() ? 1 : 0);
-    out->WriteInt32(Parent ? 1 : 0);
+    WriteValues(out);
+    out->WriteInt32(Children.get() ? 1 : 0); // notify that has children
+    out->WriteInt32(0); // skip 32-bit Parent pointer
 }
 
 InteractionCommand &InteractionCommand::operator = (const InteractionCommand &ic)
 {
+    if (this == &ic) {
+        return *this;  // prevent self-assignment
+    }
+
     Type = ic.Type;
     memcpy(Data, ic.Data, sizeof(Data));
     Children.reset(ic.Children.get() ? new InteractionCommandList(*ic.Children) : nullptr);
@@ -147,19 +217,17 @@ void InteractionCommandList::Reset()
     TimesRun = 0;
 }
 
-void InteractionCommandList::Read_Aligned(Stream *in, std::vector<bool> &cmd_children)
+void InteractionCommandList::ReadCommands(Stream *in, std::vector<bool> &cmd_children)
 {
-    AlignedStream align_s(in, Common::kAligned_Read);
     for (size_t i = 0; i < Cmds.size(); ++i)
     {
         bool has_children;
-        Cmds[i].Read_v321(&align_s, has_children);
+        Cmds[i].Read(in, has_children);
         cmd_children[i] = has_children;
-        align_s.Reset();
     }
 }
 
-void InteractionCommandList::Read_v321(Stream *in)
+void InteractionCommandList::Read(Stream *in)
 {
     size_t cmd_count = in->ReadInt32();
     TimesRun = in->ReadInt32();
@@ -167,41 +235,39 @@ void InteractionCommandList::Read_v321(Stream *in)
     std::vector<bool> cmd_children;
     Cmds.resize(cmd_count);
     cmd_children.resize(cmd_count);
-    Read_Aligned(in, cmd_children);
+    ReadCommands(in, cmd_children);
 
     for (size_t i = 0; i < cmd_count; ++i)
     {
         if (cmd_children[i])
         {
             Cmds[i].Children.reset(new InteractionCommandList());
-            Cmds[i].Children->Read_v321(in);
+            Cmds[i].Children->Read(in);
         }
         Cmds[i].Parent = this;
     }
 }
 
-void InteractionCommandList::Write_Aligned(Stream *out) const
+void InteractionCommandList::WriteCommands(Stream *out) const
 {
-    AlignedStream align_s(out, Common::kAligned_Write);
     for (InterCmdVector::const_iterator it = Cmds.begin(); it != Cmds.end(); ++it)
     {
-        it->Write_v321(&align_s);
-        align_s.Reset();
+        it->Write(out);
     }
 }
 
-void InteractionCommandList::Write_v321(Stream *out) const
+void InteractionCommandList::Write(Stream *out) const
 {
     size_t cmd_count = Cmds.size();
     out->WriteInt32(cmd_count);
     out->WriteInt32(TimesRun);
 
-    Write_Aligned(out);
+    WriteCommands(out);
 
     for (size_t i = 0; i < cmd_count; ++i)
     {
         if (Cmds[i].Children.get() != nullptr)
-            Cmds[i].Children->Write_v321(out);
+            Cmds[i].Children->Write(out);
     }
 }
 
@@ -262,21 +328,21 @@ void Interaction::Reset()
     Events.clear();
 }
 
-Interaction *Interaction::CreateFromStream(Stream *in)
+std::unique_ptr<Interaction> Interaction::CreateFromStream(Stream *in)
 {
     if (in->ReadInt32() != kInteractionVersion_Initial)
         return nullptr; // unsupported format
 
     const size_t evt_count = in->ReadInt32();
     if (evt_count > MAX_NEWINTERACTION_EVENTS)
-        quit("Can't deserialize interaction: too many events");
+        quit("Can't deserialize interaction: too many events"); // FIXME: dont quit, report HError
 
     int types[MAX_NEWINTERACTION_EVENTS];
     int load_response[MAX_NEWINTERACTION_EVENTS];
     in->ReadArrayOfInt32(types, evt_count);
     in->ReadArrayOfInt32(load_response, evt_count);
 
-    Interaction *inter = new Interaction();
+    std::unique_ptr<Interaction> inter(new Interaction());
     inter->Events.resize(evt_count);
     for (size_t i = 0; i < evt_count; ++i)
     {
@@ -285,7 +351,7 @@ Interaction *Interaction::CreateFromStream(Stream *in)
         if (load_response[i] != 0)
         {
             evt.Response.reset(new InteractionCommandList());
-            evt.Response->Read_v321(in);
+            evt.Response->Read(in);
         }
     }
     return inter;
@@ -310,67 +376,8 @@ void Interaction::Write(Stream *out) const
     for (size_t i = 0; i < evt_count; ++i)
     {
         if (Events[i].Response.get())
-            Events[i].Response->Write_v321(out);
+            Events[i].Response->Write(out);
     }
-}
-
-void Interaction::ReadFromSavedgame_v321(Stream *in)
-{
-    const size_t evt_count = in->ReadInt32();
-    if (evt_count > MAX_NEWINTERACTION_EVENTS)
-        quit("Can't deserialize interaction: too many events");
-
-    Events.resize(evt_count);
-    for (size_t i = 0; i < evt_count; ++i)
-    {
-        Events[i].Type = in->ReadInt32();
-    }
-    const size_t padding = (MAX_NEWINTERACTION_EVENTS - evt_count);
-    for (size_t i = 0; i < padding; ++i)
-        in->ReadInt32(); // cannot skip when reading aligned structs
-    ReadTimesRunFromSave_v321(in);
-
-    // Skip an array of dummy 32-bit pointers
-    for (size_t i = 0; i < MAX_NEWINTERACTION_EVENTS; ++i)
-        in->ReadInt32();
-}
-
-void Interaction::WriteToSavedgame_v321(Stream *out) const
-{
-    const size_t evt_count = Events.size();
-    out->WriteInt32(evt_count);
-
-    for (size_t i = 0; i < evt_count; ++i)
-    {
-        out->WriteInt32(Events[i].Type);
-    }
-    out->WriteByteCount(0, (MAX_NEWINTERACTION_EVENTS - evt_count) * sizeof(int32_t));
-    WriteTimesRunToSave_v321(out);
-
-    // Array of dummy 32-bit pointers
-    out->WriteByteCount(0, MAX_NEWINTERACTION_EVENTS * sizeof(int32_t));
-}
-
-void Interaction::ReadTimesRunFromSave_v321(Stream *in)
-{
-    const size_t evt_count = Events.size();
-    for (size_t i = 0; i < evt_count; ++i)
-    {
-        Events[i].TimesRun = in->ReadInt32();
-    }
-    const size_t padding = (MAX_NEWINTERACTION_EVENTS - evt_count);
-    for (size_t i = 0; i < padding; ++i)
-        in->ReadInt32(); // cannot skip when reading aligned structs
-}
-
-void Interaction::WriteTimesRunToSave_v321(Stream *out) const
-{
-    const size_t evt_count = Events.size();
-    for (size_t i = 0; i < Events.size(); ++i)
-    {
-        out->WriteInt32(Events[i].TimesRun);
-    }
-    out->WriteByteCount(0, (MAX_NEWINTERACTION_EVENTS - evt_count) * sizeof(int32_t));
 }
 
 //-----------------------------------------------------------------------------
@@ -402,26 +409,6 @@ void InteractionVariable::Write(Common::Stream *out) const
     out->Write(Name.GetCStr(), INTER_VAR_NAME_LENGTH);
     out->WriteInt8(Type);
     out->WriteInt32(Value);
-}
-
-//-----------------------------------------------------------------------------
-
-InteractionScripts *InteractionScripts::CreateFromStream(Stream *in)
-{
-    const size_t evt_count = in->ReadInt32();
-    if (evt_count > MAX_NEWINTERACTION_EVENTS)
-    {
-        quit("Can't deserialize interaction scripts: too many events");
-        return nullptr;
-    }
-
-    InteractionScripts *scripts = new InteractionScripts();
-    for (size_t i = 0; i < evt_count; ++i)
-    {
-        String name = String::FromStream(in);
-        scripts->ScriptFuncNames.push_back(name);
-    }
-    return scripts;
 }
 
 } // namespace Common

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "platform/base/sys_main.h"
@@ -21,6 +21,13 @@
 
 using namespace AGS::Common;
 using namespace AGS::Engine;
+
+// TODO: prehaps refactor the whole sys_main into the singleton class at some point
+struct SysMainInfo
+{
+    // Indicates which subsystems did we initialize
+    uint32_t SDLSubsystems = 0u;
+} static gl_SysMainInfo;
 
 // ----------------------------------------------------------------------------
 // INIT / SHUTDOWN
@@ -39,16 +46,21 @@ int sys_main_init(/*config*/) {
     SDL_SetHint(SDL_HINT_ANDROID_SEPARATE_MOUSE_AND_TOUCH, "1");
 #endif
     // TODO: setup these subsystems in config rather than keep hardcoded?
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) {
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS) != 0) {
         Debug::Printf(kDbgMsg_Error, "Unable to initialize SDL: %s", SDL_GetError());
         return -1;
     }
+    gl_SysMainInfo.SDLSubsystems =
+        SDL_INIT_VIDEO | SDL_INIT_TIMER | SDL_INIT_EVENTS;
     return 0;
 }
 
 void sys_main_shutdown() {
     sys_window_destroy();
+    sys_audio_shutdown(); // in case it's still on
+    SDL_QuitSubSystem(gl_SysMainInfo.SDLSubsystems);
     SDL_Quit();
+    gl_SysMainInfo.SDLSubsystems = 0u;
 }
 
 void sys_set_background_mode(bool /*on*/) {
@@ -59,26 +71,49 @@ void sys_set_background_mode(bool /*on*/) {
 // ----------------------------------------------------------------------------
 // DISPLAY UTILS
 // ----------------------------------------------------------------------------
-const int DEFAULT_DISPLAY_INDEX = 0; // TODO: is this always right?
+const int DEFAULT_DISPLAY_INDEX = 0;
 
-int sys_get_desktop_resolution(int &width, int &height) {
+int sys_get_display_count() {
+    return SDL_GetNumVideoDisplays();
+}
+
+bool sys_is_display_valid(int display_index) {
+    return display_index >= 0 && display_index < SDL_GetNumVideoDisplays();
+}
+
+int sys_get_window_display_index() {
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    int index = -1;
+    SDL_Window *window = sys_get_window();
+    if (window)
+        index = SDL_GetWindowDisplayIndex(window);
+    return index >= 0 ? index : DEFAULT_DISPLAY_INDEX;
+#else
+    return DEFAULT_DISPLAY_INDEX;
+#endif
+}
+
+bool sys_get_desktop_resolution(int &width, int &height) {
+    return sys_get_desktop_resolution(sys_get_window_display_index(), width, height);
+}
+
+bool sys_get_desktop_resolution(int display_index, int &width, int &height) {
     SDL_Rect r;
-    if (SDL_GetDisplayBounds(DEFAULT_DISPLAY_INDEX, &r) != 0) {
+    if (SDL_GetDisplayBounds(display_index, &r) != 0) {
         Debug::Printf(kDbgMsg_Error, "SDL_GetDisplayBounds failed: %s", SDL_GetError());
-        return -1;
+        return false;
     }
     width = r.w;
     height = r.h;
-    return 0;
+    return true;
 }
 
-void sys_get_desktop_modes(std::vector<AGS::Engine::DisplayMode> &dms, int color_depth) {
+void sys_get_desktop_modes(int display_index, std::vector<AGS::Engine::DisplayMode> &dms, int color_depth) {
     SDL_DisplayMode mode;
-    const int display_id = DEFAULT_DISPLAY_INDEX;
-    const int count = SDL_GetNumDisplayModes(display_id);
+    const int count = SDL_GetNumDisplayModes(display_index);
     dms.clear();
     for (int i = 0; i < count; ++i) {
-        if (SDL_GetDisplayMode(display_id, i, &mode) != 0) {
+        if (SDL_GetDisplayMode(display_index, i, &mode) != 0) {
             Debug::Printf(kDbgMsg_Error, "SDL_GetDisplayMode failed: %s", SDL_GetError());
             continue;
         }
@@ -87,6 +122,7 @@ void sys_get_desktop_modes(std::vector<AGS::Engine::DisplayMode> &dms, int color
             continue;
         }
         AGS::Engine::DisplayMode dm;
+        dm.DisplayIndex = display_index;
         dm.Width = mode.w;
         dm.Height = mode.h;
         dm.ColorDepth = bitsdepth;
@@ -107,6 +143,8 @@ void sys_renderer_set_output(const String &name)
 
 bool sys_audio_init(const String &driver_name)
 {
+    if ((gl_SysMainInfo.SDLSubsystems & SDL_INIT_AUDIO) != 0)
+        return true;
     // IMPORTANT: we must use a combination of SDL_setenv and SDL_InitSubSystem
     // here, and NOT use SDL_AudioInit, because SDL_AudioInit does not increment
     // subsystem's reference count. Which in turn may cause problems down the
@@ -135,12 +173,17 @@ bool sys_audio_init(const String &driver_name)
     else
         Debug::Printf(kDbgMsg_Error, "Failed to initialize any audio driver; error: %s",
             SDL_GetError());
+    gl_SysMainInfo.SDLSubsystems |= SDL_INIT_AUDIO * res;
     return res;
 }
 
 void sys_audio_shutdown()
 {
-    SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    // Note: a subsystem that failed to initialize, doesn't increment ref-count
+    // Additionally, we may not have init it at all, see engine_init_audio
+    if ((gl_SysMainInfo.SDLSubsystems & SDL_INIT_AUDIO) != 0)
+        SDL_QuitSubSystem(SDL_INIT_AUDIO);
+    gl_SysMainInfo.SDLSubsystems &= ~SDL_INIT_AUDIO;
 }
 
 
@@ -150,7 +193,7 @@ void sys_audio_shutdown()
 // TODO: support multiple windows? in case we need some for diag purposes etc
 static SDL_Window *window = nullptr;
 
-SDL_Window *sys_window_create(const char *window_title, int w, int h, WindowMode mode, int ex_flags) {
+SDL_Window *sys_window_create(const char *window_title, int display_index, int w, int h, WindowMode mode, int ex_flags) {
     if (window) {
         sys_window_destroy();
     }
@@ -167,22 +210,30 @@ SDL_Window *sys_window_create(const char *window_title, int w, int h, WindowMode
     // Resizable flag is necessary for fullscreen app rotation
     flags |= SDL_WINDOW_RESIZABLE;
 #endif
+#if (AGS_PLATFORM_OS_IOS)
+    flags |= SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
+#if !(AGS_SUPPORT_MULTIDISPLAY)
+    // Force displays setting to default on non-desktop platforms
+    assert(display_index == DEFAULT_DISPLAY_INDEX);
+    display_index = DEFAULT_DISPLAY_INDEX;
+#endif
     window = SDL_CreateWindow(
         window_title,
-        SDL_WINDOWPOS_CENTERED_DISPLAY(DEFAULT_DISPLAY_INDEX),
-        SDL_WINDOWPOS_CENTERED_DISPLAY(DEFAULT_DISPLAY_INDEX),
+        SDL_WINDOWPOS_CENTERED_DISPLAY(display_index),
+        SDL_WINDOWPOS_CENTERED_DISPLAY(display_index),
         w,
         h,
         flags
     );
-#if (AGS_PLATFORM_DESKTOP)
+#if (AGS_SUPPORT_MULTIDISPLAY)
     // CHECKME: this is done because SDL2 has some bug(s) during
     // centering. See: https://github.com/libsdl-org/SDL/issues/6875
     // TODO: SDL2 docs mentioned that on some systems the window border size
     // may be known only after the window is displayed, which means that
     // this may have to be called with a short delay (but how to know when?)
     if (mode == kWnd_Windowed)
-        sys_window_center();
+        sys_window_center(display_index);
 #endif
     return window;
 }
@@ -218,13 +269,37 @@ void sys_window_set_style(WindowMode mode, Size size) {
     }
 }
 
+void sys_window_bring_to_front() {
+    if (!window) return;
+    SDL_RaiseWindow(window);
+}
+
 void sys_window_show_cursor(bool on) {
     SDL_ShowCursor(on ? SDL_ENABLE : SDL_DISABLE);
 }
 
 bool sys_window_lock_mouse(bool on) {
+    return sys_window_lock_mouse(on, Rect());
+}
+
+bool sys_window_lock_mouse(bool on, const Rect &bounds) {
     if (!window) return false;
     SDL_SetWindowGrab(window, static_cast<SDL_bool>(on));
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    if (on && !bounds.IsEmpty())
+    {
+        SDL_Rect rect;
+        rect.x = bounds.Left;
+        rect.y = bounds.Top;
+        rect.w = bounds.GetWidth();
+        rect.h = bounds.GetHeight();
+        SDL_SetWindowMouseRect(window, &rect);
+    }
+    else
+    {
+        SDL_SetWindowMouseRect(window, nullptr);
+    }
+#endif // SDL_VERSION_ATLEAST(2, 0, 18)
     return on; // TODO: test if successful?
 }
 
@@ -267,10 +342,12 @@ bool sys_window_set_size(int w, int h, bool center) {
     return false;
 }
 
-void sys_window_center() {
+void sys_window_center(int display_index) {
     if (!window)
         return;
-#if (AGS_PLATFORM_DESKTOP)
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    if (display_index < 0)
+        display_index = SDL_GetWindowDisplayIndex(window);
     // CHECKME:
     // There seem to be a bug in SDL2 where it either does not assume
     // the working area & taskbars when centering the window, or ignores
@@ -278,16 +355,36 @@ void sys_window_center() {
     // Until that is fixed, try centering it ourselves
     // See: https://github.com/libsdl-org/SDL/issues/6875
     SDL_Rect bounds;
-    int w, h;
-    int bx1, by1, bx2, by2;
-    SDL_GetDisplayUsableBounds(SDL_GetWindowDisplayIndex(window), &bounds);
+    if (SDL_GetDisplayUsableBounds(display_index, &bounds) != 0)
+        return;
+    int w = 0, h = 0;
+    int bx1 = 0, by1 = 0, bx2 = 0, by2 = 0;
     SDL_GetWindowSize(window, &w, &h);
     SDL_GetWindowBordersSize(window, &by1, &bx1, &by2, &bx2);
     // CHECKME: SDL_SetWindowPosition aligns the client rect to this pos???
     int x = bounds.x + bx1 + (bounds.w - (w + bx1 + bx2)) / 2;
     int y = bounds.y + by1 + (bounds.h - (h + by1 + by2)) / 2;
     SDL_SetWindowPosition(window, x, y);
-#else // !AGS_PLATFORM_DESKTOP
+#else // !AGS_SUPPORT_MULTIDISPLAY
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+#endif
+}
+
+void sys_window_fit_in_display(int display_index) {
+    if (!window)
+        return;
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    SDL_Rect bounds;
+    if (SDL_GetDisplayUsableBounds(display_index, &bounds) != 0)
+        return;
+    int w = 0, h = 0;
+    SDL_GetWindowSize(window, &w, &h);
+    if (w > bounds.w || h > bounds.h) {
+        SDL_SetWindowSize(window, std::min(bounds.w, w), std::min(bounds.h, h));
+    }
+    sys_window_center(display_index);
+#else // !AGS_SUPPORT_MULTIDISPLAY
+    // Dummy implementation for the time being
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 #endif
 }

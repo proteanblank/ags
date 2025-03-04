@@ -5,6 +5,7 @@
 #include "game/room_file.h"
 #include "util/data_ext.h"
 #include "util/file.h"
+#include "util/memory_compat.h"
 #include "util/memorystream.h"
 #include "util/string_compat.h"
 
@@ -15,8 +16,8 @@ using namespace AGS::Common;
 class RoomBlockParser : public DataExtParser
 {
 public:
-    RoomBlockParser(Stream *in, RoomFileVersion data_ver)
-        : DataExtParser(in, kDataExt_NumID8 | ((data_ver < kRoomVersion_350) ? kDataExt_File32 : kDataExt_File64))
+    RoomBlockParser(std::unique_ptr<Stream> &&in, RoomFileVersion data_ver)
+        : DataExtParser(std::move(in), kDataExt_NumID8 | ((data_ver < kRoomVersion_350) ? kDataExt_File32 : kDataExt_File64))
         {}
     virtual String GetOldBlockName(int block_id) const
     { return GetRoomBlockName((RoomFileBlock)block_id); }
@@ -32,7 +33,7 @@ static void print_known_blockids()
 HError print_room_blockids(RoomDataSource &datasrc)
 {
     HError err = HError::None();
-    RoomBlockParser parser(datasrc.InputStream.get(), datasrc.DataVersion);
+    RoomBlockParser parser(std::move(datasrc.InputStream), datasrc.DataVersion);
     printf("------ Block ID ------|------- Offset -------|--- Size --\n");
     for (err = parser.OpenBlock(); err && !parser.AtEnd(); err = parser.OpenBlock())
     {
@@ -41,6 +42,18 @@ HError print_room_blockids(RoomDataSource &datasrc)
         parser.SkipBlock();
     }
     return err;
+}
+
+static const char *passwencstring = "Avis Durgan";
+
+void UnpackScriptText(Stream *in, Stream *out)
+{
+    size_t len = static_cast<uint32_t>(in->ReadInt32());
+    std::vector<char> buf(len);
+    in->Read(&buf.front(), len);
+    for (size_t i = 0; i < len; ++i)
+        buf[i] += passwencstring[i % 11];
+    out->Write(&buf.front(), buf.size());
 }
 
 
@@ -58,6 +71,7 @@ const char *HELP_STRING =
 "  -l                     list: print id of all blocks found in the room\n"
 "  -x <blockid> <file>    extract: remove a block and save it in this file\n"
 "Command options:\n"
+"  -u                     for '-e' and '-x': unpack (decode) encoded block data\n"
 "  -w <out-room.crm>      for all commands but '-e': write the resulting room\n"
 "                         into a new file; otherwise will modify the input file\n";
 
@@ -79,6 +93,7 @@ int main(int argc, char *argv[])
     const char *arg_block = nullptr;
     const char *arg_blockfile = nullptr;
     const char *out_roomfile = nullptr;
+    bool unpack = false;
     for (int i = 2; i < argc; ++i)
     {
         if (strcmp(argv[i], "--tell-blockids") == 0)
@@ -89,7 +104,7 @@ int main(int argc, char *argv[])
 
         if (argv[i][0] != '-' || strlen(argv[i]) != 2)
             continue;
-        char arg = argv[2][1];
+        char arg = argv[i][1];
         switch (arg)
         {
         case 'e': case 'i': case 'x':
@@ -107,7 +122,10 @@ int main(int argc, char *argv[])
         case 'w':
             if (argc > i + 1) out_roomfile = argv[(i++) + 1];
             break;
-        case 'l': command = arg; break;
+        case 'l': command = arg;
+            break;
+        case 'u': unpack = true;
+            break;
         }
     }
 
@@ -165,7 +183,7 @@ int main(int argc, char *argv[])
 
     if (command == 'l')
     {
-        HError err = print_room_blockids(datasrc);
+        err = print_room_blockids(datasrc);
         if (!err)
         {
             printf("Error: failed to parse the input room:\n");
@@ -179,24 +197,27 @@ int main(int argc, char *argv[])
     // Parse the input room, search for the requested block ID;
     // save its location in the stream.
     //-----------------------------------------------------------------------//
-    RoomBlockParser parser(datasrc.InputStream.get(), datasrc.DataVersion);
+    // FIXME: following is a very ugly code!
+    // stream should not be shared between two owners at once.
+    Stream *input_s = datasrc.InputStream.get(); // save to let us check positions...
+    RoomBlockParser parser(std::move(datasrc.InputStream), datasrc.DataVersion);
     soff_t block_head = -1;
     soff_t block_data_at = -1;
     soff_t block_end = -1;
-    for (block_end = parser.GetStream()->GetPosition(), err = parser.OpenBlock();
+    for (block_end = input_s->GetPosition(), err = parser.OpenBlock();
          (block_head < 0) && err && !parser.AtEnd(); err = parser.OpenBlock())
     {
         if (parser.GetBlockID() == block_numid || parser.GetBlockName() == block_strid)
         {
             block_head = block_end;
-            block_data_at = parser.GetStream()->GetPosition();
+            block_data_at = input_s->GetPosition();
         }
         parser.SkipBlock();
-        block_end = parser.GetStream()->GetPosition();
+        block_end = input_s->GetPosition();
     }
     // need these later
     const int dataext_flags = parser.GetFlags();
-    const RoomFileVersion dataver = datasrc.DataVersion;
+    datasrc.InputStream = parser.ReleaseStream();
         
     if (!err)
     {
@@ -224,7 +245,16 @@ int main(int argc, char *argv[])
         }
         // Note we export only the internal block data, skipping the header
         datasrc.InputStream->Seek(block_data_at, kSeekBegin);
-        CopyStream(datasrc.InputStream.get(), block_out.get(), block_end - block_data_at);
+        // TODO: this TextScript case is a hack, the tool has to be redesigned
+        // with better options for unpacking blocks into a source data
+        if (unpack && block_strid == "TextScript")
+        {
+            UnpackScriptText(datasrc.InputStream.get(), block_out.get());
+        }
+        else
+        {
+            CopyStream(datasrc.InputStream.get(), block_out.get(), block_end - block_data_at);
+        }
     }
 
     // Export is complete - stop
@@ -241,7 +271,7 @@ int main(int argc, char *argv[])
     std::unique_ptr<Stream> block_in;
     if (command == 'i')
     {
-        block_in.reset(File::OpenFileRead(arg_blockfile));
+        block_in = File::OpenFileRead(arg_blockfile);
         if (!block_in)
         {
             printf("Error: failed to open block file for reading.\n");
@@ -255,7 +285,7 @@ int main(int argc, char *argv[])
     std::vector<uint8_t> temp_data;
     if (out_roomfile)
     {
-        room_out.reset(File::CreateFile(out_roomfile));
+        room_out = File::CreateFile(out_roomfile);
         if (!room_out)
         {
             printf("Error: failed to open room file for writing.\n");
@@ -264,7 +294,7 @@ int main(int argc, char *argv[])
     }
     else
     {
-        room_out.reset(new VectorStream(temp_data, kStream_Write));
+        room_out = std::make_unique<Stream>(std::make_unique<VectorStream>(temp_data, kStream_Write));
     }
 
     // Write whole room, except for the block piece (if found)
@@ -294,8 +324,8 @@ int main(int argc, char *argv[])
     // the original room with the accumulated data
     if (!out_roomfile)
     {
-        std::unique_ptr<Stream> temp_room(new VectorStream(temp_data));
-        room_out.reset(File::CreateFile(in_roomfile));
+        auto temp_room = std::make_unique<Stream>(std::make_unique<VectorStream>(temp_data));
+        room_out = File::CreateFile(in_roomfile);
         if (!room_out)
         {
             printf("Error: failed to open room file for writing.\n");

@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <cstdio>
@@ -18,6 +18,7 @@
 #include "ac/display.h"
 #include "ac/draw.h"
 #include "ac/game.h"
+#include "ac/gamesetup.h"
 #include "ac/gamesetupstruct.h"
 #include "ac/gamestate.h"
 #include "ac/global_character.h"
@@ -27,7 +28,6 @@
 #include "ac/runtime_defines.h"
 #include "ac/speech.h"
 #include "ac/string.h"
-#include "ac/topbarsettings.h"
 #include "debug/debug_log.h"
 #include "font/fonts.h"
 #include "game/roomstruct.h"
@@ -35,13 +35,10 @@
 
 using namespace AGS::Common;
 
-extern TopBarSettings topBar;
-extern GameState play;
 extern RoomStruct thisroom;
-extern int display_message_aschar;
 extern GameSetupStruct game;
 
-void DisplayAtYImpl(int ypos, const char *texx, bool as_speech);
+void DisplayAtYImpl(int ypos, const char *texx, const TopBarSettings *topbar, bool as_speech);
 
 void Display(const char*texx, ...) {
     char displbuf[STD_BUFFER_SIZE];
@@ -59,14 +56,13 @@ void DisplaySimple(const char *text)
 
 void DisplayMB(const char *text)
 {
-    DisplayAtYImpl(-1, text, false);
+    DisplayAtYImpl(-1, text, nullptr, false);
 }
 
 void DisplayTopBar(int ypos, int ttexcol, int backcol, const char *title, const char *text)
 {
     // FIXME: refactor source_text_length and get rid of this ugly hack!
     const int real_text_sourcelen = source_text_length;
-    snprintf(topBar.text, sizeof(topBar.text), "%s", get_translation(title));
     source_text_length = real_text_sourcelen;
 
     if (ypos > 0)
@@ -76,20 +72,22 @@ void DisplayTopBar(int ypos, int ttexcol, int backcol, const char *title, const 
     if (backcol > 0)
         play.top_bar_backcolor = backcol;
 
-    topBar.wantIt = 1;
-    topBar.font = FONT_NORMAL;
-    topBar.height = get_font_height_outlined(topBar.font);
-    topBar.height += data_to_game_coord(play.top_bar_borderwidth) * 2 + get_fixed_pixel_size(1);
-
+    int font;
     // they want to customize the font
     if (play.top_bar_font >= 0)
-        topBar.font = play.top_bar_font;
+        font = play.top_bar_font;
+    else
+        font = FONT_NORMAL;
+    int height = get_font_height_outlined(font)
+        + data_to_game_coord(play.top_bar_borderwidth) * 2 + get_fixed_pixel_size(1);
+
+    const TopBarSettings topbar(get_translation(title), FONT_NORMAL, height);
 
     // DisplaySpeech normally sets this up, but since we're not going via it...
-    if (play.cant_skip_speech & SKIP_AUTOTIMER)
+    if (play.speech_skip_style & SKIP_AUTOTIMER)
         play.messagetime = GetTextDisplayTime(text);
 
-    DisplayAtY(play.top_bar_ypos, text);
+    DisplayAtYImpl(play.top_bar_ypos, text, &topbar, game.options[OPT_ALWAYSSPCH] != 0);
 }
 
 // Display a room/global message in the bar
@@ -99,20 +97,18 @@ void DisplayMessageBar(int ypos, int ttexcol, int backcol, const char *title, in
     DisplayTopBar(ypos, ttexcol, backcol, title, msgbufr);
 }
 
-void DisplayMessageAtY(int msnum, int ypos) {
+void DisplayMessageImpl(int msnum, int aschar, int ypos) {
     char msgbufr[3001];
     if (msnum>=500) {
         get_message_text (msnum, msgbufr);
-        if (display_message_aschar > 0)
-            DisplaySpeech(msgbufr, display_message_aschar);
+        if (aschar > 0)
+            DisplaySpeech(msgbufr, aschar);
         else
             DisplayAtY(ypos, msgbufr);
-        display_message_aschar=0;
         return;
     }
 
-    if (display_message_aschar > 0) {
-        display_message_aschar=0;
+    if (aschar > 0) {
         quit("!DisplayMessage: data column specified a character for local\n"
             "message; use the message editor to select the character for room\n"
             "messages.\n");
@@ -127,13 +123,13 @@ void DisplayMessageAtY(int msnum, int ypos) {
         }
         else {
             // time out automatically if they have set that
-            int oldGameSkipDisp = play.skip_display;
+            const SkipSpeechStyle old_skip_display = play.skip_display;
             if (thisroom.MessageInfos[msnum].Flags & MSG_TIMELIMIT)
-                play.skip_display = 0;
+                play.skip_display = play.skip_timed_display;
 
             DisplayAtY(ypos, msgbufr);
 
-            play.skip_display = oldGameSkipDisp;
+            play.skip_display = old_skip_display;
         }
         if (thisroom.MessageInfos[msnum].Flags & MSG_DISPLAYNEXT) {
             msnum++;
@@ -142,26 +138,34 @@ void DisplayMessageAtY(int msnum, int ypos) {
         else
             repeatloop=0;
     }
+}
 
+void DisplayMessageAtY(int msnum, int ypos) {
+    DisplayMessageImpl(msnum, -1, ypos);
 }
 
 void DisplayMessage(int msnum) {
-    DisplayMessageAtY (msnum, -1);
+    DisplayMessageAtY(msnum, -1);
 }
 
 void DisplayAt(int xxp,int yyp,int widd, const char* text) {
+    if (play.screen_is_faded_out > 0)
+        debug_script_warn("Warning: blocking Display call during fade-out.");
+
     data_to_game_coords(&xxp, &yyp);
     widd = data_to_game_coord(widd);
 
     if (widd<1) widd=play.GetUIViewport().GetWidth()/2;
     if (xxp<0) xxp=play.GetUIViewport().GetWidth()/2-widd/2;
-    _display_at(xxp, yyp, widd, text, DISPLAYTEXT_MESSAGEBOX, 0, 0, 0, false);
+    display_at(xxp, yyp, widd, text, nullptr);
 }
 
-void DisplayAtYImpl(int ypos, const char *texx, bool as_speech) {
+void DisplayAtYImpl(int ypos, const char *texx, const TopBarSettings *topbar, bool as_speech) {
     const Rect &ui_view = play.GetUIViewport();
     if ((ypos < -1) || (ypos >= ui_view.GetHeight()))
         quitprintf("!DisplayAtY: invalid Y co-ordinate supplied (used: %d; valid: 0..%d)", ypos, ui_view.GetHeight());
+    if (play.screen_is_faded_out > 0)
+        debug_script_warn("Warning: blocking Display call during fade-out.");
 
     // Display("") ... a bit of a stupid thing to do, so ignore it
     if (texx[0] == 0)
@@ -182,13 +186,12 @@ void DisplayAtYImpl(int ypos, const char *texx, bool as_speech) {
             play.disabled_user_interface --;
         }
 
-        _display_at(-1, ypos, ui_view.GetWidth() / 2 + ui_view.GetWidth() / 4,
-            get_translation(texx), DISPLAYTEXT_MESSAGEBOX, 0, 0, 0, false);
+        display_at(-1, ypos, ui_view.GetWidth() / 2 + ui_view.GetWidth() / 4, get_translation(texx), topbar);
     }
 }
 
 void DisplayAtY(int ypos, const char *texx) {
-    DisplayAtYImpl(ypos, texx, game.options[OPT_ALWAYSSPCH] != 0);
+    DisplayAtYImpl(ypos, texx, nullptr, game.options[OPT_ALWAYSSPCH] != 0);
 }
 
 void SetSpeechStyle (int newstyle) {
@@ -202,10 +205,11 @@ void SetSkipSpeech (SkipSpeechStyle newval) {
         quit("!SetSkipSpeech: invalid skip mode specified");
 
     debug_script_log("SkipSpeech style set to %d", newval);
-    play.cant_skip_speech = user_to_internal_skip_speech((SkipSpeechStyle)newval);
+    if (usetup.Access.SpeechSkipStyle == kSkipSpeechNone)
+        play.speech_skip_style = user_to_internal_skip_speech((SkipSpeechStyle)newval);
 }
 
 SkipSpeechStyle GetSkipSpeech()
 {
-    return internal_skip_speech_to_user(play.cant_skip_speech);
+    return internal_skip_speech_to_user(play.speech_skip_style);
 }

@@ -19,17 +19,18 @@ namespace AGS.Types
         private bool _startWithItem;
         private int _id;
         private int _hotspotX, _hotspotY;
-        private CustomProperties _properties;
+        private CustomProperties _properties = new CustomProperties(CustomPropertyAppliesTo.InventoryItems);
         private Interactions _interactions = new Interactions(_interactionSchema);
         private bool _currentlyDeserializing = false;
 
         static InventoryItem()
         {
-            _interactionSchema = new InteractionSchema(new string[] { "$$01 inventory item", 
+            _interactionSchema = new InteractionSchema(Script.GLOBAL_SCRIPT_FILE_NAME, false,
+                new string[] { "$$01 inventory item", 
                 "$$02 inventory item", "$$03 inventory item", "Use inventory on this item", 
                 "Other click on inventory item" },
                 new string[] { "Look", "Interact", "Talk", "UseInv", "OtherClick" },
-                "InventoryItem *i, CursorMode mode");
+                "InventoryItem *theItem, CursorMode mode");
         }
 
         public InventoryItem()
@@ -41,7 +42,6 @@ namespace AGS.Types
             _cursorImage = 0;
             _hotspotX = 0;
             _hotspotY = 0;
-            _properties = new CustomProperties();
         }
 
         [Description("The ID number of the item")]
@@ -128,14 +128,23 @@ namespace AGS.Types
             get { return "Inventory: " + this.Name; }
         }
 
+        [Browsable(false)]
+        public string PropertyGridTitle
+        {
+            get { return TypesHelper.MakePropertyGridTitle("Inventory item", _name, _description, _id); }
+        }
+
         [AGSSerializeClass()]
         [Description("Custom properties for this item")]
         [Category("Properties")]
-        [EditorAttribute(typeof(CustomPropertiesUIEditor), typeof(System.Drawing.Design.UITypeEditor))]
         public CustomProperties Properties
         {
             get { return _properties; }
-            protected set { _properties = value; }
+            protected set 
+            {
+                _properties = value;
+                _properties.AppliesTo = CustomPropertyAppliesTo.InventoryItems;
+            }
         }
 
         [AGSNoSerialize()]

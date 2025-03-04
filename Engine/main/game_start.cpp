@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -41,9 +41,8 @@
 using namespace AGS::Common;
 using namespace AGS::Engine;
 
-extern int our_eip, displayed_room;
+extern int displayed_room;
 extern GameSetupStruct game;
-extern GameState play;
 extern CharacterInfo*playerchar;
 
 void start_game_load_savegame_on_startup(const String &load_save)
@@ -53,7 +52,7 @@ void start_game_load_savegame_on_startup(const String &load_save)
         int slot = 1000;
         get_save_slotnum(load_save, slot);
         current_fade_out_effect();
-        try_restore_save(load_save, slot);
+        try_restore_save(load_save, slot, true);
     }
 }
 
@@ -63,18 +62,21 @@ void start_game() {
     Mouse::SetPosition(Point(160, 100));
     newmusic(0);
 
-    our_eip = -42;
+    set_our_eip(-42);
 
     // skip ticks to account for initialisation or a restored game.
     skipMissedTicks();
 
     RunScriptFunctionInModules("game_start");
 
-    our_eip = -43;
+    set_our_eip(-43);
 
-    SetRestartPoint();
+    // Only auto-set first restart point in < 3.6.1 games,
+    // since 3.6.1+ users are suggested to set one manually in script.
+    if (loaded_game_file_version < kGameVersion_361_10)
+        SetRestartPoint();
 
-    our_eip=-3;
+    set_our_eip(-3);
 
     if (displayed_room < 0) {
         current_fade_out_effect();

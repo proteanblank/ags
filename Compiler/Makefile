@@ -27,7 +27,6 @@ COMMON_OBJS = \
 	../Common/script/cc_script.cpp \
 	../Common/util/bufferedstream.cpp \
 	../Common/util/cmdlineopts.cpp \
-	../Common/util/datastream.cpp \
 	../Common/util/directory.cpp \
 	../Common/util/file.cpp \
 	../Common/util/path.cpp \
@@ -45,12 +44,11 @@ COMPILER_OBJS = \
 	fmem.cpp \
 	script/cc_compiledscript.cpp \
 	script/cc_internallist.cpp \
-	script/cc_macrotable.cpp \
 	script/cc_symboltable.cpp \
 	script/cc_treemap.cpp \
 	script/cs_compiler.cpp \
 	script/cs_parser.cpp \
-	script/cs_parser_common.cpp \
+	preproc/cc_macrotable.cpp \
 	preproc/preprocessor.cpp
 
 OBJS := main.cpp \

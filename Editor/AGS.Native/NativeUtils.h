@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -63,9 +63,6 @@ namespace TextHelper
     // this is for symbol names of variables, functions and alike
     AGSString ConvertASCII(System::String^ clr_str);
     void ConvertASCIIToArray(System::String^ clr_str, char *buf, size_t buf_len);
-    // Convert managed text to native string, forcing ASCII and testing for unknown chars
-    // TODO: fix it uses and replace with ConvertUTF8ToArray
-    void ConvertASCIIFilename(System::String^ clr_str, char *buf, size_t buf_len);
     // Convert UTF-8 managed text to native string;
     // this is for filepaths and error messages, etc
     AGSString ConvertUTF8(System::String^ clr_str);
@@ -75,5 +72,15 @@ namespace TextHelper
     // Convert managed to native using given encoder
     AGSString Convert(System::String^ clr_str, System::Text::Encoding^ enc);
 };
+
+namespace WinAPIHelper
+{
+    // Returns a message describing given WinAPI error code.
+    // Error text is returned as a UTF-8 string.
+    // Uses GetLastError if passed errcode is 0.
+    AGSString GetErrorUTF8(uint32_t errcode = 0);
+    AGSString MakeErrorUTF8(const AGSString &error_title, uint32_t errcode = 0);
+    System::String^ MakeErrorManaged(const AGSString &error_title, uint32_t errcode = 0);
+}
 
 extern AGSString editorVersionNumber;

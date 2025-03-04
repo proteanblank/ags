@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -18,21 +18,18 @@
 
 using AGS::Common::Stream;
 
-// [IKM] 2012-07-02: these functions are used during load/save game,
-// and read/written as-is, hence cachedClip pointer should be serialized
-// simply like pointer (although that probably does not mean much sense?)
-void QueuedAudioItem::ReadFromFile(Stream *in)
+void QueuedAudioItem::ReadFromSavegame(Stream *in)
 {
     audioClipIndex = in->ReadInt16();
     priority = in->ReadInt16();
     repeat = in->ReadBool();
-    in->ReadInt32(); // cachedClip
+    in->ReadInt32(); // reserved
 }
 
-void QueuedAudioItem::WriteToFile(Stream *out) const
+void QueuedAudioItem::WriteToSavegame(Stream *out) const
 {
     out->WriteInt16(audioClipIndex);
     out->WriteInt16(priority);
     out->WriteBool(repeat);
-    out->WriteInt32(0); // cachedClip
+    out->WriteInt32(0); // reserved
 }

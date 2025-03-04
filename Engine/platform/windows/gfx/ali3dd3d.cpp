@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 
@@ -47,39 +47,35 @@ namespace D3D
 
 using namespace Common;
 
-D3DTexture::~D3DTexture()
+
+void RectToRECT(const Rect &in_rc, RECT &out_rc)
 {
-    if (_tiles)
-    {
-        for (size_t i = 0; i < _numTiles; ++i)
-            _tiles[i].texture->Release();
-        delete[] _tiles;
-    }
-    if (_vertex)
-    {
-        _vertex->Release();
-    }
+    out_rc.left = in_rc.Left;
+    out_rc.top = in_rc.Top;
+    out_rc.right = in_rc.Right + 1;
+    out_rc.bottom = in_rc.Bottom + 1;
 }
+
+void RectToRECT(const Rect &in_rc, D3DRECT &out_rc)
+{
+    out_rc.x1 = in_rc.Left;
+    out_rc.y1 = in_rc.Top;
+    out_rc.x2 = in_rc.Right + 1;
+    out_rc.y2 = in_rc.Bottom + 1;
+}
+
 
 size_t D3DTexture::GetMemSize() const
 {
     // FIXME: a proper size in video memory, check Direct3D docs
     size_t sz = 0u;
-    for (size_t i = 0; i < _numTiles; ++i)
-        sz += _tiles[i].width * _tiles[i].height * 4;
+    for (const auto &tile : _tiles)
+        sz += tile.allocWidth * tile.allocHeight * 4;
     return sz;
-}
-
-D3DBitmap::~D3DBitmap()
-{
-    if (_renderSurface)
-        _renderSurface->Release();
 }
 
 void D3DBitmap::ReleaseTextureData()
 {
-    if (_renderSurface)
-        _renderSurface->Release();
     _renderSurface = nullptr;
     _data.reset();
 }
@@ -88,13 +84,23 @@ void D3DBitmap::ReleaseTextureData()
 static D3DFORMAT color_depth_to_d3d_format(int color_depth, bool wantAlpha);
 static int d3d_format_to_color_depth(D3DFORMAT format, bool secondary);
 
+D3DGfxModeList::D3DGfxModeList(const D3DPtr &direct3d, int display_index, D3DFORMAT d3dformat)
+    : _direct3d(direct3d)
+    , _displayIndex(display_index)
+    , _pixelFormat(d3dformat)
+{
+    _adapterIndex = SDL_Direct3D9GetAdapterIndex(display_index);
+    _modeCount = _direct3d->GetAdapterModeCount(_adapterIndex, _pixelFormat);
+}
+
 bool D3DGfxModeList::GetMode(int index, DisplayMode &mode) const
 {
     if (_direct3d && index >= 0 && index < _modeCount)
     {
         D3DDISPLAYMODE d3d_mode;
-        if (SUCCEEDED(_direct3d->EnumAdapterModes(D3DADAPTER_DEFAULT, _pixelFormat, index, &d3d_mode)))
+        if (SUCCEEDED(_direct3d->EnumAdapterModes(_adapterIndex, _pixelFormat, index, &d3d_mode)))
         {
+            mode.DisplayIndex = _displayIndex;
             mode.Width = d3d_mode.Width;
             mode.Height = d3d_mode.Height;
             mode.ColorDepth = d3d_format_to_color_depth(d3d_mode.Format, false);
@@ -109,27 +115,39 @@ bool D3DGfxModeList::GetMode(int index, DisplayMode &mode) const
 // The custom FVF, which describes the custom vertex structure.
 #define D3DFVF_CUSTOMVERTEX (D3DFVF_XYZ|D3DFVF_NORMAL|D3DFVF_TEX1)
 
-
-D3DGraphicsDriver::D3DGraphicsDriver(IDirect3D9 *d3d) 
+D3DGraphicsDriver::D3DGraphicsDriver(const D3DPtr &d3d) 
 {
   direct3d = d3d;
-  direct3ddevice = NULL;
-  vertexbuffer = NULL;
-  pixelShader = NULL;
   _legacyPixelShader = false;
   set_up_default_vertices();
-  pNativeSurface = NULL;
-  pNativeTexture = NULL;
   _smoothScaling = false;
   _pixelRenderXOffset = 0;
   _pixelRenderYOffset = 0;
-  _renderSprAtScreenRes = false;
+  _renderAtScreenRes = false;
 
   // Shifts comply to D3DFMT_A8R8G8B8
   _vmem_a_shift_32 = 24;
   _vmem_r_shift_32 = 16;
   _vmem_g_shift_32 = 8;
   _vmem_b_shift_32 = 0;
+}
+
+D3DGraphicsDriver::BackbufferState::BackbufferState(const D3DSurfacePtr &surface,
+    const Size &surf_size, const Size &rend_sz,
+    const Rect &view, const glm::mat4 &proj, const PlaneScaling &scale, int filter)
+    : Surface(surface), SurfSize(surf_size), RendSize(rend_sz)
+    , Viewport(view), Projection(proj), Scaling(scale), Filter(filter)
+{
+    assert(Surface != nullptr);
+}
+
+D3DGraphicsDriver::BackbufferState::BackbufferState(D3DSurfacePtr &&surface,
+    const Size &surf_size, const Size &rend_sz,
+    const Rect &view, const glm::mat4 &proj, const PlaneScaling &scale, int filter)
+    : Surface(std::move(surface)), SurfSize(surf_size), RendSize(rend_sz)
+    , Viewport(view), Projection(proj), Scaling(scale), Filter(filter)
+{
+    assert(Surface != nullptr);
 }
 
 void D3DGraphicsDriver::set_up_default_vertices()
@@ -192,6 +210,8 @@ void D3DGraphicsDriver::ReleaseDisplayMode()
   if (!IsModeSet())
     return;
 
+  _screenBackbuffer = BackbufferState();
+
   OnModeReleased();
   ClearDrawLists();
   ClearDrawBackups();
@@ -205,6 +225,7 @@ bool D3DGraphicsDriver::FirstTimeInit()
 {
   HRESULT hr;
 
+  direct3ddevice->GetCreationParameters(&direct3dcreateparams);
   direct3ddevice->GetDeviceCaps(&direct3ddevicecaps);
 
   // the PixelShader.fx uses ps_1_4
@@ -218,8 +239,7 @@ bool D3DGraphicsDriver::FirstTimeInit()
 
   if (direct3ddevicecaps.PixelShaderVersion < D3DPS_VERSION(requiredPSMajorVersion, requiredPSMinorVersion))  
   {
-    direct3ddevice->Release();
-    direct3ddevice = NULL;
+    direct3ddevice = nullptr;
     SDL_SetError("Graphics card does not support Pixel Shader %d.%d", requiredPSMajorVersion, requiredPSMinorVersion);
     previousError = SDL_GetError();
     return false;
@@ -238,11 +258,10 @@ bool D3DGraphicsDriver::FirstTimeInit()
     if (hGlobal)
     {
       DWORD *dataPtr = (DWORD*)LockResource(hGlobal);
-      hr = direct3ddevice->CreatePixelShader(dataPtr, &pixelShader);
+      hr = direct3ddevice->CreatePixelShader(dataPtr, pixelShader.Acquire());
       if (hr != D3D_OK)
       {
-        direct3ddevice->Release();
-        direct3ddevice = NULL;
+        direct3ddevice = nullptr;
         SDL_SetError("Failed to create pixel shader: 0x%08X", hr);
         previousError = SDL_GetError();
         return false;
@@ -251,27 +270,22 @@ bool D3DGraphicsDriver::FirstTimeInit()
     }
   }
   
-  if (pixelShader == NULL)
+  if (pixelShader == nullptr)
   {
-    direct3ddevice->Release();
-    direct3ddevice = NULL;
+    direct3ddevice = nullptr;
     SDL_SetError("Failed to load pixel shader resource");
     previousError = SDL_GetError();
     return false;
   }
 
   if (direct3ddevice->CreateVertexBuffer(4*sizeof(CUSTOMVERTEX), D3DUSAGE_WRITEONLY,
-          D3DFVF_CUSTOMVERTEX, D3DPOOL_MANAGED, &vertexbuffer, NULL) != D3D_OK) 
+          D3DFVF_CUSTOMVERTEX, D3DPOOL_MANAGED, vertexbuffer.Acquire(), NULL) != D3D_OK) 
   {
-    direct3ddevice->Release();
-    direct3ddevice = NULL;
+    direct3ddevice = nullptr;
     SDL_SetError("Failed to create vertex buffer");
     previousError = SDL_GetError();
     return false;
   }
-
-  // This line crashes because my card doesn't support 8-bit textures
-  //direct3ddevice->SetCurrentTexturePalette(0);
 
   CUSTOMVERTEX *vertices;
   vertexbuffer->Lock(0, 0, (void**)&vertices, D3DLOCK_DISCARD);
@@ -382,10 +396,11 @@ bool D3DGraphicsDriver::IsModeSupported(const DisplayMode &mode)
   D3DFORMAT pixelFormat = color_depth_to_d3d_format(mode.ColorDepth, false);
   D3DDISPLAYMODE d3d_mode;
 
-  int mode_count = direct3d->GetAdapterModeCount(D3DADAPTER_DEFAULT, pixelFormat);
+  const UINT use_adapter = SDL_Direct3D9GetAdapterIndex(mode.DisplayIndex);
+  int mode_count = direct3d->GetAdapterModeCount(use_adapter, pixelFormat);
   for (int i = 0; i < mode_count; i++)
   {
-    if (FAILED(direct3d->EnumAdapterModes(D3DADAPTER_DEFAULT, pixelFormat, i, &d3d_mode)))
+    if (FAILED(direct3d->EnumAdapterModes(use_adapter, pixelFormat, i, &d3d_mode)))
     {
       SDL_SetError("IDirect3D9::EnumAdapterModes failed");
       return false;
@@ -430,28 +445,36 @@ void D3DGraphicsDriver::SetGamma(int newGamma)
 
 void D3DGraphicsDriver::ResetDeviceIfNecessary()
 {
-  HRESULT hr = direct3ddevice->TestCooperativeLevel();
-  if (hr == D3DERR_DEVICELOST)
-  {
-    throw Ali3DFullscreenLostException();
-  }
-
-  if (hr == D3DERR_DEVICENOTRESET)
-  {
-    hr = ResetD3DDevice();
-    if (hr != D3D_OK)
+    HRESULT hr = direct3ddevice->TestCooperativeLevel();
+    if (hr == D3DERR_DEVICELOST)
     {
-      throw Ali3DException(String::FromFormat("IDirect3DDevice9::Reset: failed: error code: 0x%08X", hr));
+        throw Ali3DFullscreenLostException();
     }
 
+    if (hr == D3DERR_DEVICENOTRESET)
+    {
+        hr = ResetDeviceAndRestore();
+        if (hr != D3D_OK)
+        {
+            throw Ali3DException(String::FromFormat("IDirect3DDevice9::Reset: failed: error code: 0x%08X", hr));
+        }
+    }
+    else if (hr != D3D_OK)
+    {
+        throw Ali3DException(String::FromFormat("IDirect3DDevice9::TestCooperativeLevel: failed: error code: 0x%08X", hr));
+    }
+}
+
+HRESULT D3DGraphicsDriver::ResetDeviceAndRestore()
+{
+    HRESULT hr = ResetD3DDevice();
+    if (hr != D3D_OK)
+        return hr;
+
+    // Reinitialize D3D settings, backbuffer surface, etc
     InitializeD3DState();
     CreateVirtualScreen();
-    direct3ddevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &currentgammaramp);
-  }
-  else if (hr != D3D_OK)
-  {
-    throw Ali3DException(String::FromFormat("IDirect3DDevice9::TestCooperativeLevel: failed: error code: 0x%08X", hr));
-  }
+    return D3D_OK;
 }
 
 bool D3DGraphicsDriver::CreateDisplayMode(const DisplayMode &mode)
@@ -460,9 +483,25 @@ bool D3DGraphicsDriver::CreateDisplayMode(const DisplayMode &mode)
     return false;
 
   SDL_Window *window = sys_get_window();
+  int use_display = mode.DisplayIndex;
   if (!window)
   {
-    sys_window_create("", mode.Width, mode.Height, mode.Mode);
+    sys_window_create("", mode.DisplayIndex, mode.Width, mode.Height, mode.Mode);
+  }
+  else
+  {
+#if (AGS_SUPPORT_MULTIDISPLAY)
+    // If user requested an exclusive fullscreen, move window to where we created it first,
+    // because DirectX does not normally support switching displays in exclusive mode.
+    // NOTE: we may in theory support this, but we'd have to release and recreate
+    // ALL the resources, including all textures currently in memory.
+    if (mode.IsRealFullscreen() &&
+        (_fullscreenDisplay > 0) && (sys_get_window_display_index() != _fullscreenDisplay))
+    {
+      use_display = _fullscreenDisplay;
+      sys_window_fit_in_display(_fullscreenDisplay);
+    }
+#endif
   }
 
   HWND hwnd = (HWND)sys_win_get_window();
@@ -490,10 +529,10 @@ bool D3DGraphicsDriver::CreateDisplayMode(const DisplayMode &mode)
   //if ((d3dpp.Windowed == FALSE) && (mode.RefreshRate > 0))
   //  d3dpp.FullScreen_RefreshRateInHz = mode.RefreshRate;
 
-  if (_initGfxCallback != NULL)
+  if (_initGfxCallback != nullptr)
     _initGfxCallback(&d3dpp);
 
-  bool first_time_init = direct3ddevice == NULL;
+  bool first_time_init = direct3ddevice == nullptr;
   HRESULT hr = 0;
   if (direct3ddevice)
   {
@@ -501,9 +540,10 @@ bool D3DGraphicsDriver::CreateDisplayMode(const DisplayMode &mode)
   }
   else
   {
-    hr = direct3d->CreateDevice(D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, hwnd,
+    const UINT use_adapter = SDL_Direct3D9GetAdapterIndex(use_display);
+    hr = direct3d->CreateDevice(use_adapter, D3DDEVTYPE_HAL, hwnd,
                       D3DCREATE_MIXED_VERTEXPROCESSING | D3DCREATE_MULTITHREADED,  // multithreaded required for AVI player
-                      &d3dpp, &direct3ddevice);
+                      &d3dpp, direct3ddevice.Acquire());
   }
   if (hr != D3D_OK)
   {
@@ -526,6 +566,7 @@ bool D3DGraphicsDriver::CreateDisplayMode(const DisplayMode &mode)
     if (!mode.IsRealFullscreen())
     {
       sys_window_set_style(mode.Mode, Size(mode.Width, mode.Height));
+      sys_window_bring_to_front();
     }
   }
   return true;
@@ -604,6 +645,9 @@ void D3DGraphicsDriver::InitializeD3DState()
   direct3ddevice->SetLight(0, &d3dLight);
   direct3ddevice->LightEnable(0, TRUE);
 
+  // Set gamma
+  direct3ddevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &currentgammaramp);
+
   // If we already have a render frame configured, then setup viewport immediately
   SetupViewport();
 }
@@ -637,10 +681,11 @@ void D3DGraphicsDriver::SetupViewport()
   // Set Viewport.
   SetD3DViewport(_dstRect);
 
-  viewport_rect.left   = _dstRect.Left;
-  viewport_rect.right  = _dstRect.Right + 1;
-  viewport_rect.top    = _dstRect.Top;
-  viewport_rect.bottom = _dstRect.Bottom + 1;
+  D3DSurfacePtr backbuffer;
+  HRESULT hr = direct3ddevice->GetRenderTarget(0, backbuffer.Acquire());
+  assert(hr == D3D_OK);
+  _screenBackbuffer = BackbufferState(std::move(backbuffer), Size(_mode.Width, _mode.Height), _srcRect.GetSize(),
+      _dstRect, mat_ortho, _scaling, _filter ? _filter->GetSamplerStateForStandardSprite() : D3DTEXF_POINT);
 
   // View and Projection matrixes are currently fixed in Direct3D renderer
   _stageMatrixes.View = identity;
@@ -650,6 +695,7 @@ void D3DGraphicsDriver::SetupViewport()
 void D3DGraphicsDriver::SetGraphicsFilter(PD3DFilter filter)
 {
   _filter = filter;
+  _screenBackbuffer.Filter = _filter->GetSamplerStateForStandardSprite();
   OnSetFilter();
 }
 
@@ -672,7 +718,11 @@ bool D3DGraphicsDriver::SetDisplayMode(const DisplayMode &mode)
     return false;
 
   OnInit();
-  OnModeSet(mode);
+  DisplayMode set_mode = mode;
+  set_mode.DisplayIndex = sys_get_window_display_index();
+  OnModeSet(set_mode);
+  if ((_fullscreenDisplay < 0) || set_mode.IsRealFullscreen())
+    _fullscreenDisplay = set_mode.DisplayIndex;
   InitializeD3DState();
   CreateVirtualScreen();
   return true;
@@ -691,15 +741,13 @@ void D3DGraphicsDriver::UpdateDeviceScreen(const Size &screen_sz)
   // draw using same device parameters, but adjusting viewport accordingly.
   d3dpp.BackBufferWidth = _mode.Width;
   d3dpp.BackBufferHeight = _mode.Height;
-  HRESULT hr = ResetD3DDevice();
+  HRESULT hr = ResetDeviceAndRestore();
   if (hr != D3D_OK)
   {
       Debug::Printf("D3DGraphicsDriver: Failed to reset D3D device");
       return;
   }
-  InitializeD3DState();
-  CreateVirtualScreen();
-  direct3ddevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &currentgammaramp);
+  // Display mode could've changed, so re-setup viewport, matrixes, etc
   SetupViewport();
 }
 
@@ -708,35 +756,19 @@ void D3DGraphicsDriver::CreateVirtualScreen()
   if (!IsModeSet() || !IsNativeSizeValid())
     return;
 
-  // set up native surface
-  if (pNativeSurface != NULL)
+  // Set up native surface
+  // TODO: maybe not do this always, but only allocate if necessary
+  // when render option is set, or temporarily for making a screenshot.
+  if (_nativeSurface)
   {
-    pNativeSurface->Release();
-    pNativeSurface = NULL;
+    DestroyDDB(_nativeSurface);
+    _nativeSurface = nullptr;
   }
-  if (pNativeTexture != NULL)
-  {
-      pNativeTexture->Release();
-      pNativeTexture = NULL;
-  }
-  if (direct3ddevice->CreateTexture(
-      _srcRect.GetWidth(),
-      _srcRect.GetHeight(),
-      1,
-      D3DUSAGE_RENDERTARGET,
-      color_depth_to_d3d_format(_mode.ColorDepth, false),
-      D3DPOOL_DEFAULT,
-      &pNativeTexture,
-      NULL) != D3D_OK)
-  {
-      throw Ali3DException("CreateTexture failed");
-  }
-  if (pNativeTexture->GetSurfaceLevel(0, &pNativeSurface) != D3D_OK)
-  {
-      throw Ali3DException("GetSurfaceLevel failed");
-  }
-
-  direct3ddevice->ColorFill(pNativeSurface, NULL, 0);
+  _nativeSurface = (D3DBitmap*)CreateRenderTargetDDB(
+      _srcRect.GetWidth(), _srcRect.GetHeight(), _mode.ColorDepth, true);
+  glm::mat4 mat_ortho = glmex::ortho_d3d(_srcRect.GetWidth(), _srcRect.GetHeight());
+  _nativeBackbuffer = BackbufferState(_nativeSurface->_renderSurface,
+    _srcRect.GetSize(), _srcRect.GetSize(), _srcRect, mat_ortho, PlaneScaling(), D3DTEXF_POINT);
 
   // Preset initial stage screen for plugin raw drawing
   SetStageScreen(0, _srcRect.GetSize());
@@ -749,15 +781,12 @@ HRESULT D3DGraphicsDriver::ResetD3DDevice()
     // an application should release any explicit render targets, depth stencil
     // surfaces, additional swap chains, state blocks, and D3DPOOL_DEFAULT
     // resources associated with the device.
-    if (pNativeSurface)
+    _screenBackbuffer = BackbufferState();
+    _nativeBackbuffer = BackbufferState();
+    if (_nativeSurface)
     {
-        pNativeSurface->Release();
-        pNativeSurface = nullptr;
-    }
-    if (pNativeTexture)
-    {
-        pNativeTexture->Release();
-        pNativeTexture = nullptr;
+        DestroyDDB(_nativeSurface);
+        _nativeSurface = nullptr;
     }
     ReleaseRenderTargetData();
     HRESULT hr = direct3ddevice->Reset(&d3dpp);
@@ -772,10 +801,11 @@ void D3DGraphicsDriver::ReleaseRenderTargetData()
     // Remove RT surface ref from all the existing batches
     for (auto &batch : _spriteBatches)
     {
-        if (batch.RenderSurface)
-        {
-            batch.RenderSurface = nullptr;
-        }
+        batch.RenderSurface = nullptr;
+    }
+    for (auto &batch : _backupBatches)
+    {
+        batch.RenderSurface = nullptr;
     }
     // Release the RTs internal data
     for (auto &ddb : _renderTargets)
@@ -791,12 +821,20 @@ void D3DGraphicsDriver::RecreateRenderTargets()
         ddb->ReleaseTextureData();
         // FIXME: this ugly accessing internal texture members
         ddb->_data.reset(reinterpret_cast<D3DTexture*>(CreateTexture(ddb->_width, ddb->_height, ddb->_colDepth, ddb->_opaque, true)));
-        IDirect3DTexture9 *tex = ddb->_data->_tiles->texture;
-        HRESULT hr = tex->GetSurfaceLevel(0, &ddb->_renderSurface);
+        auto &tex = ddb->_data->_tiles[0].texture;
+        HRESULT hr = tex->GetSurfaceLevel(0, ddb->_renderSurface.Acquire());
         assert(hr == D3D_OK);
     }
     // Reappoint RT surfaces in existing batches
     for (auto &batch : _spriteBatches)
+    {
+        if (batch.RenderTarget)
+        {
+            assert(!batch.RenderSurface);
+            batch.RenderSurface = ((D3DBitmap*)batch.RenderTarget)->_renderSurface;
+        }
+    }
+    for (auto &batch : _backupBatches)
     {
         if (batch.RenderTarget)
         {
@@ -829,9 +867,9 @@ int D3DGraphicsDriver::GetDisplayDepthForNativeDepth(int /*native_color_depth*/)
     return 32;
 }
 
-IGfxModeList *D3DGraphicsDriver::GetSupportedModeList(int color_depth)
+IGfxModeList *D3DGraphicsDriver::GetSupportedModeList(int display_index, int color_depth)
 {
-  return new D3DGfxModeList(direct3d, color_depth_to_d3d_format(color_depth, false));
+    return new D3DGfxModeList(direct3d, display_index, color_depth_to_d3d_format(color_depth, false));
 }
 
 PGfxFilter D3DGraphicsDriver::GetGraphicsFilter() const
@@ -844,34 +882,16 @@ void D3DGraphicsDriver::UnInit()
   OnUnInit();
   ReleaseDisplayMode();
 
-  if (pNativeSurface)
+  if (_nativeSurface)
   {
-    pNativeSurface->Release();
-    pNativeSurface = NULL;
+    DestroyDDB(_nativeSurface);
+    _nativeSurface = nullptr;
   }
-  if (pNativeTexture)
-  {
-      pNativeTexture->Release();
-      pNativeTexture = NULL;
-  }
+  _nativeBackbuffer = BackbufferState();
 
-  if (vertexbuffer)
-  {
-    vertexbuffer->Release();
-    vertexbuffer = NULL;
-  }
-
-  if (pixelShader)
-  {
-    pixelShader->Release();
-    pixelShader = NULL;
-  }
-
-  if (direct3ddevice)
-  {
-    direct3ddevice->Release();
-    direct3ddevice = NULL;
-  }
+  vertexbuffer = nullptr;
+  pixelShader = nullptr;
+  direct3ddevice = nullptr;
 
   sys_window_destroy();
 }
@@ -879,9 +899,6 @@ void D3DGraphicsDriver::UnInit()
 D3DGraphicsDriver::~D3DGraphicsDriver()
 {
   D3DGraphicsDriver::UnInit();
-
-  if (direct3d)
-    direct3d->Release();
 }
 
 void D3DGraphicsDriver::ClearRectangle(int x1, int y1, int x2, int y2, RGB *colorToUse)
@@ -896,43 +913,77 @@ void D3DGraphicsDriver::ClearRectangle(int x1, int y1, int x2, int y2, RGB *colo
 void D3DGraphicsDriver::ClearScreenRect(const Rect &r, RGB *colorToUse)
 {
   D3DRECT rectToClear;
-  rectToClear.x1 = r.Left;
-  rectToClear.y1 = r.Top;
-  rectToClear.x2 = r.Right + 1;
-  rectToClear.y2 = r.Bottom + 1;
+  RectToRECT(r, rectToClear);
   DWORD colorDword = 0;
-  if (colorToUse != NULL)
+  if (colorToUse != nullptr)
     colorDword = D3DCOLOR_XRGB(colorToUse->r, colorToUse->g, colorToUse->b);
   direct3ddevice->Clear(1, &rectToClear, D3DCLEAR_TARGET, colorDword, 0.5f, 0);
 }
 
-bool D3DGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_native_res, GraphicResolution *want_fmt)
+void D3DGraphicsDriver::GetCopyOfScreenIntoDDB(IDriverDependantBitmap *target, uint32_t batch_skip_filter)
+{
+    // If we normally render in screen res, restore last frame's lists and
+    // render in native res on the given target;
+    // Also force re-render last frame if we require batch filtering
+    if (_renderAtScreenRes || (batch_skip_filter != 0))
+    {
+        bool old_render_res = _renderAtScreenRes;
+        _renderAtScreenRes = false;
+        RedrawLastFrame(batch_skip_filter);
+        Render(target);
+        _renderAtScreenRes = old_render_res;
+    }
+    else
+    {
+        // If we normally render in native res, then simply render backbuffer contents
+        D3DBitmap *bitmap = (D3DBitmap*)target;
+        Size surf_sz(bitmap->_width, bitmap->_height);
+        BackbufferState backbuffer = BackbufferState(bitmap->_renderSurface, surf_sz, surf_sz,
+            RectWH(0, 0, surf_sz.Width, surf_sz.Height), glmex::ortho_d3d(surf_sz.Width, surf_sz.Height),
+            PlaneScaling(), D3DTEXF_POINT);
+        SetBackbufferState(&backbuffer, true);
+        if (direct3ddevice->BeginScene() != D3D_OK)
+        {
+            throw Ali3DException("IDirect3DDevice9::BeginScene failed");
+        }
+        RenderTexture(_nativeSurface, 0, 0, glmex::identity(), SpriteColorTransform(), _srcRect.GetSize());
+        direct3ddevice->EndScene();
+    }
+}
+
+bool D3DGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination,
+    const Rect *src_rect, bool at_native_res,
+    GraphicResolution *want_fmt, uint32_t batch_skip_filter)
 {
   // Currently don't support copying in screen resolution when we are rendering in native
-  if (!_renderSprAtScreenRes)
+  if (!_renderAtScreenRes)
       at_native_res = true;
-  Size need_size = at_native_res ? _srcRect.GetSize() : _dstRect.GetSize();
-  if (destination->GetColorDepth() != _mode.ColorDepth || destination->GetSize() != need_size)
+
+  Rect copy_from = src_rect ? *src_rect : _srcRect;
+  if (!at_native_res)
+    copy_from = _scaling.ScaleRange(copy_from);
+  if (destination->GetColorDepth() != _mode.ColorDepth || destination->GetSize() != copy_from.GetSize())
   {
     if (want_fmt)
-      *want_fmt = GraphicResolution(need_size.Width, need_size.Height, _mode.ColorDepth);
+      *want_fmt = GraphicResolution(copy_from.GetWidth(), copy_from.GetHeight(), _mode.ColorDepth);
     return false;
   }
+
   // If we are rendering sprites at the screen resolution, and requested native res,
-  // re-render last frame to the native surface
-  if (at_native_res && _renderSprAtScreenRes)
+  // re-render last frame to the native surface;
+  // Also force re-render last frame if we require batch filtering
+  if ((at_native_res && _renderAtScreenRes) || (batch_skip_filter != 0))
   {
-    _renderSprAtScreenRes = false;
-    _reDrawLastFrame();
-    _render(true);
-    _renderSprAtScreenRes = true;
+    bool old_render_res = _renderAtScreenRes;
+    _renderAtScreenRes = !at_native_res;
+    RedrawLastFrame(batch_skip_filter);
+    RenderImpl(true);
+    _renderAtScreenRes = old_render_res;
   }
   
-  IDirect3DSurface9* surface = NULL;
+  D3DSurfacePtr surface;
   {
-    if (_pollingCallback)
-      _pollingCallback();
-
+    Rect viewport;
     if (at_native_res)
     {
       // with render to texture the texture mipmap surface can't be locked directly
@@ -942,28 +993,28 @@ bool D3DGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_n
         _srcRect.GetHeight(),
         color_depth_to_d3d_format(_mode.ColorDepth, false),
         D3DPOOL_SYSTEMMEM,
-        &surface,
+        surface.Acquire(),
         NULL) != D3D_OK)
       {
         throw Ali3DException("CreateOffscreenPlainSurface failed");
       }
-      if (direct3ddevice->GetRenderTargetData(pNativeSurface, surface) != D3D_OK)
+      if (direct3ddevice->GetRenderTargetData(_nativeSurface->_renderSurface.get(), surface.get()) != D3D_OK)
       {
         throw Ali3DException("GetRenderTargetData failed");
       }
-      
+      viewport = _nativeBackbuffer.Viewport;
     }
     // Get the back buffer surface
-    else if (direct3ddevice->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO, &surface) != D3D_OK)
+    else
     {
-      throw Ali3DException("IDirect3DDevice9::GetBackBuffer failed");
+      surface = _screenBackbuffer.Surface;
+      viewport = _screenBackbuffer.Viewport;
     }
 
-    if (_pollingCallback)
-      _pollingCallback();
-
+    RECT copy_from_rc;
+    RectToRECT(copy_from, copy_from_rc);
     D3DLOCKED_RECT lockedRect;
-    if (surface->LockRect(&lockedRect, (at_native_res ? NULL : &viewport_rect), D3DLOCK_READONLY ) != D3D_OK)
+    if (surface->LockRect(&lockedRect, &copy_from_rc, D3DLOCK_READONLY) != D3D_OK)
     {
       throw Ali3DException("IDirect3DSurface9::LockRect failed");
     }
@@ -971,40 +1022,48 @@ bool D3DGraphicsDriver::GetCopyOfScreenIntoBitmap(Bitmap *destination, bool at_n
     BitmapHelper::ReadPixelsFromMemory(destination, (uint8_t*)lockedRect.pBits, lockedRect.Pitch);
 
     surface->UnlockRect();
-    surface->Release();
-
-    if (_pollingCallback)
-      _pollingCallback();
   }
   return true;
 }
 
-void D3DGraphicsDriver::RenderToBackBuffer()
-{
-  throw Ali3DException("D3D driver does not have a back buffer");
-}
-
 void D3DGraphicsDriver::Render()
 {
-  Render(0, 0, kFlip_None);
+    Render(0, 0, kFlip_None);
 }
 
 void D3DGraphicsDriver::Render(int /*xoff*/, int /*yoff*/, GraphicFlip /*flip*/)
 {
-  ResetDeviceIfNecessary();
-  _renderAndPresent(true);
+    ResetDeviceIfNecessary();
+    RenderAndPresent(true);
 }
 
-void D3DGraphicsDriver::_reDrawLastFrame()
+void D3DGraphicsDriver::RenderToBackBuffer()
 {
-  RestoreDrawLists();
+    ResetDeviceIfNecessary();
+    RenderImpl(true);
 }
 
-void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, const glm::mat4 &matGlobal,
-    const SpriteColorTransform &color, const Size &surface_size)
+void D3DGraphicsDriver::Render(IDriverDependantBitmap *target)
+{
+    ResetDeviceIfNecessary();
+    D3DBitmap *bitmap = (D3DBitmap*)target;
+    Size surf_sz(bitmap->_width, bitmap->_height);
+    BackbufferState backbuffer = BackbufferState(bitmap->_renderSurface, surf_sz, surf_sz,
+        RectWH(0, 0, surf_sz.Width, surf_sz.Height), glmex::ortho_d3d(surf_sz.Width, surf_sz.Height),
+        PlaneScaling(), D3DTEXF_POINT);
+    RenderToSurface(&backbuffer, true);
+}
+
+void D3DGraphicsDriver::RenderSprite(const D3DDrawListEntry *drawListEntry, const glm::mat4 &matGlobal,
+    const SpriteColorTransform &color, const Size &rend_sz)
+{
+    RenderTexture(drawListEntry->ddb, drawListEntry->x, drawListEntry->y, matGlobal, color, rend_sz);
+}
+
+void D3DGraphicsDriver::RenderTexture(D3DBitmap *bmpToDraw, int draw_x, int draw_y,
+    const glm::mat4 &matGlobal, const SpriteColorTransform &color, const Size &rend_sz)
 {
   HRESULT hr;
-  D3DBitmap *bmpToDraw = drawListEntry->ddb;
 
   const int alpha = (color.Alpha * bmpToDraw->_alpha) / 255;
 
@@ -1033,7 +1092,7 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
       vector[5] = 1.0f;
 
     direct3ddevice->SetPixelShaderConstantF(0, &vector[0], 2);
-    direct3ddevice->SetPixelShader(pixelShader);
+    direct3ddevice->SetPixelShader(pixelShader.get());
   }
   else
   {
@@ -1085,13 +1144,13 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
   }
 
   const auto *txdata = bmpToDraw->_data.get();
-  if (txdata->_vertex == NULL)
+  if (txdata->_vertex == nullptr)
   {
-    hr = direct3ddevice->SetStreamSource(0, vertexbuffer, 0, sizeof(CUSTOMVERTEX));
+    hr = direct3ddevice->SetStreamSource(0, vertexbuffer.get(), 0, sizeof(CUSTOMVERTEX));
   }
   else
   {
-    hr = direct3ddevice->SetStreamSource(0, txdata->_vertex, 0, sizeof(CUSTOMVERTEX));
+    hr = direct3ddevice->SetStreamSource(0, txdata->_vertex.get(), 0, sizeof(CUSTOMVERTEX));
   }
   if (hr != D3D_OK) 
   {
@@ -1102,10 +1161,8 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
   float height = bmpToDraw->GetHeightToRender();
   float xProportion = width / (float)bmpToDraw->_width;
   float yProportion = height / (float)bmpToDraw->_height;
-  float drawAtX = drawListEntry->x;
-  float drawAtY = drawListEntry->y;
 
-  for (size_t ti = 0; ti < txdata->_numTiles; ++ti)
+  for (size_t ti = 0; ti < txdata->_tiles.size(); ++ti)
   {
     width = txdata->_tiles[ti].width * xProportion;
     height = txdata->_tiles[ti].height * yProportion;
@@ -1115,10 +1172,10 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
       xOffs = (bmpToDraw->_width - (txdata->_tiles[ti].x + txdata->_tiles[ti].width)) * xProportion;
     else
       xOffs = txdata->_tiles[ti].x * xProportion;
-    float thisX = drawAtX + xOffs;
-    float thisY = drawAtY + yOffs;
-    thisX = (-(surface_size.Width / 2.0f)) + thisX;
-    thisY = (surface_size.Height / 2.0f) - thisY;
+    float thisX = draw_x + xOffs;
+    float thisY = draw_y + yOffs;
+    thisX = (-(rend_sz.Width / 2.0f)) + thisX;
+    thisY = (rend_sz.Height / 2.0f) - thisY;
 
     //Setup translation and scaling matrices
     float widthToScale = width;
@@ -1145,18 +1202,14 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
       direct3ddevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
       direct3ddevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
     }
-    else if (!_renderSprAtScreenRes)
-    {
-      direct3ddevice->SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_POINT);
-      direct3ddevice->SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_POINT);
-    }
     else
     {
-      _filter->SetSamplerStateForStandardSprite(direct3ddevice);
+      direct3ddevice->SetSamplerState(0, D3DSAMP_MINFILTER, _currentBackbuffer->Filter);
+      direct3ddevice->SetSamplerState(0, D3DSAMP_MAGFILTER, _currentBackbuffer->Filter);
     }
 
     direct3ddevice->SetTransform(D3DTS_WORLD, (D3DMATRIX*)glm::value_ptr(transform));
-    direct3ddevice->SetTexture(0, txdata->_tiles[ti].texture);
+    direct3ddevice->SetTexture(0, txdata->_tiles[ti].texture.get());
 
     // Treat special render modes
     switch (bmpToDraw->_renderHint)
@@ -1180,89 +1233,75 @@ void D3DGraphicsDriver::_renderSprite(const D3DDrawListEntry *drawListEntry, con
   }
 }
 
-void D3DGraphicsDriver::_renderFromTexture()
+void D3DGraphicsDriver::RenderAndPresent(bool clearDrawListAfterwards)
 {
-    if (direct3ddevice->SetStreamSource(0, vertexbuffer, 0, sizeof(CUSTOMVERTEX)) != D3D_OK)
+    RenderImpl(clearDrawListAfterwards);
+    direct3ddevice->Present(NULL, NULL, NULL, NULL);
+}
+
+void D3DGraphicsDriver::RenderImpl(bool clearDrawListAfterwards)
+{
+    if (_renderAtScreenRes)
     {
-        throw Ali3DException("IDirect3DDevice9::SetStreamSource failed");
+        RenderToSurface(&_screenBackbuffer, clearDrawListAfterwards);
+    }
+    else
+    {
+        RenderToSurface(&_nativeBackbuffer, clearDrawListAfterwards);
     }
 
-    float width = _srcRect.GetWidth();
-    float height = _srcRect.GetHeight();
-    float drawAtX = -(_srcRect.GetWidth() / 2);
-    float drawAtY = _srcRect.GetHeight() / 2;
-
-    glm::mat4 transform = glmex::make_transform2d(
-        drawAtX - _pixelRenderXOffset, drawAtY + _pixelRenderYOffset, width, height, 0.f);
-
-    direct3ddevice->SetTransform(D3DTS_WORLD, (D3DMATRIX*)glm::value_ptr(transform));
-
-    direct3ddevice->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1);
-    direct3ddevice->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE);
-
-    _filter->SetSamplerStateForStandardSprite(direct3ddevice);
-
-    direct3ddevice->SetTexture(0, pNativeTexture);
-
-    if (direct3ddevice->DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2) != D3D_OK)
+    if (!_renderAtScreenRes)
     {
-        throw Ali3DException("IDirect3DDevice9::DrawPrimitive failed");
+        // Draw native texture on a real backbuffer
+        SetBackbufferState(&_screenBackbuffer, true);
+        if (direct3ddevice->BeginScene() != D3D_OK)
+        {
+            throw Ali3DException("IDirect3DDevice9::BeginScene failed");
+        }
+        RenderTexture(_nativeSurface, 0, 0, glmex::identity(), SpriteColorTransform(), _srcRect.GetSize());
+        direct3ddevice->EndScene();
     }
 }
 
-void D3DGraphicsDriver::_renderAndPresent(bool clearDrawListAfterwards)
+void D3DGraphicsDriver::RenderToSurface(BackbufferState *state, bool clearDrawListAfterwards)
 {
-  _render(clearDrawListAfterwards);
-  direct3ddevice->Present(NULL, NULL, NULL, NULL);
+    SetBackbufferState(state, true);
+
+    // if showing at 2x size, the sprite can get distorted otherwise
+    direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
+    direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
+    direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP);
+
+    if (direct3ddevice->BeginScene() != D3D_OK)
+    {
+        throw Ali3DException("IDirect3DDevice9::BeginScene failed");
+    }
+
+    RenderSpriteBatches();
+
+    direct3ddevice->EndScene();
+
+    if (clearDrawListAfterwards)
+    {
+        BackupDrawLists();
+        ClearDrawLists();
+    }
+    ResetFxPool();
 }
 
-void D3DGraphicsDriver::_render(bool clearDrawListAfterwards)
+void D3DGraphicsDriver::SetBackbufferState(BackbufferState *state, bool clear)
 {
-  IDirect3DSurface9 *pBackBuffer = NULL;
-
-  if (direct3ddevice->GetRenderTarget(0, &pBackBuffer) != D3D_OK) {
-    throw Ali3DException("IDirect3DSurface9::GetRenderTarget failed");
-  }
-  direct3ddevice->ColorFill(pBackBuffer, nullptr, D3DCOLOR_RGBA(0, 0, 0, 255));
-
-  if (direct3ddevice->BeginScene() != D3D_OK)
-    throw Ali3DException("IDirect3DDevice9::BeginScene failed");
-
-  if (!_renderSprAtScreenRes) {
-    if (direct3ddevice->SetRenderTarget(0, pNativeSurface) != D3D_OK)
+    _currentBackbuffer = state;
+    if (direct3ddevice->SetRenderTarget(0, _currentBackbuffer->Surface.get()) != D3D_OK)
     {
-      throw Ali3DException("IDirect3DSurface9::SetRenderTarget failed");
+        throw Ali3DException("IDirect3DSurface9::SetRenderTarget failed");
     }
-  }
+    SetD3DViewport(_currentBackbuffer->Viewport);
 
-  direct3ddevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_RGBA(0, 0, 0, 255), 0.5f, 0);
-
-  // if showing at 2x size, the sprite can get distorted otherwise
-  direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSU, D3DTADDRESS_CLAMP);
-  direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSV, D3DTADDRESS_CLAMP);
-  direct3ddevice->SetSamplerState(0, D3DSAMP_ADDRESSW, D3DTADDRESS_CLAMP);
-
-  RenderSpriteBatches();
-
-  if (!_renderSprAtScreenRes) {
-    if (direct3ddevice->SetRenderTarget(0, pBackBuffer)!= D3D_OK)
+    if (clear)
     {
-      throw Ali3DException("IDirect3DSurface9::SetRenderTarget failed");
+        direct3ddevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_RGBA(0, 0, 0, 0), 0.5f, 0);
     }
-    SetD3DViewport(_dstRect);
-    _renderFromTexture();
-  }
-
-  direct3ddevice->EndScene();
-
-  pBackBuffer->Release();
-
-  if (clearDrawListAfterwards)
-  {
-    BackupDrawLists();
-    ClearDrawLists();
-  }
-  ResetFxPool();
 }
 
 void D3DGraphicsDriver::SetD3DViewport(const Rect &rc)
@@ -1283,12 +1322,9 @@ void D3DGraphicsDriver::SetScissor(const Rect &clip, bool render_on_texture)
     if (!clip.IsEmpty())
     {
         // Adjust a clipping rect to either whole screen, or a target texture
-        Rect scissor = render_on_texture ? clip : _scaling.ScaleRange(clip);
+        Rect scissor = render_on_texture ? clip : _currentBackbuffer->Scaling.ScaleRange(clip);
         RECT d3d_scissor;
-        d3d_scissor.left = scissor.Left;
-        d3d_scissor.top = scissor.Top;
-        d3d_scissor.right = scissor.Right + 1;
-        d3d_scissor.bottom = scissor.Bottom + 1;
+        RectToRECT(scissor, d3d_scissor);
         direct3ddevice->SetRenderState(D3DRS_SCISSORTESTENABLE, TRUE);
         direct3ddevice->SetScissorRect(&d3d_scissor);
     }
@@ -1298,16 +1334,15 @@ void D3DGraphicsDriver::SetScissor(const Rect &clip, bool render_on_texture)
     }
 }
 
-void D3DGraphicsDriver::SetRenderTarget(const D3DSpriteBatch *batch,
-    IDirect3DSurface9 *back_buffer, Size &surface_sz)
+void D3DGraphicsDriver::SetRenderTarget(const D3DSpriteBatch *batch, Size &rend_sz, bool clear)
 {
     if (batch && batch->RenderTarget)
     {
         // Assign an arbitrary render target, and setup render params
-        HRESULT hr = direct3ddevice->SetRenderTarget(0, batch->RenderSurface);
+        HRESULT hr = direct3ddevice->SetRenderTarget(0, batch->RenderSurface.get());
         assert(hr == D3D_OK);
-        direct3ddevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_RGBA(0, 0, 0, 0), 0.5f, 0);
-        surface_sz = Size(batch->RenderTarget->GetWidth(), batch->RenderTarget->GetHeight());
+        Size surface_sz = Size(batch->RenderTarget->GetWidth(), batch->RenderTarget->GetHeight());
+        rend_sz = surface_sz;
         SetD3DViewport(RectWH(surface_sz));
         glm::mat4 mat_ortho = glmex::ortho_d3d(surface_sz.Width, surface_sz.Height);
         direct3ddevice->SetTransform(D3DTS_PROJECTION, (D3DMATRIX*)glm::value_ptr(mat_ortho));
@@ -1319,19 +1354,24 @@ void D3DGraphicsDriver::SetRenderTarget(const D3DSpriteBatch *batch,
     else
     {
         // Assign the default backbuffer
-        HRESULT hr = direct3ddevice->SetRenderTarget(0, back_buffer);
+        HRESULT hr = direct3ddevice->SetRenderTarget(0, _currentBackbuffer->Surface.get());
         assert(hr == D3D_OK);
-        surface_sz = _srcRect.GetSize();
-        SetD3DViewport(_renderSprAtScreenRes ? _dstRect : _srcRect);
-        glm::mat4 mat_ortho = glmex::ortho_d3d(_srcRect.GetWidth(), _srcRect.GetHeight());
-        direct3ddevice->SetTransform(D3DTS_PROJECTION, (D3DMATRIX*)glm::value_ptr(mat_ortho));
+        rend_sz = _currentBackbuffer->RendSize;
+        SetD3DViewport(_currentBackbuffer->Viewport);
+        direct3ddevice->SetTransform(D3DTS_PROJECTION, (D3DMATRIX*)glm::value_ptr(_currentBackbuffer->Projection));
         // Disable alpha merging rules, return back to default settings
         direct3ddevice->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
+    }
+
+    if (clear)
+    {
+        direct3ddevice->Clear(0, NULL, D3DCLEAR_TARGET, D3DCOLOR_RGBA(0, 0, 0, 0), 0.5f, 0);
     }
 }
 
 void D3DGraphicsDriver::RenderSpriteBatches()
 {
+    assert(_currentBackbuffer);
     // Close unended batches, and issue a warning
     assert(_actSpriteBatch == UINT32_MAX);
     while (_actSpriteBatch != UINT32_MAX)
@@ -1342,23 +1382,28 @@ void D3DGraphicsDriver::RenderSpriteBatches()
         return; // no batches - no render
     }
 
+    // TODO: following algorithm is repeated for both Direct3D and OpenGL renderer
+    // classes. The problem is that some data has different types and contents
+    // specific to the renderer. But there has to be a good way to make a shared
+    // algorithm in a base class.
+
     // Render all the sprite batches with necessary transformations;
     // some of them may be rendered to a separate texture instead.
     // For these we save their IDs in a stack (rt_parents).
     // The top of the stack lets us know which batch's RT we are using.
     std::stack<uint32_t> rt_parents;
-    IDirect3DSurface9 *back_buffer = nullptr;
-    direct3ddevice->GetRenderTarget(0, &back_buffer);
+    IDirect3DSurface9 *back_buffer = _currentBackbuffer->Surface.get();
     assert(back_buffer);
     IDirect3DSurface9 *cur_rt = back_buffer; // current render target
-    Size surface_sz = _srcRect.GetSize(); // current rt surface size
+    Size rend_sz = _currentBackbuffer->RendSize; // current rt surface size
 
     const size_t last_batch_to_rend = _spriteBatchDesc.size() - 1;
     for (size_t cur_bat = 0u, last_bat = 0u, cur_spr = 0u; last_bat <= last_batch_to_rend;)
     {
-        // Test if we are entering this batch (and not continuing after coming back from nested)
         const auto &batch = _spriteBatches[cur_bat];
-        if (cur_spr <= _spriteBatchRange[cur_bat].first)
+        // Test if we are entering this batch (and not continuing after coming back from nested)
+        const bool new_batch = cur_bat == last_bat;
+        if (new_batch)
         {
             // If batch introduces a new render target, or the first using backbuffer, then remember it
             if (rt_parents.empty() || batch.RenderTarget)
@@ -1367,23 +1412,31 @@ void D3DGraphicsDriver::RenderSpriteBatches()
                 rt_parents.push(rt_parents.top()); // copy same current parent
         }
 
-        // Render immediate batch sprites, if any, update cur_spr iterator
-        if ((cur_spr < _spriteList.size()) && (cur_bat == _spriteList[cur_spr].node))
+        // If this batch has ANY sprites in it at all (own, or nested),
+        // then we would need to update render target; otherwise there's no need
+        if (_spriteBatchRange[cur_bat].first < _spriteBatchRange[cur_bat].second)
         {
             // If render target is different in this batch, then set it up
             const auto &rt_parent = _spriteBatches[rt_parents.top()];
-            if (rt_parent.RenderSurface && (cur_rt != rt_parent.RenderSurface) ||
+            if (rt_parent.RenderSurface && (cur_rt != rt_parent.RenderSurface.get()) ||
                 !rt_parent.RenderSurface && (cur_rt != back_buffer))
             {
-                cur_rt = batch.RenderSurface ? batch.RenderSurface : back_buffer;
-                SetRenderTarget(&batch, back_buffer, surface_sz);
+                cur_rt = rt_parent.RenderSurface ? rt_parent.RenderSurface.get() : back_buffer;
+                SetRenderTarget(&rt_parent, rend_sz, new_batch);
             }
+        }
+
+        // Render immediate batch sprites, if any, update cur_spr iterator;
+        // we know that the batch has sprites, if next sprite in list belongs to it ("node" ref)
+        if ((cur_spr < _spriteList.size()) && (cur_bat == _spriteList[cur_spr].node))
+        {
             // Now set clip (scissor), and render sprites
-            const bool render_to_texture = (!_renderSprAtScreenRes) || (cur_rt != back_buffer);
-            SetScissor(batch.Viewport, render_to_texture);
+            SetScissor(batch.Viewport, (cur_rt != back_buffer));
             _stageMatrixes.World = batch.Matrix;
             _rendSpriteBatch = batch.ID;
-            cur_spr = RenderSpriteBatch(batch, cur_spr, surface_sz);
+            cur_spr = RenderSpriteBatch(batch, cur_spr, rend_sz);
+            // at this point cur_spr iterator is updated past the last sprite in a sequence;
+            // this may be the end of batch, but also may be the a begginning of a sub-batch
         }
 
         // Test if we're exiting current batch (and not going into nested ones):
@@ -1406,14 +1459,13 @@ void D3DGraphicsDriver::RenderSpriteBatches()
         }
     }
 
-    SetRenderTarget(nullptr, back_buffer, surface_sz);
-    back_buffer->Release();
+    SetRenderTarget(nullptr, rend_sz, false);
     _rendSpriteBatch = UINT32_MAX;
     _stageMatrixes.World = _spriteBatches[0].Matrix;
     direct3ddevice->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
 }
 
-size_t D3DGraphicsDriver::RenderSpriteBatch(const D3DSpriteBatch &batch, size_t from, const Size &surface_size)
+size_t D3DGraphicsDriver::RenderSpriteBatch(const D3DSpriteBatch &batch, size_t from, const Size &rend_sz)
 {
     for (; (from < _spriteList.size()) && (_spriteList[from].node == batch.ID); ++from)
     {
@@ -1421,21 +1473,19 @@ size_t D3DGraphicsDriver::RenderSpriteBatch(const D3DSpriteBatch &batch, size_t 
         if (e.skip)
             continue;
 
-        switch (reinterpret_cast<intptr_t>(e.ddb))
+        switch (reinterpret_cast<uintptr_t>(e.ddb))
         {
         case DRAWENTRY_STAGECALLBACK:
             // raw-draw plugin support
-            // NOTE: device ptr cast will only work on 32-bit systems!
             int sx, sy;
-            if (auto *ddb = DoSpriteEvtCallback(e.x,
-                static_cast<int32_t>(reinterpret_cast<uintptr_t>(direct3ddevice)), sx, sy))
+            if (auto *ddb = DoSpriteEvtCallback(e.x, reinterpret_cast<intptr_t>(direct3ddevice.get()), sx, sy))
             {
                 auto stageEntry = D3DDrawListEntry((D3DBitmap*)ddb, batch.ID, sx, sy);
-                _renderSprite(&stageEntry, batch.Matrix, batch.Color, surface_size);
+                RenderSprite(&stageEntry, batch.Matrix, batch.Color, rend_sz);
             }
             break;
         default:
-            _renderSprite(&e, batch.Matrix, batch.Color, surface_size);
+            RenderSprite(&e, batch.Matrix, batch.Color, rend_sz);
             break;
         }
     }
@@ -1551,6 +1601,27 @@ void D3DGraphicsDriver::RestoreDrawLists()
     _actSpriteBatch = UINT32_MAX;
 }
 
+void D3DGraphicsDriver::FilterSpriteBatches(uint32_t skip_filter)
+{
+    if (skip_filter == 0)
+        return;
+    for (size_t i = 0; i < _spriteBatchDesc.size(); ++i)
+    {
+        if (_spriteBatchDesc[i].FilterFlags & skip_filter)
+        {
+            const auto range = _spriteBatchRange[i];
+            for (size_t spr = range.first; spr < range.second; ++spr)
+                _spriteList[spr].skip = true;
+        }
+    }
+}
+
+void D3DGraphicsDriver::RedrawLastFrame(uint32_t skip_filter)
+{
+    RestoreDrawLists();
+    FilterSpriteBatches(skip_filter);
+}
+
 void D3DGraphicsDriver::DrawSprite(int x, int y, IDriverDependantBitmap* ddb)
 {
     assert(_actSpriteBatch != UINT32_MAX);
@@ -1585,12 +1656,12 @@ void D3DGraphicsDriver::DestroyDDB(IDriverDependantBitmap* ddb)
     delete (D3DBitmap*)ddb;
 }
 
-void D3DGraphicsDriver::UpdateTextureRegion(D3DTextureTile *tile, Bitmap *bitmap, bool has_alpha, bool opaque)
+void D3DGraphicsDriver::UpdateTextureRegion(D3DTextureTile *tile, const Bitmap *bitmap, bool has_alpha, bool opaque)
 {
-  IDirect3DTexture9* newTexture = tile->texture;
+  auto &texture = tile->texture;
 
   D3DLOCKED_RECT lockedRegion;
-  HRESULT hr = newTexture->LockRect(0, &lockedRegion, NULL, D3DLOCK_NOSYSLOCK | D3DLOCK_DISCARD);
+  HRESULT hr = texture->LockRect(0, &lockedRegion, NULL, D3DLOCK_NOSYSLOCK | D3DLOCK_DISCARD);
   if (hr != D3D_OK)
   {
     throw Ali3DException("Unable to lock texture");
@@ -1599,15 +1670,16 @@ void D3DGraphicsDriver::UpdateTextureRegion(D3DTextureTile *tile, Bitmap *bitmap
   bool usingLinearFiltering = _filter->NeedToColourEdgeLines();
   uint8_t *memPtr = static_cast<uint8_t*>(lockedRegion.pBits);
 
+  assert(!opaque || !has_alpha); // has_alpha is meaningless with opaque
   if (opaque)
-    BitmapToVideoMemOpaque(bitmap, has_alpha, tile, memPtr, lockedRegion.Pitch);
+    BitmapToVideoMemOpaque(bitmap, tile, memPtr, lockedRegion.Pitch);
   else
     BitmapToVideoMem(bitmap, has_alpha, tile, memPtr, lockedRegion.Pitch, usingLinearFiltering);
 
-  newTexture->UnlockRect(0);
+  texture->UnlockRect(0);
 }
 
-void D3DGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap *ddb, Bitmap *bitmap, bool has_alpha)
+void D3DGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap *ddb, const Bitmap *bitmap, bool has_alpha)
 {
   // FIXME: what to do if texture is shared??
   D3DBitmap *target = (D3DBitmap*)ddb;
@@ -1615,7 +1687,7 @@ void D3DGraphicsDriver::UpdateDDBFromBitmap(IDriverDependantBitmap *ddb, Bitmap 
   target->_hasAlpha = has_alpha;
 }
 
-void D3DGraphicsDriver::UpdateTexture(Texture *txdata, Bitmap *bitmap, bool has_alpha, bool opaque)
+void D3DGraphicsDriver::UpdateTexture(Texture *txdata, const Bitmap *bitmap, bool has_alpha, bool opaque)
 {
   const int color_depth = bitmap->GetColorDepth();
   if (bitmap->GetColorDepth() != txdata->Res.ColorDepth)
@@ -1627,9 +1699,9 @@ void D3DGraphicsDriver::UpdateTexture(Texture *txdata, Bitmap *bitmap, bool has_
       select_palette(palette);
 
   auto *d3ddata = reinterpret_cast<D3DTexture*>(txdata);
-  for (size_t i = 0; i < d3ddata->_numTiles; ++i)
+  for (auto &tile : d3ddata->_tiles)
   {
-    UpdateTextureRegion(&d3ddata->_tiles[i], bitmap, has_alpha, opaque);
+    UpdateTextureRegion(&tile, bitmap, has_alpha, opaque);
   }
 
   if (color_depth == 8)
@@ -1645,56 +1717,43 @@ int D3DGraphicsDriver::GetCompatibleBitmapFormat(int color_depth)
   return 32;
 }
 
-size_t D3DGraphicsDriver::GetAvailableTextureMemory()
+uint64_t D3DGraphicsDriver::GetAvailableTextureMemory()
 {
   return direct3ddevice->GetAvailableTextureMem();
 }
 
 void D3DGraphicsDriver::AdjustSizeToNearestSupportedByCard(int *width, int *height)
 {
-  int allocatedWidth = *width, allocatedHeight = *height;
+    int allocatedWidth = *width, allocatedHeight = *height;
 
-  if (direct3ddevicecaps.TextureCaps & D3DPTEXTURECAPS_POW2)
-  {
-    bool foundWidth = false, foundHeight = false;
-    int tryThis = 2;
-    while ((!foundWidth) || (!foundHeight))
+    if (direct3ddevicecaps.TextureCaps & D3DPTEXTURECAPS_POW2)
     {
-      if ((tryThis >= allocatedWidth) && (!foundWidth))
-      {
-        allocatedWidth = tryThis;
-        foundWidth = true;
-      }
-
-      if ((tryThis >= allocatedHeight) && (!foundHeight))
-      {
-        allocatedHeight = tryThis;
-        foundHeight = true;
-      }
-
-      tryThis = tryThis << 1;
+        int pow2;
+        for (pow2 = 2; pow2 < allocatedWidth; pow2 <<= 1);
+        allocatedWidth = pow2;
+        for (pow2 = 2; pow2 < allocatedHeight; pow2 <<= 1);
+        allocatedHeight = pow2;
     }
-  }
 
-  if (direct3ddevicecaps.TextureCaps & D3DPTEXTURECAPS_SQUAREONLY)
-  {
-    if (allocatedWidth > allocatedHeight) 
+    if (direct3ddevicecaps.TextureCaps & D3DPTEXTURECAPS_SQUAREONLY)
     {
-     allocatedHeight = allocatedWidth;
+        if (allocatedWidth > allocatedHeight) 
+        {
+            allocatedHeight = allocatedWidth;
+        }
+        else
+        {
+            allocatedWidth = allocatedHeight;
+        }
     }
-    else
-    {
-     allocatedWidth = allocatedHeight;
-    }
-  }
 
-  *width = allocatedWidth;
-  *height = allocatedHeight;
+    *width = allocatedWidth;
+    *height = allocatedHeight;
 }
 
 bool D3DGraphicsDriver::IsTextureFormatOk( D3DFORMAT TextureFormat, D3DFORMAT AdapterFormat ) 
 {
-    HRESULT hr = direct3d->CheckDeviceFormat( D3DADAPTER_DEFAULT,
+    HRESULT hr = direct3d->CheckDeviceFormat(direct3dcreateparams.AdapterOrdinal,
                                           D3DDEVTYPE_HAL,
                                           AdapterFormat,
                                           0,
@@ -1728,8 +1787,8 @@ IDriverDependantBitmap* D3DGraphicsDriver::CreateRenderTargetDDB(int width, int 
     D3DBitmap *ddb = new D3DBitmap(width, height, color_depth, opaque);
     // FIXME: this ugly accessing internal texture members
     ddb->_data.reset(reinterpret_cast<D3DTexture*>(CreateTexture(width, height, color_depth, opaque, true)));
-    IDirect3DTexture9 *tex = ddb->_data->_tiles->texture;
-    HRESULT hr = tex->GetSurfaceLevel(0, &ddb->_renderSurface);
+    auto &tex = ddb->_data->_tiles[0].texture;
+    HRESULT hr = tex->GetSurfaceLevel(0, ddb->_renderSurface.Acquire());
     assert(hr == D3D_OK);
     ddb->_renderHint = kTxHint_PremulAlpha;
     _renderTargets.push_back(ddb);
@@ -1781,9 +1840,9 @@ Texture *D3DGraphicsDriver::CreateTexture(int width, int height, int color_depth
   AdjustSizeToNearestSupportedByCard(&tileAllocatedWidth, &tileAllocatedHeight);
 
   auto *txdata = new D3DTexture(GraphicResolution(width, height, color_depth), as_render_target);
-  int numTiles = tilesAcross * tilesDown;
-  D3DTextureTile *tiles = new D3DTextureTile[numTiles];
-  CUSTOMVERTEX *vertices = NULL;
+  const int numTiles = tilesAcross * tilesDown;
+  std::vector<D3DTextureTile> tiles(numTiles);
+  CUSTOMVERTEX *vertices = nullptr;
 
   if ((numTiles == 1) &&
       (allocatedWidth == width) &&
@@ -1797,18 +1856,16 @@ Texture *D3DGraphicsDriver::CreateTexture(int width, int height, int color_depth
      // so that only the relevant portion of the texture is rendered
      int vertexBufferSize = numTiles * 4 * sizeof(CUSTOMVERTEX);
      HRESULT hr = direct3ddevice->CreateVertexBuffer(vertexBufferSize, 0,
-         D3DFVF_CUSTOMVERTEX, D3DPOOL_MANAGED, &txdata->_vertex, NULL);
+         D3DFVF_CUSTOMVERTEX, D3DPOOL_MANAGED, txdata->_vertex.Acquire(), NULL);
 
      if (hr != D3D_OK) 
      {
-        delete []tiles;
         throw Ali3DException(String::FromFormat(
             "Direct3DDevice9::CreateVertexBuffer(Length=%d) for texture failed: error code 0x%08X", vertexBufferSize, hr));
      }
 
      if (txdata->_vertex->Lock(0, 0, (void**)&vertices, D3DLOCK_DISCARD) != D3D_OK)
      {
-       delete []tiles;
        throw Ali3DException("Failed to lock vertex buffer");
      }
   }
@@ -1836,8 +1893,10 @@ Texture *D3DGraphicsDriver::CreateTexture(int width, int height, int color_depth
         thisAllocatedHeight = thisTile->height;
         AdjustSizeToNearestSupportedByCard(&thisAllocatedWidth, &thisAllocatedHeight);
       }
+      thisTile->allocWidth = thisAllocatedWidth;
+      thisTile->allocHeight = thisAllocatedHeight;
 
-      if (vertices != NULL)
+      if (vertices != nullptr)
       {
         for (int vidx = 0; vidx < 4; vidx++)
         {
@@ -1859,7 +1918,7 @@ Texture *D3DGraphicsDriver::CreateTexture(int width, int height, int color_depth
       D3DFORMAT texture_fmt = color_depth_to_d3d_format(_mode.ColorDepth, !opaque);
       HRESULT hr = direct3ddevice->CreateTexture(thisAllocatedWidth, thisAllocatedHeight, 1,
                                       texture_use, texture_fmt,
-                                      texture_pool, &thisTile->texture, NULL);
+                                      texture_pool, thisTile->texture.Acquire(), NULL);
       if (hr != D3D_OK)
       {
         throw Ali3DException(String::FromFormat(
@@ -1869,138 +1928,13 @@ Texture *D3DGraphicsDriver::CreateTexture(int width, int height, int color_depth
     }
   }
 
-  if (vertices != NULL)
+  if (vertices != nullptr)
   {
       txdata->_vertex->Unlock();
   }
 
-  txdata->_numTiles = numTiles;
-  txdata->_tiles = tiles;
+  txdata->_tiles = std::move(tiles);
   return txdata;
-}
-
-void D3DGraphicsDriver::do_fade(bool fadingOut, int speed, int targetColourRed, int targetColourGreen, int targetColourBlue)
-{
-  // Construct scene in order: game screen, fade fx, post game overlay
-  // NOTE: please keep in mind: redrawing last saved frame here instead of constructing new one
-  // is done because of backwards-compatibility issue: originally AGS faded out using frame
-  // drawn before the script that triggers blocking fade (e.g. instigated by ChangeRoom).
-  // Unfortunately some existing games were changing looks of the screen during same function,
-  // but these were not supposed to get on screen until before fade-in.
-  if (fadingOut)
-    this->_reDrawLastFrame();
-  else if (_drawScreenCallback != NULL)
-    _drawScreenCallback();
-  Bitmap *blackSquare = BitmapHelper::CreateBitmap(16, 16, 32);
-  blackSquare->Clear(makecol32(targetColourRed, targetColourGreen, targetColourBlue));
-  IDriverDependantBitmap *d3db = this->CreateDDBFromBitmap(blackSquare, false, true);
-  delete blackSquare;
-  BeginSpriteBatch(_srcRect, SpriteTransform());
-  d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-  this->DrawSprite(0, 0, d3db);
-  EndSpriteBatch();
-  if (_drawPostScreenCallback != NULL)
-      _drawPostScreenCallback();
-
-  if (speed <= 0) speed = 16;
-  speed *= 2;  // harmonise speeds with software driver which is faster
-  for (int a = 1; a < 255; a += speed)
-  {
-    d3db->SetAlpha(fadingOut ? a : (255 - a));
-    this->_renderAndPresent(false);
-
-    sys_evt_process_pending();
-    if (_pollingCallback)
-      _pollingCallback();
-    WaitForNextFrame();
-  }
-
-  if (fadingOut)
-  {
-    d3db->SetAlpha(255);
-    this->_renderAndPresent(false);
-  }
-
-  this->DestroyDDB(d3db);
-  this->ClearDrawLists();
-  ResetFxPool();
-}
-
-void D3DGraphicsDriver::FadeOut(int speed, int targetColourRed, int targetColourGreen, int targetColourBlue) 
-{
-  do_fade(true, speed, targetColourRed, targetColourGreen, targetColourBlue);
-}
-
-void D3DGraphicsDriver::FadeIn(int speed, PALETTE /*p*/, int targetColourRed, int targetColourGreen, int targetColourBlue) 
-{
-  do_fade(false, speed, targetColourRed, targetColourGreen, targetColourBlue);
-}
-
-void D3DGraphicsDriver::BoxOutEffect(bool blackingOut, int speed, int delay)
-{
-  // Construct scene in order: game screen, fade fx, post game overlay
-  if (blackingOut)
-     this->_reDrawLastFrame();
-  else if (_drawScreenCallback != NULL)
-    _drawScreenCallback();
-  Bitmap *blackSquare = BitmapHelper::CreateBitmap(16, 16, 32);
-  blackSquare->Clear();
-  IDriverDependantBitmap *d3db = this->CreateDDBFromBitmap(blackSquare, false, true);
-  delete blackSquare;
-  BeginSpriteBatch(_srcRect, SpriteTransform());
-  const size_t fx_batch = _actSpriteBatch;
-  d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-  this->DrawSprite(0, 0, d3db);
-  if (!blackingOut)
-  {
-    // when fading in, draw four black boxes, one
-    // across each side of the screen
-    this->DrawSprite(0, 0, d3db);
-    this->DrawSprite(0, 0, d3db);
-    this->DrawSprite(0, 0, d3db);
-  }
-  EndSpriteBatch();
-  std::vector<D3DDrawListEntry> &drawList = _spriteList;
-  const size_t last = drawList.size() - 1;
-
-  if (_drawPostScreenCallback != NULL)
-    _drawPostScreenCallback();
-
-  int yspeed = _srcRect.GetHeight() / (_srcRect.GetWidth() / speed);
-  int boxWidth = speed;
-  int boxHeight = yspeed;
-
-  while (boxWidth < _srcRect.GetWidth())
-  {
-    boxWidth += speed;
-    boxHeight += yspeed;
-    
-    if (blackingOut)
-    {
-      drawList[last].x = _srcRect.GetWidth() / 2- boxWidth / 2;
-      drawList[last].y = _srcRect.GetHeight() / 2 - boxHeight / 2;
-      d3db->SetStretch(boxWidth, boxHeight, false);
-    }
-    else
-    {
-      drawList[last - 3].x = _srcRect.GetWidth() / 2 - boxWidth / 2 - _srcRect.GetWidth();
-      drawList[last - 2].y = _srcRect.GetHeight() / 2 - boxHeight / 2 - _srcRect.GetHeight();
-      drawList[last - 1].x = _srcRect.GetWidth() / 2 + boxWidth / 2;
-      drawList[last    ].y = _srcRect.GetHeight() / 2 + boxHeight / 2;
-      d3db->SetStretch(_srcRect.GetWidth(), _srcRect.GetHeight(), false);
-    }
-    
-    this->_renderAndPresent(false);
-
-    sys_evt_process_pending();
-    if (_pollingCallback)
-      _pollingCallback();
-    platform->Delay(delay);
-  }
-
-  this->DestroyDDB(d3db);
-  this->ClearDrawLists();
-  ResetFxPool();
 }
 
 void D3DGraphicsDriver::SetScreenFade(int red, int green, int blue)
@@ -2028,33 +1962,28 @@ bool D3DGraphicsDriver::SetVsyncImpl(bool enabled, bool &vsync_res)
 {
     d3dpp.PresentationInterval = enabled ? D3DPRESENT_INTERVAL_ONE : D3DPRESENT_INTERVAL_IMMEDIATE;
     // D3D requires a Reset() in order to apply a new D3DPRESENT_INTERVAL value
-    HRESULT hr = ResetD3DDevice();
+    HRESULT hr = ResetDeviceAndRestore();
     if (hr != D3D_OK)
     {
         Debug::Printf(kDbgMsg_Error, "D3D: SetVsync (%d): failed to reset D3D device", enabled);
         return false;
     }
-    // TODO: refactor, to not duplicate these 3-4 calls everytime ResetDevice is called
-    InitializeD3DState();
-    CreateVirtualScreen();
-    direct3ddevice->SetGammaRamp(0, D3DSGR_NO_CALIBRATION, &currentgammaramp);
-    SetupViewport();
     // CHECKME: is there a need to test that vsync was actually set (ask d3d api)?
     vsync_res = d3dpp.PresentationInterval != D3DPRESENT_INTERVAL_IMMEDIATE;
     return true;
 }
 
 
-D3DGraphicsFactory *D3DGraphicsFactory::_factory = NULL;
+D3DGraphicsFactory *D3DGraphicsFactory::_factory = nullptr;
 Library D3DGraphicsFactory::_library;
 
 D3DGraphicsFactory::~D3DGraphicsFactory()
 {
     DestroyDriver(); // driver must be destroyed before d3d library is disposed
-    ULONG ref_cnt = _direct3d->Release();
+    uint64_t ref_cnt = _direct3d.ReleaseAndCheck();
     if (ref_cnt > 0)
-        Debug::Printf(kDbgMsg_Warn, "WARNING: Not all of the Direct3D resources have been disposed; ID3D ref count: %d", ref_cnt);
-    _factory = NULL;
+        Debug::Printf(kDbgMsg_Warn, "WARNING: Not all of the Direct3D resources have been disposed; ID3D ref count: %llu", ref_cnt);
+    _factory = nullptr;
 }
 
 size_t D3DGraphicsFactory::GetFilterCount() const
@@ -2071,7 +2000,7 @@ const GfxFilterInfo *D3DGraphicsFactory::GetFilterInfo(size_t index) const
     case 1:
         return &AAD3DGfxFilter::FilterInfo;
     default:
-        return NULL;
+        return nullptr;
     }
 }
 
@@ -2088,7 +2017,7 @@ String D3DGraphicsFactory::GetDefaultFilterID() const
         if (!_factory->Init())
         {
             delete _factory;
-            _factory = NULL;
+            _factory = nullptr;
         }
     }
     return _factory;
@@ -2100,20 +2029,14 @@ String D3DGraphicsFactory::GetDefaultFilterID() const
         _factory = GetFactory();
     if (_factory)
         return _factory->EnsureDriverCreated();
-    return NULL;
+    return nullptr;
 }
 
-
-D3DGraphicsFactory::D3DGraphicsFactory()
-    : _direct3d(NULL)
-{
-}
 
 D3DGraphicsDriver *D3DGraphicsFactory::EnsureDriverCreated()
 {
     if (!_driver)
     {
-        _factory->_direct3d->AddRef();
         _driver = new D3DGraphicsDriver(_factory->_direct3d);
     }
     return _driver;
@@ -2125,12 +2048,12 @@ D3DGfxFilter *D3DGraphicsFactory::CreateFilter(const String &id)
         return new D3DGfxFilter();
     else if (AAD3DGfxFilter::FilterInfo.Id.CompareNoCase(id) == 0)
         return new AAD3DGfxFilter();
-    return NULL;
+    return nullptr;
 }
 
 bool D3DGraphicsFactory::Init()
 {
-    assert(_direct3d == NULL);
+    assert(_direct3d == nullptr);
     if (_direct3d)
         return true;
 
@@ -2148,13 +2071,24 @@ bool D3DGraphicsFactory::Init()
         SDL_SetError("Entry point not found in d3d9.dll");
         return false;
     }
-    _direct3d = lpDirect3DCreate9(D3D_SDK_VERSION);
+    _direct3d.Attach(lpDirect3DCreate9(D3D_SDK_VERSION));
     if (!_direct3d)
     {
         _library.Unload();
         SDL_SetError("Direct3DCreate failed!");
         return false;
     }
+
+    D3DADAPTER_IDENTIFIER9 adapterid;
+    _direct3d->GetAdapterIdentifier(D3DADAPTER_DEFAULT, 0, &adapterid);
+    String adapter_info = String::FromFormat(
+        "\tDriver: %s, v%d.%d.%d.%d\n\tDescription: %s",
+        adapterid.Driver,
+        HIWORD(adapterid.DriverVersion.HighPart), LOWORD(adapterid.DriverVersion.HighPart),
+        HIWORD(adapterid.DriverVersion.LowPart), LOWORD(adapterid.DriverVersion.LowPart),
+        adapterid.Description
+    );
+    Debug::Printf(kDbgMsg_Info, "Direct3D adapter info:\n%s", adapter_info.GetCStr());
     return true;
 }
 

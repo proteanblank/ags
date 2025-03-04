@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include "ac/global_walkablearea.h"
@@ -34,7 +34,7 @@ int GetScalingAt (int x, int y) {
 }
 
 void SetAreaScaling(int area, int min, int max) {
-    if ((area < 0) || (area > MAX_WALK_AREAS))
+    if ((area < 0) || (area >= MAX_WALK_AREAS))
         quit("!SetAreaScaling: invalid walkalbe area");
 
     if (min > max)
@@ -84,7 +84,7 @@ int GetWalkableAreaAtRoom(int x, int y) {
   int area = get_walkable_area_pixel(x, y);
   // IMPORTANT: disabled walkable areas are actually erased completely from the mask;
   // see: RemoveWalkableArea() and RestoreWalkableArea().
-  return area >= 0 && area < (MAX_WALK_AREAS + 1) ? area : 0;
+  return (area >= 0 && area < MAX_WALK_AREAS) ? area : 0;
 }
 
 //=============================================================================

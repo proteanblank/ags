@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 #include <vector>
@@ -201,16 +201,16 @@ void ManagedObjectPool::WriteToDisk(Stream *out) {
         // write the type of the object
         StrUtil::WriteCStr(o.callback->GetType(), out);
         // now write the object data
-        int bytesWritten = o.callback->Serialize(o.addr, &serializeBuffer.front(), serializeBuffer.size());
+        int bytesWritten = o.callback->Serialize(o.addr, serializeBuffer.data(), serializeBuffer.size());
         if ((bytesWritten < 0) && ((size_t)(-bytesWritten) > serializeBuffer.size()))
         {
             // buffer not big enough, re-allocate with requested size
             serializeBuffer.resize(-bytesWritten);
-            bytesWritten = o.callback->Serialize(o.addr, &serializeBuffer.front(), serializeBuffer.size());
+            bytesWritten = o.callback->Serialize(o.addr, serializeBuffer.data(), serializeBuffer.size());
         }
         assert(bytesWritten >= 0);
         out->WriteInt32(bytesWritten);
-        out->Write(&serializeBuffer.front(), bytesWritten);
+        out->Write(serializeBuffer.data(), bytesWritten);
         out->WriteInt32(o.refCount);
 
         ManagedObjectLog("Wrote handle = %d", o.handle);
@@ -241,9 +241,9 @@ int ManagedObjectPool::ReadFromDisk(Stream *in, ICCObjectCollectionReader *reade
                         if (numBytes > serializeBuffer.size()) {
                             serializeBuffer.resize(numBytes);
                         }
-                        in->Read(&serializeBuffer.front(), numBytes);
+                        in->Read(serializeBuffer.data(), numBytes);
                         // Delegate work to ICCObjectReader
-                        reader->Unserialize(i, typeNameBuffer, &serializeBuffer.front(), numBytes);
+                        reader->Unserialize(i, typeNameBuffer, serializeBuffer.data(), numBytes);
                         objects[i].refCount = in->ReadInt32();
                         ManagedObjectLog("Read handle = %d", objects[i].handle);
                     }
@@ -263,9 +263,9 @@ int ManagedObjectPool::ReadFromDisk(Stream *in, ICCObjectCollectionReader *reade
                     if (numBytes > serializeBuffer.size()) {
                         serializeBuffer.resize(numBytes);
                     }
-                    in->Read(&serializeBuffer.front(), numBytes);
+                    in->Read(serializeBuffer.data(), numBytes);
                     // Delegate work to ICCObjectReader
-                    reader->Unserialize(handle, typeNameBuffer, &serializeBuffer.front(), numBytes);
+                    reader->Unserialize(handle, typeNameBuffer, serializeBuffer.data(), numBytes);
                     objects[handle].refCount = in->ReadInt32();
                     ManagedObjectLog("Read handle = %d", objects[i].handle);
                 }
@@ -303,6 +303,17 @@ void ManagedObjectPool::reset() {
     }
     available_ids = std::queue<int32_t>();
     nextHandle = 1;
+}
+
+void ManagedObjectPool::TraverseManagedObjects(const String &type, PfnProcessObject proc)
+{
+    for (int i = 1; i < nextHandle; i++)
+    {
+        auto &o = objects[i];
+        if (!o.isUsed() || type != o.callback->GetType())
+            continue;
+        proc(o.handle, o.callback);
+    }
 }
 
 ManagedObjectPool::ManagedObjectPool() : objectCreationCounter(0), nextHandle(1), available_ids(), objects(RESERVED_SIZE, ManagedObject()), handleByAddress() {

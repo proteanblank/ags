@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -25,6 +25,7 @@
 #include "ac/dynamicsprite.h"
 #include "ac/event.h"
 #include "ac/game.h"
+#include "ac/gamestructdefines.h"
 #include "ac/global_audio.h"
 #include "ac/global_button.h"
 #include "ac/global_character.h"
@@ -70,7 +71,6 @@
 #include "media/audio/audio_system.h"
 
 #include "ac/dynobj/scriptstring.h"
-extern ScriptString myScriptStringImpl;
 
 // void (char*texx, ...)
 RuntimeScriptValue Sc_sc_AbortGame(const RuntimeScriptValue *params, int32_t param_count)
@@ -180,6 +180,11 @@ RuntimeScriptValue Sc_ClaimEvent(const RuntimeScriptValue *params, int32_t param
     API_SCALL_VOID(ClaimEvent);
 }
 
+RuntimeScriptValue Sc_CopySaveSlot(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT2(CopySaveSlot);
+}
+
 // int (int xx,int yy,int slott,int trans)
 RuntimeScriptValue Sc_CreateGraphicOverlay(const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -192,7 +197,7 @@ RuntimeScriptValue Sc_CreateTextOverlay(const RuntimeScriptValue *params, int32_
     API_SCALL_SCRIPT_SPRINTF(CreateTextOverlay, 6);
     return RuntimeScriptValue().SetInt32(
         CreateTextOverlay(params[0].IValue, params[1].IValue, params[2].IValue,
-            params[3].IValue, params[4].IValue, scsf_buffer, DISPLAYTEXT_NORMALOVERLAY));
+            params[3].IValue, params[4].IValue, scsf_buffer));
 }
 
 // void (int strt,int eend)
@@ -264,7 +269,9 @@ RuntimeScriptValue Sc_DisplayAt(const RuntimeScriptValue *params, int32_t param_
 // void  (int ypos, char *texx)
 RuntimeScriptValue Sc_DisplayAtY(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_VOID_PINT_POBJ(DisplayAtY, const char);
+    API_SCALL_SCRIPT_SPRINTF(DisplayAtY, 2);
+    DisplayAtY(params[0].IValue, scsf_buffer);
+    return RuntimeScriptValue((int32_t)0);
 }
 
 // void (int msnum)
@@ -638,9 +645,9 @@ RuntimeScriptValue Sc_GetInvPropertyText(const RuntimeScriptValue *params, int32
 }
 
 // void (int xxx,int yyy,char*tempo)
-RuntimeScriptValue Sc_GetLocationName(const RuntimeScriptValue *params, int32_t param_count)
+RuntimeScriptValue Sc_GetLocationNameInBuf(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_VOID_PINT2_POBJ(GetLocationName, char);
+    API_SCALL_VOID_PINT2_POBJ(GetLocationNameInBuf, char);
 }
 
 // int (int xxx,int yyy)
@@ -791,6 +798,11 @@ RuntimeScriptValue Sc_sc_GetTime(const RuntimeScriptValue *params, int32_t param
     API_SCALL_INT_PINT(sc_GetTime);
 }
 
+RuntimeScriptValue Sc_GetTimerPos(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_INT_PINT(GetTimerPos);
+}
+
 // char * (const char *text)
 RuntimeScriptValue Sc_get_translation(const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -855,9 +867,9 @@ RuntimeScriptValue Sc_HideMouseCursor(const RuntimeScriptValue *params, int32_t 
 }
 
 // void (const char*msg,char*bufr)
-RuntimeScriptValue Sc_sc_inputbox(const RuntimeScriptValue *params, int32_t param_count)
+RuntimeScriptValue Sc_ShowInputBox(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_VOID_POBJ2(sc_inputbox, const char, char);
+    API_SCALL_VOID_POBJ2(ShowInputBox, const char, char);
 }
 
 // void (int ifn)
@@ -1138,6 +1150,11 @@ RuntimeScriptValue Sc_MoveOverlay(const RuntimeScriptValue *params, int32_t para
     API_SCALL_VOID_PINT3(MoveOverlay);
 }
 
+RuntimeScriptValue Sc_MoveSaveSlot(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT2(MoveSaveSlot);
+}
+
 // void (int charid)
 RuntimeScriptValue Sc_MoveToWalkableArea(const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -1402,6 +1419,11 @@ RuntimeScriptValue Sc_restore_game_dialog(const RuntimeScriptValue *params, int3
     API_SCALL_VOID(restore_game_dialog);
 }
 
+RuntimeScriptValue Sc_restore_game_dialog2(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT2(restore_game_dialog2);
+}
+
 // void (int slnum)
 RuntimeScriptValue Sc_RestoreGameSlot(const RuntimeScriptValue *params, int32_t param_count)
 {
@@ -1472,16 +1494,30 @@ RuntimeScriptValue Sc_save_game_dialog(const RuntimeScriptValue *params, int32_t
     API_SCALL_VOID(save_game_dialog);
 }
 
-// void (int slotn, const char*descript)
-RuntimeScriptValue Sc_save_game(const RuntimeScriptValue *params, int32_t param_count)
+RuntimeScriptValue Sc_save_game_dialog2(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_VOID_PINT_POBJ(save_game, const char);
+    API_SCALL_VOID_PINT2(save_game_dialog2);
+}
+
+RuntimeScriptValue Sc_SaveGameSlot(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT_POBJ_PINT(SaveGameSlot, const char);
+}
+
+RuntimeScriptValue Sc_SaveGameSlot2(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_VOID_PINT_POBJ(SaveGameSlot2, const char);
 }
 
 // int (char*namm)
-RuntimeScriptValue Sc_SaveScreenShot(const RuntimeScriptValue *params, int32_t param_count)
+RuntimeScriptValue Sc_SaveScreenShot1(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_INT_POBJ(SaveScreenShot, const char);
+    API_SCALL_INT_POBJ(SaveScreenShot1, const char);
+}
+
+RuntimeScriptValue Sc_SaveScreenShot4(const RuntimeScriptValue *params, int32_t param_count)
+{
+    API_SCALL_INT_POBJ_PINT3(SaveScreenShot4, const char);
 }
 
 // void  (int position)
@@ -1500,6 +1536,13 @@ RuntimeScriptValue Sc_SeekMODPattern(const RuntimeScriptValue *params, int32_t p
 RuntimeScriptValue Sc_SeekMP3PosMillis(const RuntimeScriptValue *params, int32_t param_count)
 {
     API_SCALL_VOID_PINT(SeekMP3PosMillis);
+}
+
+RuntimeScriptValue Sc_SendEvent(const RuntimeScriptValue *params, int32_t param_count)
+{
+    ASSERT_PARAM_COUNT(run_on_event, 5); \
+    run_on_event(static_cast<AGSScriptEventType>(params[0].IValue), params[1].IValue, params[2].IValue, params[3].IValue, params[4].IValue);
+    return RuntimeScriptValue(0);
 }
 
 // void (int iit)
@@ -1978,9 +2021,9 @@ RuntimeScriptValue Sc_SetTextWindowGUI(const RuntimeScriptValue *params, int32_t
 }
 
 // void (int tnum,int timeout)
-RuntimeScriptValue Sc_script_SetTimer(const RuntimeScriptValue *params, int32_t param_count)
+RuntimeScriptValue Sc_SetTimer(const RuntimeScriptValue *params, int32_t param_count)
 {
-    API_SCALL_VOID_PINT2(script_SetTimer);
+    API_SCALL_VOID_PINT2(SetTimer);
 }
 
 // void (int offsx,int offsy)
@@ -2239,21 +2282,25 @@ void ScPl_sc_AbortGame(const char *texx, ...)
 int ScPl_CreateTextOverlay(int xx, int yy, int wii, int fontid, int clr, char *texx, ...)
 {
     API_PLUGIN_SCRIPT_SPRINTF(texx);
-    return CreateTextOverlay(xx, yy, wii, fontid, clr, scsf_buffer, DISPLAYTEXT_NORMALOVERLAY);
+    return CreateTextOverlay(xx, yy, wii, fontid, clr, scsf_buffer);
 }
 
-// void (char*texx, ...)
 void ScPl_Display(char *texx, ...)
 {
     API_PLUGIN_SCRIPT_SPRINTF(texx);
     DisplaySimple(scsf_buffer);
 }
 
-// void (int xxp,int yyp,int widd,char*texx, ...)
 void ScPl_DisplayAt(int xxp, int yyp, int widd, char *texx, ...)
 {
     API_PLUGIN_SCRIPT_SPRINTF(texx);
     DisplayAt(xxp, yyp, widd, scsf_buffer);
+}
+
+void ScPl_DisplayAtY(int ypos, char *texx, ...)
+{
+    API_PLUGIN_SCRIPT_SPRINTF(texx);
+    DisplayAtY(ypos, scsf_buffer);
 }
 
 // void (int chid,char*texx, ...)
@@ -2299,7 +2346,7 @@ void ScPl_sc_sprintf(char *destt, const char *texx, ...)
 }
 
 
-void RegisterGlobalAPI()
+void RegisterGlobalAPI(ScriptAPIVersion base_api, ScriptAPIVersion /*compat_api*/)
 {
     ScFnRegister global_api[] = {
         { "AbortGame",                Sc_sc_AbortGame, ScPl_sc_AbortGame },
@@ -2321,6 +2368,7 @@ void RegisterGlobalAPI()
         { "ChangeCursorGraphic",      API_FN_PAIR(ChangeCursorGraphic) },
         { "ChangeCursorHotspot",      API_FN_PAIR(ChangeCursorHotspot) },
         { "ClaimEvent",               API_FN_PAIR(ClaimEvent) },
+        { "CopySaveSlot",             API_FN_PAIR(CopySaveSlot) },
         { "CreateGraphicOverlay",     API_FN_PAIR(CreateGraphicOverlay) },
         { "CreateTextOverlay",        Sc_CreateTextOverlay, ScPl_CreateTextOverlay },
         { "CyclePalette",             API_FN_PAIR(CyclePalette) },
@@ -2334,7 +2382,10 @@ void RegisterGlobalAPI()
         { "DisableRegion",            API_FN_PAIR(DisableRegion) },
         { "Display",                  Sc_Display, ScPl_Display },
         { "DisplayAt",                Sc_DisplayAt, ScPl_DisplayAt },
-        { "DisplayAtY",               API_FN_PAIR(DisplayAtY) },
+        // CHECKME: this function was non-variadic prior to 3.6.1, but AGS compiler does
+        // not produce "name^argnum" symbol id for non-member functions for some reason :/
+        // do we have to do anything about this here? like, test vs script API version...
+        { "DisplayAtY",               Sc_DisplayAtY, ScPl_DisplayAtY },
         { "DisplayMessage",           API_FN_PAIR(DisplayMessage) },
         { "DisplayMessageAtY",        API_FN_PAIR(DisplayMessageAtY) },
         { "DisplayMessageBar",        API_FN_PAIR(DisplayMessageBar) },
@@ -2398,7 +2449,7 @@ void RegisterGlobalAPI()
         { "GetInvName",               API_FN_PAIR(GetInvName) },
         { "GetInvProperty",           API_FN_PAIR(GetInvProperty) },
         { "GetInvPropertyText",       API_FN_PAIR(GetInvPropertyText) },
-        { "GetLocationName",          API_FN_PAIR(GetLocationName) },
+        { "GetLocationName",          API_FN_PAIR(GetLocationNameInBuf) },
         { "GetLocationType",          API_FN_PAIR(GetLocationType) },
         { "GetMessageText",           API_FN_PAIR(GetMessageText) },
         { "GetMIDIPosition",          API_FN_PAIR(GetMIDIPosition) },
@@ -2425,6 +2476,7 @@ void RegisterGlobalAPI()
         { "GetFontHeight",            API_FN_PAIR(GetFontHeight) },
         { "GetFontLineSpacing",       API_FN_PAIR(GetFontLineSpacing) },
         { "GetTime",                  API_FN_PAIR(sc_GetTime) },
+        { "GetTimerPos",              API_FN_PAIR(GetTimerPos) },
         { "GetTranslation",           API_FN_PAIR(get_translation) },
         { "GetTranslationName",       API_FN_PAIR(GetTranslationName) },
         { "GetViewportX",             API_FN_PAIR(GetViewportX) },
@@ -2437,7 +2489,7 @@ void RegisterGlobalAPI()
         { "GiveScore",                API_FN_PAIR(GiveScore) },
         { "HasPlayerBeenInRoom",      API_FN_PAIR(HasPlayerBeenInRoom) },
         { "HideMouseCursor",          API_FN_PAIR(HideMouseCursor) },
-        { "InputBox",                 API_FN_PAIR(sc_inputbox) },
+        { "InputBox",                 API_FN_PAIR(ShowInputBox) },
         { "InterfaceOff",             API_FN_PAIR(InterfaceOff) },
         { "InterfaceOn",              API_FN_PAIR(InterfaceOn) },
         { "IntToFloat",               API_FN_PAIR(IntToFloat) },
@@ -2485,6 +2537,7 @@ void RegisterGlobalAPI()
         { "MoveObject",               API_FN_PAIR(MoveObject) },
         { "MoveObjectDirect",         API_FN_PAIR(MoveObjectDirect) },
         { "MoveOverlay",              API_FN_PAIR(MoveOverlay) },
+        { "MoveSaveSlot",             API_FN_PAIR(MoveSaveSlot) },
         { "MoveToWalkableArea",       API_FN_PAIR(MoveToWalkableArea) },
         { "NewRoom",                  API_FN_PAIR(NewRoom) },
         { "NewRoomEx",                API_FN_PAIR(NewRoomEx) },
@@ -2529,7 +2582,6 @@ void RegisterGlobalAPI()
         { "RemoveWalkableArea",       API_FN_PAIR(RemoveWalkableArea) },
         { "ResetRoom",                API_FN_PAIR(ResetRoom) },
         { "RestartGame",              API_FN_PAIR(restart_game) },
-        { "RestoreGameDialog",        API_FN_PAIR(restore_game_dialog) },
         { "RestoreGameSlot",          API_FN_PAIR(RestoreGameSlot) },
         { "RestoreWalkableArea",      API_FN_PAIR(RestoreWalkableArea) },
         { "RunAGSGame",               API_FN_PAIR(RunAGSGame) },
@@ -2542,12 +2594,12 @@ void RegisterGlobalAPI()
         { "Said",                     API_FN_PAIR(Said) },
         { "SaidUnknownWord",          API_FN_PAIR(SaidUnknownWord) },
         { "SaveCursorForLocationChange", API_FN_PAIR(SaveCursorForLocationChange) },
-        { "SaveGameDialog",           API_FN_PAIR(save_game_dialog) },
-        { "SaveGameSlot",             API_FN_PAIR(save_game) },
-        { "SaveScreenShot",           API_FN_PAIR(SaveScreenShot) },
+        { "SaveScreenShot^1",         API_FN_PAIR(SaveScreenShot1) },
+        { "SaveScreenShot^4",         API_FN_PAIR(SaveScreenShot4) },
         { "SeekMIDIPosition",         API_FN_PAIR(SeekMIDIPosition) },
         { "SeekMODPattern",           API_FN_PAIR(SeekMODPattern) },
         { "SeekMP3PosMillis",         API_FN_PAIR(SeekMP3PosMillis) },
+        { "SendEvent",                Sc_SendEvent, run_on_event },
         { "SetActiveInventory",       API_FN_PAIR(SetActiveInventory) },
         { "SetAmbientTint",           API_FN_PAIR(SetAmbientTint) },
         { "SetAmbientLightLevel",     API_FN_PAIR(SetAmbientLightLevel) },
@@ -2633,7 +2685,7 @@ void RegisterGlobalAPI()
         { "SetTextBoxText",           API_FN_PAIR(SetTextBoxText) },
         { "SetTextOverlay",           Sc_SetTextOverlay, ScPl_SetTextOverlay },
         { "SetTextWindowGUI",         API_FN_PAIR(SetTextWindowGUI) },
-        { "SetTimer",                 API_FN_PAIR(script_SetTimer) },
+        { "SetTimer",                 API_FN_PAIR(SetTimer) },
         { "SetViewport",              API_FN_PAIR(SetViewport) },
         { "SetVoiceMode",             API_FN_PAIR(SetVoiceMode) },
         { "SetWalkBehindBase",        API_FN_PAIR(SetWalkBehindBase) },
@@ -2675,4 +2727,26 @@ void RegisterGlobalAPI()
     };
 
     ccAddExternalFunctions(global_api);
+
+    // Few functions have to be selected based on API level,
+    // We have to do this because AGS compiler did not generate
+    // "name^argnum" symbol id for non-member functions for some reason....
+    if (base_api < kScriptAPI_v362)
+    {
+        ScFnRegister global_api_dlgs[] = {
+            { "SaveGameSlot",           API_FN_PAIR(SaveGameSlot2) },
+            { "RestoreGameDialog",      API_FN_PAIR(restore_game_dialog) },
+            { "SaveGameDialog",         API_FN_PAIR(save_game_dialog) },
+        };
+        ccAddExternalFunctions(global_api_dlgs);
+    }
+    else
+    {
+        ScFnRegister global_api_dlgs[] = {
+            { "SaveGameSlot",           API_FN_PAIR(SaveGameSlot) },
+            { "RestoreGameDialog",      API_FN_PAIR(restore_game_dialog2) },
+            { "SaveGameDialog",         API_FN_PAIR(save_game_dialog2) },
+        };
+        ccAddExternalFunctions(global_api_dlgs);
+    }
 }

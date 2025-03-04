@@ -3,13 +3,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -40,6 +40,7 @@
 
 #include <stdarg.h>
 #include <vector>
+#include <string>
 #include "core/platform.h"
 #include "core/types.h"
 #include "debug/assert.h"
@@ -62,6 +63,8 @@ public:
     String(const String&);
     // Move constructor
     String(String&&);
+    // Initialize with std::string
+    String(const std::string &str);
     // Initialize with C-string
     String(const char *cstr);
     // Initialize by copying up to N chars from C-string
@@ -106,6 +109,9 @@ public:
     }
 #endif
 
+    // TODO: reorganize stream reading/writing methods, decide if they should
+    // be a part of the String class, or separate e.g. StrUtil function group.
+    //
     // Read() method implies that string length is initially unknown.
     // max_chars parameter determine the buffer size limit.
     // If stop_at_limit flag is set, it will read only up to the max_chars.
@@ -183,6 +189,9 @@ public:
     // even if there are no separating chars.
     bool    FindSection(char separator, size_t first, size_t last, bool exclude_first_sep, bool exclude_last_sep,
                         size_t &from, size_t &to) const;
+    // Search for a first section containing given text.
+    // Returns first character index, or NoIndex is failed.
+    size_t  FindSection(const String &section_text, char separator, bool case_insensitive = false) const;
 
     // Get Nth character with bounds check (as opposed to subscript operator)
     inline char GetAt(size_t index) const
@@ -200,6 +209,8 @@ public:
 
     int     ToInt() const;
 
+    std::string ToStdString() const { return std::string(_cstr, _len); }
+
     //-------------------------------------------------------------------------
     // Factory methods
     //-------------------------------------------------------------------------
@@ -212,6 +223,9 @@ public:
 
     static String FromFormat(const char *fcstr, ...);
     static String FromFormatV(const char *fcstr, va_list argptr);
+
+    // TODO: reorganize stream reading/writing methods, decide if they should
+    // be a part of the String class, or separate e.g. StrUtil function group.
     // Reads stream until null-terminator or EOS
     static String FromStream(Stream *in, size_t max_chars = 5 * 1024 * 1024, bool stop_at_limit = false);
     // Reads up to N chars from stream
@@ -221,6 +235,11 @@ public:
     String  Lower() const;
     // Creates an uppercased copy of the string
     String  Upper() const;
+
+    // Creates a lowercased copy of the utf-8 string
+    String  LowerUTF8() const;
+    // Creates an uppercased copy of the utf-8 string
+    String  UpperUTF8() const;
 
     // Extract N leftmost characters as a new string
     String  Left(size_t count) const;
@@ -297,6 +316,10 @@ public:
     void    MakeLower();
     // Convert string to uppercase equivalent
     void    MakeUpper();
+    // Convert utf-8 string to lowercase equivalent
+    void    MakeLowerUTF8();
+    // Convert utf-8 string to uppercase equivalent
+    void    MakeUpperUTF8();
     // Merges sequences of same characters into one
     void    MergeSequences(char c = 0);
     // Prepend* methods add content before the string's head, increasing its length
@@ -363,9 +386,12 @@ public:
     String &operator=(const String &str);
     // Move operator
     String &operator=(String &&str);
+    // Assign std::string by copying contents
+    String &operator=(const std::string &str);
     // Assign C-string by copying contents
     String &operator=(const char *cstr);
-    inline char operator[](size_t index) const
+
+    inline const char &operator[](size_t index) const
     {
         assert(index < _len);
         return _cstr[index];
@@ -411,6 +437,9 @@ private:
     // or after the current string data
     void    ReserveAndShift(bool left, size_t more_length);
 
+    // Makes a new string by copying up to N chars from a buffer
+    void    SetStringImpl(const char *cstr, size_t length);
+
     // Internal String data
     char    *_cstr;  // pointer to actual string data; always valid, never null
     size_t  _len;    // valid string length, in characters, excluding null-term
@@ -428,6 +457,7 @@ private:
         char      *_buf;     // reference-counted data (raw ptr)
         BufHeader *_bufHead; // the header of a reference-counted data
     };
+
 };
 
 } // namespace Common

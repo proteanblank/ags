@@ -2,13 +2,13 @@
 //
 // Adventure Game Studio (AGS)
 //
-// Copyright (C) 1999-2011 Chris Jones and 2011-20xx others
+// Copyright (C) 1999-2011 Chris Jones and 2011-2025 various contributors
 // The full list of copyright holders can be found in the Copyright.txt
 // file, which is part of this source code distribution.
 //
 // The AGS source code is provided under the Artistic License 2.0.
 // A copy of this license can be found in the file License.txt and at
-// http://www.opensource.org/licenses/artistic-license-2.0.php
+// https://opensource.org/license/artistic-2-0/
 //
 //=============================================================================
 //
@@ -16,7 +16,7 @@
 // dirty rectangles technique.
 //
 // TODO: do research/profiling to find out if this dirty rectangles thing
-// is still giving ANY notable perfomance boost at all.
+// is still giving ANY notable performance boost at all.
 //
 // TODO: would that give any benefit to reorganize the code and move dirty
 // rectangles into SoftwareGraphicDriver?

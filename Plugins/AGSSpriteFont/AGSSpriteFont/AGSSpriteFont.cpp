@@ -16,7 +16,7 @@
 #define MIN_EDITOR_VERSION 1
 #define MIN_ENGINE_VERSION 3
 
-#if AGS_PLATFORM_OS_WINDOWS
+#if (AGS_PLATFORM_OS_WINDOWS)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <WinBase.h>
@@ -71,7 +71,7 @@
 #pragma endregion
 
 
-#if AGS_PLATFORM_OS_WINDOWS && !defined(BUILTIN_PLUGINS)
+#if (AGS_PLATFORM_OS_WINDOWS) && !defined(BUILTIN_PLUGINS)
 // The standard Windows DLL entry point
 
 BOOL APIENTRY DllMain( HANDLE hModule, 
@@ -137,7 +137,7 @@ void SetLineHeightAdjust(int fontNum, int lineHeight, int spacingHeight, int spa
 
 //==============================================================================
 
-#if AGS_PLATFORM_OS_WINDOWS && !defined(BUILTIN_PLUGINS)
+#if (AGS_PLATFORM_OS_WINDOWS) && !defined(BUILTIN_PLUGINS)
 // ***** Design time *****
 
 IAGSEditor *editor; // Editor interface
@@ -252,10 +252,12 @@ void AGS_EngineStartup(IAGSEngine *lpEngine)
 		// Kathy Rain: {d6795d1c-3cfe-49ec-90a1-85c313bfccaf}
 		// Whispers of a Machine: {5833654f-6f0d-40d9-99e2-65c101c8544a}
 		// The Excavation at Hob's Barrow: {4d1d659d-f5ed-4945-b031-68fedcac7510}
+		// Off The Clock: {569a3928-1e26-48cd-9449-ec06a8d40b85}
 		useClifftopGamesRenderers =
 			strcmp("{d6795d1c-3cfe-49ec-90a1-85c313bfccaf}", gameInfo.Guid) == 0 ||
 			strcmp("{5833654f-6f0d-40d9-99e2-65c101c8544a}", gameInfo.Guid) == 0 ||
-			strcmp("{4d1d659d-f5ed-4945-b031-68fedcac7510}", gameInfo.Guid) == 0;
+			strcmp("{4d1d659d-f5ed-4945-b031-68fedcac7510}", gameInfo.Guid) == 0 ||
+			strcmp("{569a3928-1e26-48cd-9449-ec06a8d40b85}", gameInfo.Guid) == 0;
 	}
 #endif
 	if (useClifftopGamesRenderers)
@@ -295,7 +297,7 @@ void AGS_EngineShutdown()
 
 //------------------------------------------------------------------------------
 
-int AGS_EngineOnEvent(int event, int data)                    //*** optional ***
+intptr_t AGS_EngineOnEvent(int event, intptr_t data)          //*** optional ***
 {
 	switch (event)
 	{
@@ -343,6 +345,16 @@ void AGS_EngineInitGfx(const char *driverID, void *data)      //*** optional ***
 	// See documentation
 }
 */
+
+//------------------------------------------------------------------------------
+
+// Export this to let engine verify that this is a compatible AGS Plugin;
+// exact return value is not essential, but should be non-zero for consistency.
+int AGS_PluginV2()
+{
+    return 1;
+}
+
 //..............................................................................
 
 #if defined(BUILTIN_PLUGINS)
